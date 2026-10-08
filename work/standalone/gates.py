@@ -22,7 +22,8 @@ USER32 = frozenset({
     "GetCursorPos", "GetClientRect", "ScreenToClient", "GetForegroundWindow",
     "GetAsyncKeyState", "GetWindowThreadProcessId",
     "ShowCursor", "ClipCursor", "SetCursorPos", "GetKeyState", "GetClipCursor",
-    "GetSystemMetrics",
+    "GetSystemMetrics", "OpenClipboard", "CloseClipboard", "GetClipboardData",
+    "GetRegisteredRawInputDevices", "RegisterRawInputDevices", "GetWindowLongPtrW", "SetWindowLongPtrW",
 })
 
 # Kernel32 symbols that are frequently mistaken for user32. Declaring these inside a
@@ -38,6 +39,10 @@ KERNEL32_LOOKALIKES = frozenset({
 # Checked byte for byte: the whole point is that two mods declaring the same symbol
 # must agree exactly, since only the first declaration survives.
 REFERENCE_PROTOTYPES = {
+    "GetRegisteredRawInputDevices": "uint32_t GetRegisteredRawInputDevices(void *devices, uint32_t *count, uint32_t size);",
+    "RegisterRawInputDevices": "int RegisterRawInputDevices(const void *devices, uint32_t count, uint32_t size);",
+    "GetWindowLongPtrW": "intptr_t GetWindowLongPtrW(void *window, int index);",
+    "SetWindowLongPtrW": "intptr_t SetWindowLongPtrW(void *window, int index, intptr_t value);",
     "GetForegroundWindow": "void *GetForegroundWindow(void);",
     "GetWindowThreadProcessId": "uint32_t GetWindowThreadProcessId(void*,void*);",
     "GetCursorPos": "int GetCursorPos(void*);",
@@ -48,6 +53,9 @@ REFERENCE_PROTOTYPES = {
     "ClipCursor": "int ClipCursor(const void *rect);",
     "GetClipCursor": "int GetClipCursor(void *rect);",
     "GetSystemMetrics": "int GetSystemMetrics(int index);",
+    "OpenClipboard": "int OpenClipboard(void *owner);",
+    "CloseClipboard": "int CloseClipboard(void);",
+    "GetClipboardData": "void *GetClipboardData(uint32_t format);",
 }
 
 # This mod deliberately does NOT declare process-memory write primitives. It does
@@ -68,6 +76,7 @@ WRITE_SYMBOLS = frozenset({
 # `ffi.cdef[[...]]`; every mod here actually writes `pcall(ffi.cdef, [[...]])`,
 # so upstream found zero blocks and reported "no user32" unconditionally.
 CDEF_PATTERNS = (
+    r"local\s+(?:USER32_DECLS|declarations)\s*=\s*\{(.*?)\}",
     r"ffi\.cdef\s*\[\[(.*?)\]\]",
     r"ffi\.cdef\s*,\s*\[\[(.*?)\]\]",
     r"ffi\.cdef\s*,\s*'([^']*)'",
@@ -76,7 +85,7 @@ CDEF_PATTERNS = (
 # The `\b` must NOT be placed before the alternation: with it, `\b(?:k|u|kernel32)\.`
 # satisfies the alternation on the single letter `k` of "kernel" and then demands
 # a '.' where an 'e' sits, so `kernel.Foo(` matches nothing at all.
-SYMBOL_CALL = r"(?:kernel|kernel32|user32|bcrypt|ffi\.C|k|u)\.([A-Za-z_]\w*)\s*\("
+SYMBOL_CALL = r"(?:kernel|kernel32|user|user32|bcrypt|ffi\.C|k|u)\.([A-Za-z_]\w*)\s*\("
 
 _DECLARATION = re.compile(r"([A-Za-z_]\w*)\s*\([^;()]*\)\s*;")
 

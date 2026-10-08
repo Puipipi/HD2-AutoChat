@@ -1,0 +1,486 @@
+"""Behavior tests for automatic chat policy; runs without the game or native FFI."""
+from pathlib import Path
+import unittest
+
+from lupa.luajit21 import LuaRuntime
+
+
+SOURCE = Path(__file__).resolve().parents[3] / "src" / "chat_automation.lua"
+HARNESS = r'''
+local h = { session = 'session-a', mine = '76561198000000001',
+    host = '76561198000000001', peers = {'76561198000000001'},
+    context = 'context-a', sent = {}, writes = {}, write_ok = true, send_ok = true, identities = {} }
+local sr = {
+    Network = {game_session = function() return h.session end,
+               peer_id = function() return h.mine end},
+    GameSession = {in_session = function() return h.in_session ~= false end,
+        peers = function() return h.peers end,
+        game_session_host = function() return h.host end} }
+h.sr = sr
+function h.new(content)
+    return build_chat_automation({engine = function() return h.sr end,
+        context = function() return h.context end,
+        identity = function(peer) return h.identities[peer] end,
+        colorize = function(prefix, argb) return '<c=' .. argb .. '>' .. prefix .. '<c=FFFFFFFF>' end,
+        read_file = function() return content end,
+        write_file = function(value)
+            h.writes[#h.writes + 1] = value
+            if h.throw_write then error('disk unavailable') end
+            return h.write_ok
+        end,
+        send = function(text)
+            h.sent[#h.sent + 1] = text
+            return h.send_ok, 'text chat is off'
+        end})
+end
+h.a = h.new()
+return h
+'''
+
+
+class AutomationTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue(SOURCE.exists(), "automatic chat policy fragment is not implemented")
+        self.lua = LuaRuntime(unpack_returned_tuples=True)
+        self.h = self.lua.execute(SOURCE.read_text(encoding="utf-8") + "\n" + HARNESS)
+
+    def run_lua(self, code):
+        return self.lua.execute("local h = ...; local a = h.a; " + code, self.h)
+
+    def test_defaults_and_unknown_host_policy(self):
+        self.run_lua("""
+            assert(a.options.enabled and a.options.allow_solo and not a.options.welcome)
+            assert(a.options.scope == 'all' and a.options.cooldown == 5)
+            assert(a.options.welcome_delay == 2)
+            h.sr = nil
+            assert(a.check(0, 1))
+            assert(a.set('scope', 'host'))
+            local ok, why = a.check(0, 1)
+            assert(ok == false and why:find('主机'))
+        """)
+
+    def test_buildings_and_stratagems_replace_pickups_and_migrate_existing_preferences(self):
+        self.run_lua('''
+            assert(a.options.ping_building and a.options.ping_stratagem and a.options.ping_map)
+            assert(a.options.ping_small_items == nil)
+            local b=h.new('ping_mission=false\\nping_small_items=false\\n')
+            assert(b.options.ping_building == false and b.options.ping_stratagem == false)
+            local c=h.new('ping_mission=false\\nping_building=true\\n')
+            assert(c.options.ping_building == true)
+            assert(a.set('ping',true))
+            assert(a.push_ping({key='ammo',category='small_items'},1000)==false)
+            for _,category in ipairs({'building','stratagem','map'}) do
+                assert(a.push_ping({key=category,category=category},1000))
+            end
+        ''')
+
+    def test_own_ping_sends_without_profile_and_shares_local_timer_cooldown(self):
+        self.run_lua('''
+            h.mine='76561197960265745'; h.host=h.mine; h.peers={h.mine}
+            assert(a.set('ping',true)); assert(a.set('scope','host'))
+            assert(a.set('ping_sender_prefix',false)); assert(a.set('ping_message','{目标}'))
+            assert(a.push_ping({key='own1',category='stratagem',creator_id='0110000100000011',
+                target='LAS-98 激光大炮'},1000))
+            assert(a.poll(1000)); assert(h.sent[1]=='LAS-98 激光大炮')
+            assert(a.check(1001,0)==false, 'own ping must consume the local timer bucket')
+            assert(a.push_ping({key='own2',category='map',creator_id='0110000100000011',
+                target='地图标记'},1001))
+            assert(a.poll(1001)==false); assert(a.poll(1005)); assert(h.sent[2]=='地图标记')
+            assert(a.set('allow_solo',false))
+            assert(a.push_ping({key='own3',category='map',creator_id='0110000100000011'},1010))
+            assert(a.poll(1010)==false and #h.sent==2)
+        ''')
+
+    def test_objective_templates_use_runtime_category_and_localized_name(self):
+        self.run_lua('''
+            assert(a.set('ping',true)); assert(a.set('ping_sender_prefix',false))
+            assert(a.set('ping_message','{任务类型}：{任务名} / {目标}'))
+            for n,kind in ipairs({'primary','prerequisite','optional','tactical','unknown'}) do
+                assert(a.push_ping({key='obj'..n,category='map',target='摧毁非法广播',
+                    objective_name='摧毁非法广播',objective_kind=kind},1000+n*5))
+                assert(a.poll(1000+n*5))
+            end
+            assert(h.sent[1]=='主线任务：摧毁非法广播 / 摧毁非法广播')
+            assert(h.sent[2]=='主线前置任务：摧毁非法广播 / 摧毁非法广播')
+            assert(h.sent[3]=='支线任务：摧毁非法广播 / 摧毁非法广播')
+            assert(h.sent[4]=='战术任务：摧毁非法广播 / 摧毁非法广播')
+            assert(h.sent[5]=='任务：摧毁非法广播 / 摧毁非法广播')
+        ''')
+
+    def test_trigger_identity_and_position_templates_are_plain_and_prefix_is_optional(self):
+        self.run_lua('''
+            assert(a.set('ping',true)); assert(a.set('ping_sender_color',false))
+            assert(a.set('ping_message','{触发者}：{目标} {位置}'))
+            h.identities.friend={peer_id='friend',name='Alice',short='AL',color='FF0000'}
+            assert(a.push_ping({key='map1',category='map',creator_id='friend',target='地图标记',
+                position={x=123,y=456,z=7}},1000))
+            assert(a.poll(1000)); assert(h.sent[1]=='[AL] Alice：地图标记 (123, 456, 7)')
+            assert(a.set('ping_sender_prefix',false))
+            assert(a.push_ping({key='map2',category='map',creator_id='friend',target='地图标记'},1005))
+            assert(a.poll(1005)); assert(h.sent[2]=='Alice：地图标记 未知位置')
+        ''')
+
+    def test_native_localized_target_truncation_preserves_utf8_boundaries(self):
+        sent = self.run_lua('''
+            assert(a.set('ping',true)); assert(a.set('ping_message','{目标}'))
+            assert(a.push_ping({key='long-target',category='building',target=string.rep('塔',80)},1000))
+            assert(a.poll(1000)); return h.sent[1]
+        ''')
+        self.assertEqual(sent, '塔' * 66)
+
+    def test_queued_ping_is_discarded_if_trigger_identity_leaves_before_send(self):
+        self.run_lua('''
+            assert(a.set('ping',true)); a.record(1000)
+            h.identities.friend={peer_id='friend',name='Alice',short='AL'}
+            assert(a.push_ping({key='join',category='building',creator_id='friend'},1001))
+            h.identities.friend=nil
+            assert(a.poll(1005)==false and #h.sent==0)
+        ''')
+
+    def test_queued_ping_from_departed_peer_is_dropped_without_profile_metadata(self):
+        self.run_lua('''
+            assert(a.set('ping',true)); a.record(1000)
+            h.peers={h.mine,'friend'}
+            assert(h.identities.friend==nil)
+            assert(a.push_ping({key='anonymous-peer',category='building',creator_id='friend'},1001))
+            h.peers={h.mine}
+            assert(a.poll(1005)==false and #h.sent==0,
+                'unavailable name/color metadata must not allow a departed creator to remain queued')
+        ''')
+
+    def test_native_hex_creator_matches_full_uint64_session_id_without_float_rounding(self):
+        self.run_lua('''
+            local ffi=require('ffi')
+            local id=ffi.new('uint64_t',0x0110000100000000)+0x22
+            h.peers={h.mine,id}
+            assert(a.set('ping',true)); a.record(1000)
+            assert(a.push_ping({key='native',category='building',creator_id='0110000100000022'},1001))
+            assert(a.push_ping({key='rounded',category='building',creator_id='0110000100000023'},1001)==false)
+            h.peers={h.mine}; assert(a.poll(1005)==false and #h.sent==0)
+        ''')
+
+    def test_colored_prefix_resets_before_body_and_message_stays_within_native_limit(self):
+        self.run_lua('''
+            assert(a.set('ping',true)); assert(a.set('ping_message',string.rep('中',170)))
+            h.identities.friend={peer_id='friend',name='Alice',short='A2',color='FF81ACFE'}
+            assert(a.push_ping({key='long',category='building',creator_id='friend'},1000))
+            assert(a.poll(1000))
+            assert(h.sent[1]:sub(1,29)=='<c=FF81ACFE>[A2]<c=FFFFFFFF> ')
+            assert(#h.sent[1]<=512 and #h.sent[1]:sub(30)%3==0)
+        ''')
+
+    def test_ping_category_preferences_are_independent_and_persisted(self):
+        self.run_lua('''
+            assert(a.set('ping', true))
+            for _, key in ipairs({'ping_building','ping_stratagem','ping_map','ping_medium_enemy','ping_large_enemy',
+                                  'ping_giant_enemy'}) do
+                assert(a.options[key] == true)
+                assert(a.set(key, false))
+                local restored = h.new(h.writes[#h.writes])
+                assert(restored.options[key] == false and restored.options.ping == true)
+                assert(a.set(key, true))
+            end
+            assert(a.set('ping_message', '队友标记了{类别}，请注意！'))
+            local restored = h.new(h.writes[#h.writes])
+            assert(restored.options.ping_message == '队友标记了{类别}，请注意！')
+            assert(a.set('ping_unknown', true) == false)
+        ''')
+
+    def test_classified_ping_uses_category_mask_template_and_shared_cooldown(self):
+        self.run_lua('''
+            assert(a.set('ping', true))
+            assert(a.set('ping_message', '{类别}：{目标}'))
+            assert(a.push_ping({key='1',category='large_enemy',target='重型目标'},1000))
+            assert(a.poll(1000))
+            assert(h.sent[1] == '大型敌人：重型目标')
+            assert(a.push_ping({key='1',category='large_enemy',target='重型目标'},1000) == false)
+            assert(a.set('ping_medium_enemy',false))
+            assert(a.push_ping({key='2',category='medium_enemy'},1001) == false)
+            assert(a.push_ping({key='3',category='giant_enemy'},1001))
+            assert(a.poll(1001) == false and #h.sent == 1)
+            assert(a.poll(1005) and #h.sent == 2)
+            assert(h.sent[2] == '巨型敌人：巨型敌人')
+            assert(a.push_ping({key='4',category='unknown'},1006) == false)
+        ''')
+
+    def test_ping_waits_for_chat_and_drops_stale_or_disabled_categories(self):
+        self.run_lua('''
+            assert(a.set('ping',true))
+            h.send_ok=false
+            assert(a.push_ping({key='1',category='building'},1000))
+            assert(a.poll(1000) == false)
+            h.send_ok=true
+            assert(a.poll(1001) == false)
+            assert(a.poll(1005))
+            assert(a.push_ping({key='2',category='large_enemy'},1006))
+            assert(a.set('ping_large_enemy',false))
+            assert(a.poll(1010) == false and #h.sent == 2)
+            assert(a.push_ping({key='3',category='giant_enemy'},1011))
+            assert(a.poll(1030) == false and #h.sent == 2)
+        ''')
+
+    def test_ping_from_previous_lobby_is_never_sent_in_new_lobby(self):
+        self.run_lua('''
+            assert(a.set('ping',true))
+            assert(a.push_ping({key='1',category='large_enemy'},1000))
+            h.session='session-b'
+            assert(a.poll(1000) == false and #h.sent == 0)
+        ''')
+
+    def test_host_and_client_are_distinct_boolean_states(self):
+        self.run_lua("""
+            assert(a.set('scope', 'host'))
+            assert(a.snapshot().is_host == true and a.check(0, 0))
+            h.host = '76561198000000002'; h.peers[2] = h.host
+            assert(a.snapshot().is_host == false)
+            local ok, why = a.check(0, 1)
+            assert(ok == false and why:find('主机'))
+            h.host = 'not-present'
+            assert(a.snapshot().is_host == nil and a.check(0, 1) == false)
+        """)
+
+    def test_ids_preserve_all_64_bits_and_remove_zero_duplicates(self):
+        self.run_lua("""
+            h.mine = '18446744073709551614'; h.host = h.mine
+            h.peers = {h.mine, '18446744073709551615', h.mine, '0', 0, '0ULL', '0000'}
+            local s = a.snapshot()
+            assert(s.mine == h.mine and s.is_host == true)
+            assert(#s.peers == 2 and #s.remote == 1)
+            assert(s.remote[1] == '18446744073709551615')
+            h.peers = {[h.mine] = true, ['18446744073709551615'] = true, ['0'] = true}
+            assert(#a.snapshot().remote == 1)
+        """)
+
+    def test_no_welcome_for_initial_or_restarted_members(self):
+        self.run_lua("""
+            h.peers[2] = 'friend'; assert(a.set('welcome', true))
+            a.poll(0); a.poll(20); assert(#h.sent == 0)
+            h.a = h.new(h.writes[#h.writes]); a = h.a
+            a.poll(30); a.poll(40); assert(#h.sent == 0)
+        """)
+
+    def test_raw_uint64_ids_and_sparse_peer_arrays(self):
+        self.run_lua("""
+            local ffi = require('ffi')
+            local mine = ffi.new('uint64_t', 0x10000000) * 0x10000000 + 1
+            local friend = mine + 1
+            h.mine = mine; h.host = mine
+            h.peers = {[1] = mine, [4] = friend, [7] = ffi.new('uint64_t', 0)}
+            local s = a.snapshot()
+            assert(s.mine == tostring(mine) and s.is_host == true)
+            assert(#s.peers == 2 and s.remote[1] == tostring(friend))
+        """)
+
+    def test_throwing_and_partial_session_api_resets_pending(self):
+        self.run_lua("""
+            assert(a.set('welcome', true)); a.poll(0)
+            h.peers[2] = 'friend'; a.poll(1)
+            local peers = h.sr.GameSession.peers
+            h.sr.GameSession.peers = function() error('transition') end
+            assert(a.snapshot() == nil); a.poll(2)
+            h.sr.GameSession.peers = peers; a.poll(3); a.poll(10)
+            assert(#h.sent == 0)
+            h.peers[1] = nil; assert(a.snapshot() == nil)
+        """)
+
+    def test_same_count_replacement_is_join_and_delay_is_observed(self):
+        self.run_lua("""
+            h.peers[2] = 'old'; assert(a.set('welcome', true)); a.poll(0)
+            h.peers[2] = 'new'; a.poll(1); a.poll(2.9); assert(#h.sent == 0)
+            a.poll(3); assert(#h.sent == 1 and h.sent[1] == a.options.welcome_message)
+            a.poll(9); assert(#h.sent == 1)
+        """)
+
+    def test_leave_cancels_queued_welcome(self):
+        self.run_lua("""
+            assert(a.set('welcome', true)); a.poll(0)
+            h.peers[2] = 'friend'; a.poll(1)
+            h.peers[2] = nil; a.poll(2); a.poll(10); assert(#h.sent == 0)
+        """)
+
+    def test_session_local_host_and_context_changes_reset_baseline(self):
+        for change in ["h.session = 'session-b'", "h.context = 'context-b'",
+                       "h.mine = 'new-local'; h.peers[1] = h.mine; h.host = h.mine",
+                       "h.host = 'new-host'; h.peers[3] = h.host"]:
+            with self.subTest(change=change):
+                self.setUp()
+                self.run_lua("""
+                    assert(a.set('welcome', true)); a.poll(0)
+                    h.peers[2] = 'friend'; a.poll(1)
+                """ + change + """; a.poll(2); a.poll(10); assert(#h.sent == 0)""")
+
+    def test_invalid_session_resets_baseline(self):
+        self.run_lua("""
+            assert(a.set('welcome', true)); a.poll(0)
+            h.peers[2] = 'friend'; a.poll(1)
+            h.in_session = false; a.poll(2)
+            h.in_session = true; a.poll(3); a.poll(10); assert(#h.sent == 0)
+        """)
+
+    def test_enabling_welcome_or_master_does_not_welcome_existing_members(self):
+        self.run_lua("""
+            a.poll(0); h.peers[2] = 'already-here'; a.poll(1)
+            assert(a.set('welcome', true)); a.poll(2); a.poll(10)
+            assert(#h.sent == 0)
+            assert(a.set('enabled', false)); h.peers[3] = 'also-here'; a.poll(11)
+            assert(a.set('enabled', true)); a.poll(12); a.poll(20)
+            assert(#h.sent == 0)
+        """)
+
+    def test_host_scope_does_not_queue_joins_observed_as_client(self):
+        self.run_lua("""
+            h.host = 'host'; h.peers[2] = 'host'
+            assert(a.set('scope', 'host')); assert(a.set('welcome', true)); a.poll(0)
+            h.peers[3] = 'friend'; a.poll(1); a.poll(10); assert(#h.sent == 0)
+            h.host = h.mine; a.poll(11); a.poll(20); assert(#h.sent == 0)
+        """)
+
+    def test_master_solo_and_shared_cooldown_policy(self):
+        self.run_lua("""
+            assert(a.check(0, 0)); assert(a.set('allow_solo', false))
+            assert(a.check(0, 0) == false and a.check(0, 1))
+            a.record(10); assert(a.check(14.99, 1) == false and a.check(15, 1))
+            assert(a.set('enabled', false)); assert(a.check(99, 1) == false)
+            assert(a.set('enabled', true)); assert(a.set('cooldown', 0))
+            assert(a.check(10, 1))
+        """)
+
+    def test_multiple_joins_have_independent_cooldowns_and_each_get_a_named_welcome(self):
+        self.run_lua("""
+            assert(a.set('welcome', true)); a.poll(0)
+            assert(a.set('welcome_message','欢迎 {玩家名}（{缩写}，{编号}号）'))
+            for i,key in ipairs({'one','two','three'}) do
+                h.peers[i+1]=key
+                h.identities[key]={peer_id=key,name=key,short='P'..(i+1),color_index=i}
+            end
+            a.poll(1); a.poll(3); a.poll(3); a.poll(3)
+            assert(#h.sent==3 and next(a.state.pending)==nil)
+            local lines=table.concat(h.sent,'|')
+            assert(lines:find('欢迎 one（P2，2号）',1,true))
+            assert(lines:find('欢迎 two（P3，3号）',1,true))
+            assert(lines:find('欢迎 three（P4，4号）',1,true))
+        """)
+
+    def test_failed_chat_send_retains_welcome_and_waits_five_seconds(self):
+        self.run_lua("""
+            assert(a.set('welcome', true)); a.poll(0)
+            h.peers[2] = 'friend'; a.poll(1); h.send_ok = false
+            a.poll(3); assert(#h.sent == 1)
+            h.send_ok = true; a.poll(7.99); assert(#h.sent == 1)
+            a.poll(8); assert(#h.sent == 2)
+            assert(a.check(12.99, 1, 'friend') == false and a.check(13, 1, 'friend'))
+        """)
+
+    def test_cooling_player_does_not_block_another_players_ping_behind_it(self):
+        self.run_lua('''
+            h.peers={h.mine,'A','B'}
+            assert(a.set('ping',true)); assert(a.set('ping_sender_prefix',false))
+            assert(a.set('ping_message','{目标}'))
+            assert(a.push_ping({key='a1',category='map',creator_id='A',target='A1'},1000))
+            assert(a.poll(1000))
+            assert(a.push_ping({key='a2',category='map',creator_id='A',target='A2'},1001))
+            assert(a.push_ping({key='b1',category='map',creator_id='B',target='B1'},1001))
+            assert(a.poll(1001)); assert(h.sent[2]=='B1')
+            assert(a.poll(1004)==false); assert(a.poll(1005)); assert(h.sent[3]=='A2')
+        ''')
+
+    def test_welcome_and_ping_share_only_the_trigger_players_limit(self):
+        self.run_lua('''
+            assert(a.set('welcome',true)); assert(a.set('ping',true)); a.poll(0)
+            h.peers={h.mine,'A','B'}; a.poll(1); a.poll(3); a.poll(3)
+            assert(#h.sent==2)
+            assert(a.push_ping({key='a1',category='map',creator_id='A'},4))
+            assert(a.poll(4)==false)
+            assert(a.check(4,2), 'local task does not consume a remote player bucket')
+            assert(a.poll(8)); assert(#h.sent==3)
+        ''')
+
+    def test_uint64_decimal_welcome_id_and_native_hex_ping_use_the_same_bucket(self):
+        self.run_lua('''
+            local ffi=require('ffi');local id=ffi.new('uint64_t',0x0110000100000000)+0x22
+            h.peers={h.mine,id}
+            a.record(1000,tostring(id))
+            assert(a.check(1001,1), 'local player has an independent bucket')
+            assert(a.check(1001,1,'0110000100000022')==false)
+            assert(a.check(1005,1,'0110000100000022'))
+        ''')
+
+    def test_per_player_limits_reset_on_room_change_and_remove_departed_ids(self):
+        self.run_lua('''
+            h.peers={h.mine,'A','B'}; a.record(1000,'A'); a.record(1000,'B')
+            assert(a.check(1001,2,'A')==false)
+            h.peers={h.mine,'B'}; a.check(1001,1)
+            h.peers={h.mine,'A','B'}
+            assert(a.check(1001,2,'A') and a.check(1001,2,'B')==false)
+            h.session='session-b'; h.peers={h.mine,'A','B'}
+            assert(a.check(1001,2,'A') and a.check(1001,2,'B'))
+        ''')
+
+    def test_player_template_variables_are_literal_utf8_safe_and_have_clear_fallbacks(self):
+        self.run_lua('''
+            h.identities.friend={peer_id='friend',name='张三%{编号}<tag>',short='Z2',color_index=1}
+            assert(a.format('{玩家名}|{名字}|{触发者}|{缩写}|{编号}|{未知}', 'friend')==
+                '张三%{编号}tag|张三%{编号}tag|张三%{编号}tag|Z2|2|{未知}')
+            assert(a.format('{玩家名}/{缩写}/{编号}','missing')=='队友/队友/?')
+            assert(#a.format(string.rep('中',200),'friend')<=512)
+        ''')
+
+    def test_welcome_resolves_native_profile_from_session_uint64_without_guessing_slot(self):
+        self.run_lua('''
+            local ffi=require('ffi');local id=ffi.new('uint64_t',0x0110000100000000)+0x22
+            h.identities['0110000100000022']={peer_id='0110000100000022',name='Alice',short='A3',color_index=2}
+            assert(a.set('welcome',true));assert(a.set('welcome_message','欢迎 {玩家名} {缩写} {编号}'));a.poll(0)
+            h.peers={h.mine,id};a.poll(1);assert(a.poll(3))
+            assert(h.sent[1]=='欢迎 Alice A3 3')
+        ''')
+
+    def test_recently_welcomed_rejoining_peer_does_not_hold_up_a_newcomer(self):
+        self.run_lua('''
+            assert(a.set('welcome',true));a.poll(0)
+            h.peers={h.mine,'A','B'};a.poll(1)
+            a.record(2,'A')
+            assert(a.poll(3)); assert(a.state.pending.B==nil and a.state.pending.A)
+            assert(a.poll(3)==false);assert(a.poll(7));assert(next(a.state.pending)==nil)
+        ''')
+
+    def test_options_roundtrip_percent_newlines_and_never_execute_settings(self):
+        self.run_lua("""
+            local text = '你好%\\n欢迎=加入|小队'
+            assert(a.set('welcome_message', text))
+            local saved = h.writes[#h.writes]
+            assert(not saved:find(text, 1, true))
+            local b = h.new(saved); assert(b.options.welcome_message == text)
+            local c = h.new("enabled=false\\nscope=host\\ncooldown=17\\nwelcome=true\\n" ..
+                "welcome_delay=4\\nallow_solo=false\\nunknown=os.execute('bad')\\n")
+            assert(not c.options.enabled and c.options.scope == 'host' and c.options.cooldown == 17)
+            assert(c.options.welcome_delay == 4 and c.options.welcome and not c.options.allow_solo)
+            assert(h.new('cooldown=bad\\nscope=bad\\nenabled=maybe\\n').options.cooldown == 5)
+        """)
+
+    def test_invalid_options_and_persistence_failure_leave_config_unchanged(self):
+        self.run_lua("""
+            for _, pair in ipairs({{'scope','client'}, {'cooldown',-1}, {'cooldown',3601},
+                {'cooldown',1.5}, {'welcome_delay',61}, {'enabled','true'},
+                {'welcome_message',''}, {'unknown',true}}) do
+                local ok, why = a.set(pair[1], pair[2])
+                assert(ok == false and type(why) == 'string' and #why > 0)
+            end
+            assert(#h.writes == 0)
+            h.write_ok = false; assert(a.set('cooldown', 15) == false)
+            assert(a.options.cooldown == 5)
+            h.write_ok = true; h.throw_write = true
+            assert(a.set('welcome', true) == false and not a.options.welcome)
+        """)
+
+    def test_failed_setting_save_preserves_queued_welcome(self):
+        self.run_lua("""
+            assert(a.set('welcome', true)); a.poll(0)
+            h.peers[2] = 'friend'; a.poll(1)
+            h.write_ok = false
+            assert(a.set('welcome', false) == false and a.options.welcome == true)
+            a.poll(3); assert(#h.sent == 1)
+        """)
+
+
+if __name__ == '__main__':
+    unittest.main()

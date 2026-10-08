@@ -200,6 +200,12 @@ class GateCanFailTest(unittest.TestCase):
             cls.source = handle.read()
 
     # ------------------------------------------------------------- user32
+    def test_declaration_table_and_user_calls_are_visible_to_gates(self):
+        snippet = "local declarations = {'void *VirtualAlloc(void *p, size_t n, uint32_t t, uint32_t f);'}\nuser.RegisterRawInputDevices(nil, 0, 16)"
+        self.assertIn('VirtualAlloc', gates.declared_symbols(snippet))
+        self.assertIn('RegisterRawInputDevices', gates.called_symbols(snippet))
+        self.assertTrue(gates.check_called_are_declared(snippet))
+
     def test_user32_gate_fires_on_pcall_style_cdef(self):
         """A user32 declaration with the WRONG prototype must still be rejected.
 

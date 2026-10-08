@@ -25,6 +25,14 @@ work/scratch/
 # evidence and stay tracked.
 work/deploy/deployed.json
 
+# Local rollback packages and machine-specific verification snapshots.
+# Reproducible source, documentation and test logs remain in Git; installable
+# packages are backed up as GitHub Release assets.
+work/deploy/backup-*.patch_*
+work/deploy/manager-backup-*.zip
+work/deploy/preflight-*.json
+work/deploy/verification-*.json
+
 # One-off commit-message drafts
 work/deploy/cmsg*.txt
 work/deploy/_m.txt

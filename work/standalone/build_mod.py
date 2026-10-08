@@ -61,6 +61,20 @@ OUT = str(args.output_dir.resolve())
 Path(OUT).mkdir(parents=True, exist_ok=True)
 
 src = io.open(MOD_SOURCE, encoding="utf-8").read()
+input_fragment = Path(MOD_SOURCE).with_name('panel_input.lua').read_text(encoding='utf-8').rstrip()
+if ('-- BEGIN ARMORY INPUT\n' + input_fragment + '\n-- END ARMORY INPUT') not in src:
+    raise SystemExit('FAIL embedded panel input differs from independently tested source fragment')
+automation_fragment = Path(MOD_SOURCE).with_name('chat_automation.lua').read_text(encoding='utf-8').rstrip()
+if ('-- BEGIN CHAT AUTOMATION\n' + automation_fragment + '\n-- END CHAT AUTOMATION') not in src:
+    raise SystemExit('FAIL embedded chat automation differs from independently tested source fragment')
+ping_fragment = Path(MOD_SOURCE).with_name('ping_events.lua').read_text(encoding='utf-8').rstrip()
+if ('-- BEGIN NATIVE PING EVENTS\n' + ping_fragment + '\n-- END NATIVE PING EVENTS') not in src:
+    raise SystemExit('FAIL embedded native ping adapter differs from independently tested source fragment')
+for fragment, marker in [('peer_identity', 'PEER IDENTITY'), ('plugin_registry', 'PLUGIN REGISTRY'),
+                         ('marker_localization', 'MARKER LOCALIZATION')]:
+    content = Path(MOD_SOURCE).with_name(fragment + '.lua').read_text(encoding='utf-8').rstrip()
+    if ('-- BEGIN ' + marker + '\n' + content + '\n-- END ' + marker) not in src:
+        raise SystemExit('FAIL embedded ' + fragment + ' differs from independently tested source fragment')
 ver = re.search(r"version\s*=\s*['\"]([\d.]+)['\"]", src).group(1)
 
 # --- gate 1: compiles under LuaJIT (65535 instructions per function) ---------
@@ -88,7 +102,7 @@ for _check in (gates.check_user32, gates.check_called_are_declared,
     _gate_failures.extend(_check(src))
 if _gate_failures:
     raise SystemExit("FAIL refusing to build:\n  - " + "\n  - ".join(_gate_failures))
-print("gates: no user32, every call declared, no memory writes, detection live")
+print("gates: approved shared user32 prototypes, every call declared, no memory writes, detection live")
 
 # --- gate 4: the in-game README block exists --------------------------------
 r0 = src.find(README_MARKER)

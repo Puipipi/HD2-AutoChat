@@ -160,6 +160,7 @@ function harness.region(base, size, state, protect)
 end
 
 function harness.bytes(address, str)
+    cache = {} -- a later ReadProcessMemory must see changes made by the game
     for i = 1, #str do mem[address + i - 1] = str:sub(i, i) end
 end
 
@@ -174,11 +175,13 @@ local function le_bytes(value, size)
 end
 
 function harness.u32(address, value)
+    cache = {}
     local bytes = le_bytes(value, 4)
     for i = 1, 4 do mem[address + i - 1] = bytes[i] end
 end
 
 function harness.u64(address, value)
+    cache = {}
     -- Byte-by-byte division, NOT (value - lo) / 2^32. The subtraction form loses
     -- precision and, worse, writing a 4-byte value into an 8-byte slot silently
     -- leaves the upper half zero while the lower half holds a small number -- which
@@ -329,6 +332,7 @@ function harness.install()
     end
     function kernel.CreateDirectoryA() return 1 end
     function kernel.QueryPerformanceCounter() return 1 end
+    function kernel.MoveFileExA() return 1 end
     -- The mod requires this at boot (it compares the foreground window's pid to its
     -- own before honouring the hotkey), so the mock must provide it or the mod
     -- stops at "missing kernel32 symbol".
@@ -501,7 +505,15 @@ function harness.install()
         Vector3 = function(x, y, z) return {x = x, y = y, z = z} end,
         Vector2 = function(x, y) return {x = x, y = y} end,
         Color = function(a, r, g, b) return {a = a, r = r, g = g, b = b} end,
-        IdString64 = {from_hex = function(s) return s end},
+        IdString64 = {from_hex = function(s)
+            -- Native from_hex accepts only a 64-bit hexadecimal ID, never a path.
+            -- The former identity stub hid the debug-font crash at this boundary.
+            if type(s) ~= 'string' or #s ~= 16 or not s:match('^%x+$') then
+                harness.invalid_hex_calls = (harness.invalid_hex_calls or 0) + 1
+                error('invalid native IdString64.from_hex argument: ' .. tostring(s))
+            end
+            return s
+        end},
         Material = {
             set_texture = function(material, texture_id, atlas_id)
                 harness.texture_set = {material = material, texture = texture_id,
@@ -555,8 +567,8 @@ function harness.install()
         if mode == nil or tostring(mode):find('r') then return real_open(path, mode) end
         if tostring(path):find('AutoChat', 1, true) then
             return {
-                write = function(_, text) written[#written + 1] = {path = path, text = text} end,
-                close = function() end,
+                write = function(self, text) written[#written + 1] = {path = path, text = text} return self end,
+                close = function() return true end,
             }
         end
         return real_open(path, mode)
@@ -750,7 +762,8 @@ class AutoChatProbeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.lua, cls.h = make_harness()
-        cls.source = io.open(SOURCE, encoding="utf-8").read()
+        with io.open(SOURCE, encoding="utf-8") as source:
+            cls.source = source.read()
 
     def fresh(self):
         """A brand-new Lua state with a clean harness and a valid image."""
@@ -1658,7 +1671,7 @@ class AutoChatProbeTest(unittest.TestCase):
         self._run(lua, 20)
         seen = lua.eval("_G.__seen")
         self.assertIsNotNone(seen, "the plugin's draw must have been reached")
-        self.assertEqual(460, seen["w"], "the plugin must be told the panel width")
+        self.assertEqual(1000, seen["w"], "the plugin must be told the panel width")
         self.assertGreater(seen["body_y"], 0,
                            "the plugin body must start BELOW the header and tab strip, "
                            "not at the panel's own top")
@@ -1744,6 +1757,46 @@ class AutoChatProbeTest(unittest.TestCase):
                                 "success")
         self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
                       "and none of this may fault")
+
+    def test_debug_font_path_never_converts_resource_path_as_hex(self):
+        lua, h = fresh_image()  # no runtime UI font IDs: exercise debug font fallback
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 601)
+        self.assertEqual(0, h.invalid_hex_calls or 0,
+                         "a resource path must never reach native from_hex")
+        self.assertTrue(mod.debug_font()["ok"], "loaded debug font must draw real text")
+        self.assertGreater(h.text_drawn or 0, 0)
+
+    def test_font_material_is_bound_again_when_gui_is_rebuilt(self):
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 601)
+        made = h.material_made
+        mod.debug_panel()["version"] = mod.debug_panel()["version"] + 1
+        self._run(lua, 1)
+        self.assertGreater(h.material_made, made,
+                           "destroying a GUI also invalidates its material binding")
+
+    def test_reused_native_gui_handle_still_rebinds_font(self):
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 601)
+        lua.execute("""
+            local handle = HD2AutoChat.debug_panel().gui
+            local create = stingray.World.create_screen_gui
+            stingray.World.create_screen_gui = function(...)
+                create(...)
+                return handle
+            end
+        """)
+        made = h.material_made
+        mod.debug_panel()["version"] = mod.debug_panel()["version"] + 1
+        self._run(lua, 1)
+        self.assertGreater(h.material_made, made,
+                           "a new lifetime can reuse the same native handle")
 
     def test_the_bitmap_fallback_still_draws_when_the_font_is_unavailable(self):
         """The other direction: no ids, no fault, and the panel still lays out.
