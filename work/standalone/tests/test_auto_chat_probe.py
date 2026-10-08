@@ -1576,6 +1576,62 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
                       "and must not take the panel down with it")
 
+    def test_plugin_coordinates_are_offset_into_the_body(self):
+        """A plugin lays out from its own top-left, not the panel's.
+
+        The helpers a plugin receives are the panel's own, which expect panel
+        coordinates. Without an offset a plugin drawing at (10, 10) lands on the header
+        and the tab strip and covers them. The API offsets every coordinate past the
+        header and tabs so the plugin body is the plugin's whole space.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        # A plugin that records where its own (0,0) actually landed.
+        lua.execute("""
+            local reg = rawget(_G, 'HD2AutoChatPlugins')
+            _G.__seen = nil
+            reg.register({id = 'probe_mod', title = 'PROBE',
+                draw = function(u, ctx)
+                    _G.__seen = {w = u.w, h = u.h, body_y = u.body_y, scale = u.scale}
+                    u.rect(0, 0, 20, 10, u.palette.ROW)
+                    u.text('X', 0, 0, 11)
+                    u.region('hit', 0, 0, 20, 10)
+                end})
+            _G.HD2AutoChat.debug_panel().active_plugin = 'probe_mod'
+        """)
+        mod.debug_set_open(True)
+        self._run(lua, 700)
+        self._run(lua, 20)
+        seen = lua.eval("_G.__seen")
+        self.assertIsNotNone(seen, "the plugin's draw must have been reached")
+        self.assertEqual(460, seen["w"], "the plugin must be told the panel width")
+        self.assertGreater(seen["body_y"], 0,
+                           "the plugin body must start BELOW the header and tab strip, "
+                           "not at the panel's own top")
+        # And its region must have been recorded, offset with it. Checked in Lua: the
+        # panel's regions are a Lua table, and reading them from Python mixes up the
+        # indexing conventions.
+        probe = lua.eval("""(function()
+            local P = _G.HD2AutoChat.debug_panel()
+            local n = P.regions and #P.regions or 0
+            for i = 1, n do
+                local r = P.regions[i]
+                if tostring(r.key):find('plugin:probe_mod', 1, true) then
+                    return {found = true, y = r.y, x = r.x, w = r.w, h = r.h}
+                end
+            end
+            return {found = false, n = n}
+        end)()""")
+        self.assertTrue(probe["found"],
+                        "the plugin's region must be recorded so its own controls are "
+                        "clickable; regions seen: %s, plugin still registered: %s"
+                        % (probe["n"],
+                           lua.eval("tostring(rawget(_G.HD2AutoChat, 'PLUGIN_BY_ID')"
+                                    "['probe_mod'] ~= nil)")))
+        self.assertGreater(probe["y"], 0,
+                           "a plugin's click region must be offset with its drawing, or "
+                           "clicks land in the wrong place")
+
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
                        "createremotethread"):

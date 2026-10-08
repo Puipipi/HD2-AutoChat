@@ -1072,13 +1072,35 @@ local function UI() return sr.Gui, sr.Vector3, sr.Vector2, sr.Color end
 local UX = {}
 
 -- What a plugin draws with. `u` mirrors the panel's own helpers so a plugin cannot
--- reach into this file's state, and cannot draw outside the body it is given.
+-- reach into this file's state, and it draws into the BODY: every coordinate is offset
+-- past the header and tab strip automatically, so a plugin lays out from its own top
+-- left and cannot draw over the tabs. Without that offset the helpers began at the
+-- panel's own top left and plugin content landed on top of the tab strip.
 local function plugin_api(ctx)
+    local dx, dy = ctx.ox or 0, ctx.oy or 0
     return {
-        w = ctx.w, h = ctx.h, scale = UX.s,
-        text = UX.text, rect = UX.rect, border = UX.border,
+        w = ctx.w, h = ctx.h, body_y = dy, scale = UX.s,
+        -- These forward at CALL time. Copying UX.text into the table here would capture
+        -- whatever it held when plugin_api ran, which is nothing: plugin_api is reached
+        -- before draw_panel has finished assigning, so the plugin received three nil
+        -- helpers. Forwarding through UX means the lookup happens when the plugin
+        -- actually draws.
+        -- NOTE the argument order: the panel's own text() takes the string FIRST
+        -- (value, x, y, size, ...), so the offset must be applied to arguments 2 and 3,
+        -- not 1 and 2. Offsetting the wrong pair made the plugin hand a string where a
+        -- coordinate was expected and the call died with "attempt to perform arithmetic
+        -- on a string".
+        text = function(value, x, y, ...)
+            return UX.text(value, x + dx, y + dy, ...)
+        end,
+        rect = function(x, y, ...) return UX.rect(x + dx, y + dy, ...) end,
+        border = function(x, y, ...) return UX.border(x + dx, y + dy, ...) end,
         colour = UX.colour, palette = UX.palette,
-        region = function(key) UX.region('plugin:' .. ctx.id .. ':' .. tostring(key)) end,
+        -- Recorded in the same units the helpers above take, so a plugin's click area
+        -- lines up with what it drew.
+        region = function(key, x, y, w, h)
+            UX.region('plugin:' .. ctx.id .. ':' .. tostring(key), x + dx, y + dy, w, h)
+        end,
         note = plugin_note,
         version = M.version,
     }
@@ -1096,6 +1118,7 @@ local function panel_signature()
         tostring(M.sent or 0), tostring(M.last_peers or '-'),
         M.version, PANEL.version,
         tostring(PANEL.active_plugin), tostring(REGISTRY.serial or 0),
+        M.last_send and ((M.last_send.ok and 'ok:' or 'no:') .. tostring(M.last_send.why)) or '-',
     }, '|')
 end
 
@@ -1169,6 +1192,11 @@ local function draw_panel()
         end
         return w * sz
     end
+    -- Armory's measure(): a text's width in PANEL units, which is what its layout code
+    -- is written in. Its measure_px gives pixels, so this divides by the scale.
+    local function measure(value, size)
+        return measure_px(tostring(value), font_px(size)) / s
+    end
 
     -- Real text, shrunk in whole pixels to fit `limit`, with right/center alignment.
     -- Returns its width in panel units. `nil` limit means no shrinking.
@@ -1227,57 +1255,103 @@ local function draw_panel()
         }
     end
 
-    -- ---- layout (panel units, top-left origin, exactly like Armory's screens) ----
-    local PAD = 14
-    local HEAD = 40
-    rect(0, 0, W_PANEL, H_PANEL, C.BG, 950)
-    rect(0, 0, 4, H_PANEL, C.YELLOW)                       -- the accent stripe
-    border(0, 0, W_PANEL, H_PANEL, C.LINE2, 952)
-    rect(4, HEAD, W_PANEL - 4, 1, C.LINE2, 952)
+    -- Published BEFORE anything draws. A plugin receives these helpers, and they must be
+    -- populated by the time its draw runs -- assigning them at the end of this function
+    -- (which is where they used to live) handed every plugin a nil palette, and the
+    -- plugin's very first u.rect then failed on a nil index.
+    UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
+    UX.text, UX.rect, UX.border = text, rect, border
+    UX.colour, UX.palette = color, C
+    UX.region = region
+    UX.width, UX.panel_h = width, H_PANEL
 
-    text('AUTOCHAT', PAD, 11, 15, C.YELLOW)
-    text('v' .. M.version, W_PANEL - PAD, 13, 11, C.DIM, nil, 'right')
-    text('K CLOSES   SENT ' .. tostring(M.sent or 0)
-         .. '   PEERS ' .. tostring(M.last_peers or '?'),
-         PAD, 27, 10, C.MUTED, W_PANEL - PAD * 2)
+    -- ---- frame: Armory's exact structure -------------------------------------
+    --   * full-bleed background at z950, a 1px border at z955, and the game's thin
+    --     YELLOW strip along the TOP edge (3px);
+    --   * a top strip that reads as a title bar: a small muted eyebrow, the name, and
+    --     the version right-aligned in DIM;
+    --   * a tab strip BELOW that, 40 tall, where each tab measures its own caption;
+    --   * the active tab is filled with C.PANEL, bordered C.TEXT, and carries the
+    --     game's hatched stripe;
+    --   * the body then starts under the strip.
+    local PAD = 22
+    local TAB_Y, TAB_H = 108, 40
+    local HEAD = TAB_Y + TAB_H + 12
+    local W, H = W_PANEL, H_PANEL
+
+    rect(0, 0, W, H, C.BG, 950)
+    border(0, 0, W, H, C.LINE, 955)
+    rect(0, 0, W, 3, C.YELLOW, 952)                        -- the game's top strip
+
+    local mx = text('AUTOCHAT', PAD, 12, 11, C.MUTED)
+    text('AUTOMATIC SQUAD CHAT', PAD + mx + 12, 12, 11, C.TEXT)
+    text('v' .. M.version, W - PAD, 12, 11, C.DIM, nil, 'right')
+
+    -- the game's hatched stripe, as short diagonal steps (copied from Armory)
+    local function hatch(x, y, w, c)
+        local k = 0
+        while k * 7 + 6 <= w do
+            for j = 0, 2 do rect(x + k * 7 + j * 1.5, y + 4 - j * 2, 2.5, 2, c, 953) end
+            k = k + 1
+        end
+    end
+    -- one tab, width measured from its caption, exactly as Armory sizes them
+    local function tab(key, caption, x, active)
+        caption = string.upper(tostring(caption))
+        local w = math.min(230, measure(caption, 15) + 30)
+        local lim = w - 20
+        if measure(caption, 11) > lim then
+            while #caption > 3 and measure(caption .. '..', 11) > lim do
+                caption = caption:sub(1, -2)
+            end
+            caption = caption:gsub('[%s,]+$', '') .. '..'
+        end
+        rect(x, TAB_Y, w, TAB_H, active and C.PANEL or C.BG, 951)
+        border(x, TAB_Y, w, TAB_H,
+               active and C.TEXT or (PANEL.hover == key and C.MUTED or C.LINE2), 952)
+        text(caption, x + 12, TAB_Y + 8, 15,
+             active and C.TEXT
+             or (PANEL.hover == key and C.TEXT or C.MUTED), w - 20)
+        if active then hatch(x + 10, TAB_Y + 28, w - 20, C.TEXT) end
+        region(key, x, TAB_Y, w, TAB_H)
+        return w
+    end
 
     -- ---------------------------------------------------------------- tab strip
     -- Armory's model: an ordered list of tab keys, one selected at a time, the whole
     -- body switched on it. Tab 1 is always the default settings; every mod that
     -- registered adds one more beside it, so a mod using this feature is visible AS A
     -- TAB instead of being buried in a shared list.
-    local tabs = {{key = false, title = 'DEFAULT'}}
+    -- The tab order, exactly like Armory's ui.tab_order: armory puts its tabs left to
+    -- right in one strip and switches the whole body on the selected key. Tab 1 is
+    -- always the default settings; every registered mod appends one after it.
+    local tabs = {{key = 'tab:default', title = 'DEFAULT', id = nil}}
     for i = 1, #M.PLUGINS do
-        tabs[#tabs + 1] = {key = M.PLUGINS[i].id, title = M.PLUGINS[i].title}
+        tabs[#tabs + 1] = {key = 'tab:' .. M.PLUGINS[i].id,
+                           title = M.PLUGINS[i].title, id = M.PLUGINS[i].id}
     end
     if PANEL.active_plugin and not M.PLUGIN_BY_ID[PANEL.active_plugin] then
         PANEL.active_plugin = nil                       -- it unregistered itself
     end
-    if #tabs > 1 then
-        local ty = HEAD
-        rect(4, ty, W_PANEL - 4, TABS_H, C.PANEL, 952)
-        rect(4, ty + TABS_H - 1, W_PANEL - 4, 1, C.LINE2, 953)
-        local slot = (W_PANEL - 4) / #tabs
-        for i = 1, #tabs do
-            local tab = tabs[i]
-            local tx = 4 + (i - 1) * slot
-            local active = (tab.key == PANEL.active_plugin)
-            if active then
-                rect(tx, ty + TABS_H - 3, slot, 3, C.YELLOW, 954)
-                rect(tx, ty, slot, TABS_H - 3, C.ROW, 953)
-            end
-            text(cut(tab.title, 11, slot - 10), tx + slot / 2, ty + 9, 11,
-                 active and C.YELLOW or C.MUTED, slot - 10, 'center')
-            region('tab:' .. i, tx, ty, slot, TABS_H)
-        end
+    local tab_x = PAD
+    local tab_keys = {}
+    for i = 1, #tabs do
+        local entry = tabs[i]
+        local active = (entry.id == PANEL.active_plugin)
+        local reached = tab(entry.key, entry.title, tab_x, active)
+        tab_keys[entry.key] = entry.id
+        tab_x = tab_x + reached
+        if tab_x > W - PAD - 90 then break end          -- the strip is one row
     end
-    local body_y = HEAD + (#tabs > 1 and TABS_H or 0)
+    PANEL.tab_keys = tab_keys
+    local body_y = TAB_Y + TAB_H + 12
 
     -- ---------------------------------------------------------- plugin body
     local active = PANEL.active_plugin and M.PLUGIN_BY_ID[PANEL.active_plugin] or nil
     if active then
         local ok, err = pcall(active.draw, plugin_api({
-            id = active.id, w = W_PANEL, h = H_PANEL, body_y = body_y,
+            id = active.id, w = W_PANEL, h = H_PANEL,
+            ox = PAD, oy = body_y + 10,
         }), {body_y = body_y, panel_w = W_PANEL, panel_h = H_PANEL})
         if not ok then
             -- A third-party draw runs inside this panel's frame. Drop it for the
@@ -1340,6 +1414,12 @@ local function draw_panel()
          C.TEXT, nil, 'right')
     y = y + 34
 
+    local last = M.last_send
+    if last then
+        text(cut(last.why, 10, W_PANEL - PAD * 2), PAD, y, 10,
+             last.ok and C.GOOD or C.BAD, W_PANEL - PAD * 2)
+        y = y + 14
+    end
     text('NEXT IN ' .. string.format('%.0f', cfg.elapsed) .. 'S   '
          .. (cfg.timer_on and 'RUNNING' or 'STOPPED'),
          PAD, y, 10, cfg.timer_on and C.GOOD or C.DIM, W_PANEL - PAD * 2)
@@ -1434,16 +1514,13 @@ local function panel_frame()
     PANEL.hover = hovered
 
     if clicked and hovered then
-        local tab_index = tostring(hovered):match('^tab:(%d+)$')
-        if tab_index then
-            -- Tab 1 is always the default settings; the rest follow M.PLUGINS order, so
-            -- the tab strip and the registry cannot drift apart.
-            tab_index = tonumber(tab_index)
-            local plugin = (tab_index > 1) and M.PLUGINS[tab_index - 1] or nil
-            PANEL.active_plugin = plugin and plugin.id or nil
+        local keys = PANEL.tab_keys
+        if keys and keys[hovered] ~= nil or (keys and hovered == 'tab:default') then
+            -- Resolved through the map the tab strip built while drawing, so a click can
+            -- only select a tab that was actually drawn.
+            PANEL.active_plugin = keys[hovered] or nil
             PANEL.version = (PANEL.version or 0) + 1
-            note('panel: tab ' .. tostring(tab_index) .. ' -> '
-                 .. tostring(PANEL.active_plugin or 'default'))
+            note('panel: tab -> ' .. tostring(PANEL.active_plugin or 'default'))
         elseif hovered == 'timer' then
             cfg.timer_on = not cfg.timer_on
             cfg.elapsed = 0
@@ -1671,6 +1748,14 @@ local function timed_send(dt)
     if cfg.elapsed < cfg.interval then return end
     cfg.elapsed = 0
     local ok, why = M.send_text(cfg.message, true)
+    -- Recorded on the MOD, not only in the log. A refusal whose only trace is a file the
+    -- player never opens is indistinguishable from "the feature does nothing" -- which
+    -- is exactly how this was reported. The panel prints this line, so "it is ON but
+    -- nothing is being sent" answers itself on screen instead of needing a log dig.
+    M.last_send = {
+        ok = ok and true or false,
+        why = ok and ('SENT TO ' .. tostring(why) .. ' PLAYER(S)') or string.upper(tostring(why)),
+    }
     if not ok then note('timed send refused - ' .. tostring(why)) end
 end
 
