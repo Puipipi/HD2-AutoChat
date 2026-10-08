@@ -1,0 +1,9 @@
+# The mod source must stay LF: the loader reads it as plain text UTF-8 with no BOM,
+# and a CRLF rewrite would be an unnecessary change to a file whose bytes were
+# validated in-game.
+*.lua text eol=lf
+*.py  text eol=lf
+*.md  text eol=lf
+
+# Built archives are binary and are not tracked anyway (see .gitignore).
+*.zip binary

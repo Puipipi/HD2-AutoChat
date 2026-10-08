@@ -1,0 +1,22 @@
+# 构建产物 —— 不入库。ZIP 由 `work/standalone/build_mod.py` 生成。
+dist/
+
+# Bingus 加载器的信封包工具是构建依赖，不随本仓库分发（见 THIRD_PARTY_NOTICES.md）。
+work/standalone/vendor/
+
+# 运行期文件与临时产物
+*.log
+*.tmp
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
+
+# 本机的游戏目录探测结果等一次性产物
+work/scratch/
+*.bak
+*.bak-*
+
+# 部署记录是本机状态，不是源码；但安装前基线是证据，要留。
+work/deploy/deployed.json
