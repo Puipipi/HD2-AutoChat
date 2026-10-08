@@ -52,13 +52,31 @@ LIB_DIR_NAME = "AutoChat_MANUAL"
 
 
 def manager_running():
-    """True when hd2arsenal is running. Its index must not be edited then."""
+    """True when HD2Arsenal is running. Its index must not be edited while it is.
+
+    The comparison is CASE-INSENSITIVE on purpose. tasklist prints the image name as
+    it was launched -- `HD2Arsenal.exe` -- and Python's `in` on strings is
+    case-sensitive, so an earlier version of this check searched for the lowercase
+    spelling, found nothing, and cheerfully reported "not running" while the manager
+    was very much open. That is the one failure this guard exists to prevent, so the
+    check must not depend on how Windows happens to capitalise the name.
+    """
     try:
-        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq hd2arsenal.exe"],
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq HD2Arsenal.exe"],
                              capture_output=True, text=True, check=False).stdout
     except OSError:
         return False
-    return "hd2arsenal.exe" in out
+    lowered = out.lower()
+    if "hd2arsenal.exe" not in lowered:
+        return False
+    # tasklist echoes the filter line even when nothing matches, so a bare substring
+    # test would always say "running". A real match has a PID on the same line.
+    for line in out.splitlines():
+        if "hd2arsenal.exe" in line.lower():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                return True
+    return False
 
 
 def newest_zip():
@@ -134,7 +152,7 @@ def check(args):
 
 def do_import(args):
     if manager_running():
-        sys.exit("REFUSING: hd2arsenal.exe is running. It holds the index in memory "
+        sys.exit("REFUSING: HD2Arsenal.exe is running. It holds the index in memory "
                  "and will write its copy back over these edits, so the import would "
                  "silently vanish. Close the manager and run this again.")
     zip_path = os.path.abspath(args.zip or newest_zip())
@@ -204,7 +222,7 @@ def do_import(args):
 
 def do_remove(args):
     if manager_running():
-        sys.exit("REFUSING: hd2arsenal.exe is running (see --import for why).")
+        sys.exit("REFUSING: HD2Arsenal.exe is running (see --import for why).")
     target = os.path.join(LIBRARY, LIB_DIR_NAME)
     data = load_index()
     index, entry = find_entry(data)
