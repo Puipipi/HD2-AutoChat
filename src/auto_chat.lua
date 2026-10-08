@@ -1372,63 +1372,96 @@ local function draw_panel()
         return
     end
 
-    local y = body_y + 12
+    -- ---------------------------------------------------------- settings body
+    -- The row helpers below are Armory's own, copied from its draw(): `label` is the
+    -- small uppercase yellow eyebrow, `head` pairs it with a big title underneath, and
+    -- `button` carries Armory's hover / filled / disabled states. The body is laid out
+    -- as labelled rows, which is the shape of an Armory settings page rather than a list
+    -- of my own devising.
+    local IX = PAD
+    local IW = W - PAD * 2
+    local function label(value, x, y, c, limit)
+        return text(string.upper(tostring(value)), x, y, 11, c or C.YELLOW, limit)
+    end
+    local function head(x, y, lab, title)
+        label(lab, x, y)
+        text(string.upper(tostring(title)), x, y + 16, 21, C.TEXT, IW)
+    end
+    local function button(key, caption, x, y, w, h, enabled, filled, ink)
+        local size = 13
+        w = w or (measure(caption, size) + 28)
+        local hovered = PANEL.hover == key and enabled ~= false
+        if filled then
+            rect(x, y, w, h, enabled == false and C.YELLOW_DK or C.YELLOW, 951)
+            if hovered then border(x, y, w, h, C.TEXT, 953) end
+        else
+            rect(x, y, w, h, hovered and C.ROW_HI or C.PANEL, 951)
+            border(x, y, w, h,
+                   enabled == false and C.LINE or hovered and C.TEXT or C.LINE2)
+        end
+        local c = enabled == false and C.DIM or filled and C.INK or ink or C.TEXT
+        text(caption, x + w / 2, y + (h - size) / 2, size, c, w - 14, 'center')
+        region(key, x, y, w, h)
+        return w
+    end
+    local function checkbox(key, x, y, on)
+        local hovered = PANEL.hover == key
+        border(x, y, 16, 16, on and C.YELLOW or hovered and C.YELLOW or C.MUTED, 952)
+        if on then rect(x + 4, y + 4, 8, 8, C.YELLOW, 953) end
+        region(key, x - 5, y - 4, 26, 24)
+    end
 
-    -- message field: click it, then type. This is the row that needed real text.
-    text('MESSAGE', PAD, y, 10, C.DIM)
-    y = y + 14
-    local focus = PANEL.editing
-    rect(PAD, y, W_PANEL - PAD * 2, 26, focus and C.ROW_HI or C.FIELD, 953)
-    border(PAD, y, W_PANEL - PAD * 2, 26, focus and C.YELLOW or C.LINE, 954)
-    local shown = cfg.message or ''
-    if focus then shown = shown .. '_' end                     -- the caret
-    local field_w = W_PANEL - PAD * 2 - 16
-    text(cut(shown, 13, field_w), PAD + 8, y + 7, 13,
-         focus and C.TEXT or C.MUTED, field_w)
-    region('message', PAD, y, W_PANEL - PAD * 2, 26)
-    y = y + 34
+    local y = body_y
+    head(IX, y, 'AUTOCHAT', 'SETTINGS')
+    y = y + 52
 
-    -- timed send
-    rect(PAD, y, W_PANEL - PAD * 2, 26,
-         PANEL.hover == 'timer' and C.ROW_HI or C.ROW, 953)
-    text('TIMED SEND', PAD + 8, y + 7, 13, C.TEXT)
-    text(cfg.timer_on and 'ON' or 'OFF', W_PANEL - PAD - 8, y + 7, 13,
+    label('AUTOMATIC MESSAGE', IX, y)
+    y = y + 16
+    local focused = PANEL.editing
+    rect(IX, y, IW, 28, focused and C.ROW_HI or C.FIELD, 951)
+    border(IX, y, IW, 28, focused and C.YELLOW or C.LINE2, 952)
+    local shown = tostring(cfg.message or '')
+    if focused then shown = shown .. '_' end
+    text(cut(shown, 14, IW - 16), IX + 8, y + 7, 14,
+         focused and C.TEXT or C.MUTED, IW - 16)
+    region('message', IX, y, IW, 28)
+    y = y + 38
+
+    checkbox('timer', IX, y + 1, cfg.timer_on)
+    text('TIMED SEND', IX + 26, y + 1, 14,
+         cfg.timer_on and C.TEXT or C.MUTED, IW - 120)
+    text(cfg.timer_on and 'ON' or 'OFF', IX + IW, y + 1, 14,
          cfg.timer_on and C.GOOD or C.DIM, nil, 'right')
-    region('timer', PAD, y, W_PANEL - PAD * 2, 26)
-    y = y + 30
-
-    -- interval
-    rect(PAD, y, W_PANEL - PAD * 2, 26,
-         PANEL.hover == 'interval' and C.ROW_HI or C.ROW, 953)
-    text('INTERVAL', PAD + 8, y + 7, 13, C.TEXT)
-    local btn_w, btn_h = 26, 20
-    local right = W_PANEL - PAD - 8
-    rect(right - btn_w, y + 3, btn_w, btn_h,
-         PANEL.hover == 'plus' and C.ROW_HI or C.FIELD, 954)
-    text('+', right - btn_w / 2, y + 7, 13, C.YELLOW, nil, 'center')
-    region('plus', right - btn_w, y + 3, btn_w, btn_h)
-    rect(right - btn_w * 3 - 6, y + 3, btn_w, btn_h,
-         PANEL.hover == 'minus' and C.ROW_HI or C.FIELD, 954)
-    text('-', right - btn_w * 2.5 - 6, y + 7, 13, C.YELLOW, nil, 'center')
-    region('minus', right - btn_w * 3 - 6, y + 3, btn_w, btn_h)
-    text(tostring(cfg.interval) .. 'S', right - btn_w * 3 - 14, y + 7, 13,
-         C.TEXT, nil, 'right')
+    -- No second hit area for this row. Armory's checkbox already registers its own
+    -- region, and a wider row region drawn over it overlaps geometrically, which
+    -- makes one of the two unreachable and a click impossible to attribute. The
+    -- checkbox is the control, exactly as it is in Armory.
     y = y + 34
 
+    label('INTERVAL', IX, y)
+    y = y + 18
+    text(tostring(cfg.interval) .. ' SECONDS', IX, y + 4, 14, C.TEXT, IW - 90)
+    local plus_w = button('plus', '+', IX + IW - 34, y, 34, 26, true)
+    button('minus', '-', IX + IW - 34 - plus_w - 6, y, 34, 26, true)
+    y = y + 38
+
+    label('STATUS', IX, y)
+    y = y + 16
     local last = M.last_send
     if last then
-        text(cut(last.why, 10, W_PANEL - PAD * 2), PAD, y, 10,
-             last.ok and C.GOOD or C.BAD, W_PANEL - PAD * 2)
-        y = y + 14
+        text(cut(last.why, 12, IW), IX, y, 12, last.ok and C.GOOD or C.BAD, IW)
+        y = y + 16
     end
     text('NEXT IN ' .. string.format('%.0f', cfg.elapsed) .. 'S   '
-         .. (cfg.timer_on and 'RUNNING' or 'STOPPED'),
-         PAD, y, 10, cfg.timer_on and C.GOOD or C.DIM, W_PANEL - PAD * 2)
+         .. (cfg.timer_on and 'RUNNING' or 'STOPPED'), IX, y, 12,
+         cfg.timer_on and C.GOOD or C.DIM, IW)
     y = y + 18
-    text('CLICK THE MESSAGE BOX, TYPE, ENTER TO SAVE', PAD, y, 10, C.DIM,
-         W_PANEL - PAD * 2)
-    y = y + 18
-    if PANEL.hint then text(PANEL.hint, PAD, y, 10, C.YELLOW, W_PANEL - PAD * 2) end
+    if PANEL.hint then
+        text(PANEL.hint, IX, y, 12, C.YELLOW, IW)
+    else
+        text('CLICK THE MESSAGE BOX TO TYPE. ENTER SAVES, ESC CANCELS.',
+             IX, y, 11, C.DIM, IW)
+    end
 
     UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
     UX.text, UX.rect = text, rect
