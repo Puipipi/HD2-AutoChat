@@ -500,6 +500,10 @@ M.FONT_RVA = 0x3772268
 M.ATLAS_RVA = 0x3772EE8
 M.MATERIAL_RVA = 0x37C5478
 M.ATLAS_ID = '88bac99b00000000'
+-- Armory's second choice, and it matters: the three ids are runtime-populated, so a
+-- lookup can succeed and still find nothing usable. Armory falls back to this debug
+-- font when the game UI font is not loaded, and the same chain is copied here.
+M.DEBUG_FONT = 'core/performance_hud/debug'
 
 local FONT = {resolved = false, ok = false, why = 'not tried', font = nil,
               material = nil, ink = nil, kind = 'bitmap'}
@@ -537,7 +541,27 @@ local function read_font_ids()
     return {font = font_id, material = material_id, atlas = atlas_id}
 end
 
+-- Armory asks the APPLICATION whether a resource is actually loaded before using it.
+-- The ids coming out of memory only say where the engine keeps them; they do not say
+-- the resource finished loading, and handing an unloaded font to Gui.text is how you
+-- get a silently empty panel.
+local function resource_loaded(kind, name)
+    if not (sr and sr.Application) then return false end
+    local can_get = rawget(sr.Application, 'can_get')
+    if type(can_get) ~= 'function' then return false end
+    local value = name
+    if type(name) == 'string' and #name == 16 and name:match('^%x+$')
+       and sr.IdString64 and type(sr.IdString64.from_hex) == 'function' then
+        local ok, converted = pcall(sr.IdString64.from_hex, name)
+        if ok then value = converted end
+    end
+    local ok, got = pcall(can_get, kind, value)
+    return ok and got == true
+end
+
 -- Resolve once, on the first draw. Returns true when real text can be drawn.
+-- The ORDER is Armory Forge's: read the ids, require all three resources to be loaded,
+-- then fall back to the debug font, then give up and let the bitmap font take over.
 local function font_resolve(gui)
     if FONT.resolved then return FONT.ok end
     FONT.resolved = true
@@ -546,23 +570,47 @@ local function font_resolve(gui)
         FONT.why = 'engine font API not present in this state'
         return false
     end
+
     local ids, why = read_font_ids()
-    if not ids then FONT.why = why return false end
-    local ok, result = pcall(function()
-        local ink = sr.Gui.material(gui, sr.IdString64.from_hex(ids.material))
-        if not ink then return nil, 'material handle refused' end
-        sr.Material.set_texture(ink, sr.IdString64.from_hex(M.ATLAS_ID),
-                                sr.IdString64.from_hex(ids.atlas))
-        return {font = sr.IdString64.from_hex(ids.font),
-                material = sr.IdString64.from_hex(ids.material)}
-    end)
-    if not ok or not result then
-        FONT.why = 'material setup failed: ' .. tostring(ok and result or result)
-        return false
+    if ids then
+        local font_ok = resource_loaded('font', ids.font)
+        local mat_ok = resource_loaded('material', ids.material)
+        local tex_ok = resource_loaded('texture', ids.atlas)
+        if font_ok and mat_ok and tex_ok then
+            local ok, result = pcall(function()
+                local ink = sr.Gui.material(gui, sr.IdString64.from_hex(ids.material))
+                if not ink then return nil, 'no font material instance' end
+                sr.Material.set_texture(ink, sr.IdString64.from_hex(M.ATLAS_ID),
+                                        sr.IdString64.from_hex(ids.atlas))
+                return {font = sr.IdString64.from_hex(ids.font),
+                        material = sr.IdString64.from_hex(ids.material)}
+            end)
+            if ok and result then
+                FONT.font, FONT.material, FONT.ink = result.font, result.material, result
+                FONT.ok, FONT.kind = true, 'engine font ' .. tostring(ids.font)
+                FONT.why = 'resolved'
+                return true
+            end
+            why = 'material setup failed: ' .. tostring(ok and result or result)
+        else
+            why = string.format('game UI font not loaded (font %s material %s texture %s)',
+                                tostring(font_ok), tostring(mat_ok), tostring(tex_ok))
+        end
     end
-    FONT.font, FONT.material, FONT.ink = result.font, result.material, result
-    FONT.ok, FONT.kind = true, 'engine font ' .. tostring(ids.font)
-    return true
+
+    -- Second choice, exactly as Armory does it.
+    if resource_loaded('font', M.DEBUG_FONT) and resource_loaded('material', M.DEBUG_FONT) then
+        local ok, id = pcall(sr.IdString64.from_hex, M.DEBUG_FONT)
+        if ok and id then
+            FONT.font, FONT.material = id, id
+            FONT.ok, FONT.kind = true, 'debug font (' .. tostring(why) .. ')'
+            FONT.why = FONT.kind
+            return true
+        end
+    end
+
+    FONT.why = tostring(why) .. '; debug font not loaded either'
+    return false
 end
 
 -- A text call that cannot take the panel down. Real text when the font resolved,
