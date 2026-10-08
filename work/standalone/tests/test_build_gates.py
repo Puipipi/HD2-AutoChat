@@ -20,6 +20,7 @@ Run:  python -B tests/test_build_gates.py
 """
 import io
 import os
+import re
 import sys
 import unittest
 
@@ -52,6 +53,115 @@ def lupa_runtime():
     """A LuaJIT state, imported lazily so the gate tests stay runnable without it."""
     import lupa.luajit21 as luajit
     return luajit.LuaRuntime(unpack_returned_tuples=True)
+
+
+class ArmoryFrameTest(unittest.TestCase):
+    """The panel frame must be Armory's, and that claim has to be checkable.
+
+    The user asked repeatedly for Armory's look rather than an invented one, and I had
+    already shipped an invented one once. "I copied Armory" is worth nothing as an
+    assertion, so the frame's actual constants are compared against Armory's source
+    where it is available on this machine.
+
+    The reference is NOT redistributed, so this SKIPS with a reason when absent -- a
+    silent pass would be worse than no test here, because it is the only thing standing
+    between "I copied it" and "I think I copied it".
+    """
+
+    REFERENCE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.dirname(HERE))))),
+        "outputs", "validated-2026-10-04", "hud-compatibility", "sources",
+        "installed-Super-Earth-Armory-Forge-v6.2.1-0-0.lua")
+
+    # The frame elements that make Armory's panel recognisable, as Armory writes them.
+    # Each is a literal from its draw(); ours must contain the same numbers.
+    FRAME_ELEMENTS = [
+        ("background fill at z950", "rect(0, 0, W, H, C.BG, 950)"),
+        ("outer border at z955", "border(0, 0, W, H, C.LINE, 955)"),
+        ("yellow strip along the TOP edge", "rect(0, 0, W, 3, C.YELLOW, 952)"),
+        ("tab strip starts at y=108", "border(x, 108, w, 40"),
+        ("tab hit region at y=108, height 40", "region(key, x, 108, w, 40)"),
+        ("tab width capped at 230", "math.min(230"),
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        with io.open(SOURCE, encoding="utf-8") as handle:
+            cls.source = handle.read()
+
+    def test_armory_reference_is_present_or_this_skips_loudly(self):
+        if not os.path.exists(self.REFERENCE):
+            self.skipTest("Armory reference not present (not redistributed): %s"
+                          % self.REFERENCE)
+        with io.open(self.REFERENCE, encoding="utf-8", errors="replace") as handle:
+            self.reference = handle.read()
+
+    def test_the_reference_really_contains_the_frame_we_claim_to_copy(self):
+        """Guards the test itself: if the reference has changed shape, it must not
+        quietly start passing against a frame that is no longer Armory's."""
+        if not os.path.exists(self.REFERENCE):
+            self.skipTest("Armory reference not present")
+        with io.open(self.REFERENCE, encoding="utf-8", errors="replace") as handle:
+            reference = handle.read()
+        for label, literal in [("background fill at z950", "rect(0, 0, W, H, C.BG, 950)"),
+                               ("outer border at z955", "border(0, 0, W, H, C.LINE, 955)"),
+                               ("yellow strip along the TOP edge",
+                                "rect(0, 0, W, 3, C.YELLOW, 952)"),
+                               ("tab strip y=108, height 40", "border(x, 108, w, 40")]:
+            self.assertIn(literal, reference,
+                          "the reference no longer contains %s, so this test can no "
+                          "longer prove the frame was copied" % label)
+
+    def test_the_shipped_frame_carries_armorys_numbers(self):
+        """The frame must use Armory's GEOMETRY, whatever it is spelled as.
+
+        Comparing call sites as raw text failed the first time this ran, and it was the
+        test that was wrong: this file names the strip's position and height as TAB_Y and
+        TAB_H rather than repeating 108 and 40, which is clearer and cannot drift between
+        the border, the fill and the hit region. So the NUMBERS are compared instead --
+        which is the property that actually matters -- and the call sites are checked to
+        use those named values.
+        """
+        if not os.path.exists(self.REFERENCE):
+            self.skipTest("Armory reference not present")
+        source = self.source
+
+        # Armory's top strip sits at y=108 and is 40 tall; ours must say so.
+        for name, expected in (("TAB_Y", 108), ("TAB_H", 40)):
+            match = re.search(r"local\s+%s\s*=\s*(\d+)" % name, source)
+            self.assertIsNotNone(match, "%s must be a literal so it can be checked" % name)
+            self.assertEqual(expected, int(match.group(1)),
+                             "%s must be Armory's value (%d), not an invention"
+                             % (name, expected))
+
+        # And the three things that must agree about that rectangle must all use them.
+        for label, literal in [
+                ("tab fill", "rect(x, TAB_Y, w, TAB_H"),
+                ("tab border", "border(x, TAB_Y, w, TAB_H"),
+                ("tab hit region", "region(key, x, TAB_Y, w, TAB_H)")]:
+            self.assertIn(literal, source,
+                          "the %s must be drawn from the same named rectangle, or the "
+                          "click area can disagree with what is drawn" % label)
+
+        # The recognisable outer elements, which ARE literals in both files.
+        for label, literal in [
+                ("background fill at z950", "rect(0, 0, W, H, C.BG, 950)"),
+                ("outer border at z955", "border(0, 0, W, H, C.LINE, 955)"),
+                ("yellow strip along the TOP edge", "rect(0, 0, W, 3, C.YELLOW, 952)"),
+                ("tab width capped at 230", "math.min(230")]:
+            self.assertIn(literal, source,
+                          "the panel frame is missing Armory's %s; an invented frame is "
+                          "what the user rejected" % label)
+
+    def test_the_frame_has_no_mod_options_menu_dependency(self):
+        """MOM was explicitly rejected. Reconnaissance of it is fine; a dependency is
+        not, and this is the check that keeps one from creeping in."""
+        for forbidden in ("ModOptionsMenu", "register_option", "BingusTranslations",
+                          "MOM."):
+            self.assertNotIn(forbidden, self.source,
+                             "%s is a ModOptionsMenu dependency; the panel must be "
+                             "standalone" % forbidden)
 
 
 class LiveSourceTest(unittest.TestCase):

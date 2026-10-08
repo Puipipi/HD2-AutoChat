@@ -1275,7 +1275,8 @@ local function draw_panel()
     --     game's hatched stripe;
     --   * the body then starts under the strip.
     local PAD = 22
-    local TAB_Y, TAB_H = 108, 40
+    local TAB_Y = 108          -- Armory puts its tab strip here
+    local TAB_H = 40           -- ...and its tabs are this tall
     local HEAD = TAB_Y + TAB_H + 12
     local W, H = W_PANEL, H_PANEL
 
@@ -1324,8 +1325,8 @@ local function draw_panel()
     -- TAB instead of being buried in a shared list.
     -- The tab order, exactly like Armory's ui.tab_order: armory puts its tabs left to
     -- right in one strip and switches the whole body on the selected key. Tab 1 is
-    -- always the default settings; every registered mod appends one after it.
-    local tabs = {{key = 'tab:default', title = 'DEFAULT', id = nil}}
+    -- always the SETTINGS tab; every registered mod appends one after it.
+    local tabs = {{key = 'tab:default', title = 'SETTINGS', id = nil}}
     for i = 1, #M.PLUGINS do
         tabs[#tabs + 1] = {key = 'tab:' .. M.PLUGINS[i].id,
                            title = M.PLUGINS[i].title, id = M.PLUGINS[i].id}
