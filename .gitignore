@@ -1,8 +1,13 @@
-﻿# 鏋勫缓浜х墿 鈥斺€?涓嶅叆搴撱€俍IP 鐢?`work/standalone/build_mod.py` 鐢熸垚銆?dist/
+# Build output: not source. The ZIP is produced by work/standalone/build_mod.py
+# and published as a release asset instead of being committed.
+dist/
 
-# Bingus 鍔犺浇鍣ㄧ殑淇″皝鍖呭伐鍏锋槸鏋勫缓渚濊禆锛屼笉闅忔湰浠撳簱鍒嗗彂锛堣 THIRD_PARTY_NOTICES.md锛夈€?work/standalone/vendor/
+# The Bingus loader's envelope-packaging tool is a BUILD DEPENDENCY, not ours to
+# redistribute (see THIRD_PARTY_NOTICES.md). Keeping it out of the index is the
+# whole point of that notice.
+work/standalone/vendor/
 
-# 杩愯鏈熸枃浠朵笌涓存椂浜х墿
+# Runtime and temporary files
 *.log
 *.tmp
 __pycache__/
@@ -11,16 +16,15 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# 鏈満鐨勬父鎴忕洰褰曟帰娴嬬粨鏋滅瓑涓€娆℃€т骇鐗?work/scratch/
+# One-shot local scratch
+work/scratch/
 *.bak
 *.bak-*
 
-# 閮ㄧ讲璁板綍鏄湰鏈虹姸鎬侊紝涓嶆槸婧愮爜锛涗絾瀹夎鍓嶅熀绾挎槸璇佹嵁锛岃鐣欍€?work/deploy/deployed.json
+# Machine-specific deployment state. The pre-install BASELINE files beside it are
+# evidence and stay tracked.
+work/deploy/deployed.json
 
-# 一次性提交信息草稿
-work/deploy/cmsg.txt
+# One-off commit-message drafts
+work/deploy/cmsg*.txt
 work/deploy/_m.txt
-work/deploy/cmsg2.txt
-work/deploy/cmsg3.txt
-work/deploy/cmsg4.txt
-work/deploy/cmsg6.txt

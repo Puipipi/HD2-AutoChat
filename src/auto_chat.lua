@@ -24,7 +24,7 @@
 --    * 结算数（frame 数、读次数、字节数）写进日志，绝不每帧刷屏；
 --    * update/shutdown 一定调回上一个，绝不断链。
 -- ===========================================================================
-local M = {version = '0.2.7', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.2.8', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false}
 
@@ -132,7 +132,13 @@ M.HISTORY_COUNT = 0x9594      -- chat + this -> uint32 lines currently held (max
 -- there are 64 slots of 552 bytes each.
 M.HISTORY_SLOTS = 64
 M.HISTORY_STRIDE = 0x228
-M.HISTORY_BASE = 0x9598        -- chat + this -> first ring slot
+-- chat + this -> the first ring slot. DERIVED, not guessed: four messages sent
+-- back to back were located by exact byte match at chat+0xBA0, +0xDC8, +0xFF0,
+-- +0x1218 -- 0x228 apart, matching the stride -- and the text sits at entry+0x208,
+-- so slot 0's entry base is 0xBA0-0x208 = 0x998. An earlier revision used 0x9598
+-- (a slipped digit) which read pointer bytes and reported noise like "p_".
+M.HISTORY_BASE = 0x998
+M.HISTORY_TEXT_AT = 0x208      -- entry + this -> the message text
 M.HISTORY_TEXT_SCAN = 0x140   -- how far into a slot to look for the text
 
 -- The send entry point and its call shape. This is the one offset the whole mod
@@ -553,26 +559,28 @@ function M.dump_ring()
         local base = chat + M.HISTORY_BASE + slot * M.HISTORY_STRIDE
         local blob = read_at(base, M.HISTORY_STRIDE)
         if blob then
-            -- Report the LONGEST printable run, not the first. An entry starts with
-            -- pointers and bookkeeping bytes, some of which are printable, so "first
-            -- run" reported noise like "p_" instead of the message. Measured layout:
-            -- entries sit 0x228 apart and the text lands at entry+0x208
-            -- (0xDC8 - 0xBA0 = 0x228), so the message is the long run.
-            local best, best_at = '', nil
-            local run, start = {}, nil
-            for b = 1, #blob + 1 do
-                local byte = b <= #blob and blob:byte(b) or 0
-                if (byte >= 0x20 and byte < 0x7f) or byte >= 0x80 then
-                    if not start then start = b - 1 end
-                    run[#run + 1] = string.char(byte)
-                else
-                    if start and #run > #best then
-                        best, best_at = table.concat(run), start
+            -- Read the text WHERE IT ACTUALLY IS. The entry is a 0x228-byte record
+            -- with the message at +0x208; reading from the record start and taking
+            -- the longest printable run picked up pointer bytes instead and printed
+            -- noise like "p_". The offset is now a named constant, so if the layout
+            -- moves it is one number to change rather than a silent scan.
+            local text = nil
+            if M.HISTORY_TEXT_AT + 2 <= #blob then
+                local at = M.HISTORY_TEXT_AT + 1
+                local run = {}
+                for b = at, #blob do
+                    local byte = blob:byte(b)
+                    if byte == 0 then break end
+                    if byte >= 0x20 and byte < 0x7f or byte >= 0x80 then
+                        run[#run + 1] = string.char(byte)
+                    else
+                        break
                     end
-                    start, run = nil, {}
                 end
+                if #run >= 2 then text = table.concat(run) end
             end
-            lines[#lines + 1] = {slot = slot, offset = best_at, text = best}
+            lines[#lines + 1] = {slot = slot, offset = M.HISTORY_TEXT_AT,
+                                 text = text or ''}
         end
     end
     return lines, count
@@ -983,7 +991,7 @@ note('probe installed: ' .. tostring(M.status))
 -- otherwise be a syntax error. The build extracts that block into README.txt.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.2.7  —— SEND CAPABLE
+--[===[AutoChat / 自动聊天  v0.2.8  —— SEND CAPABLE
 
 English
 -------
