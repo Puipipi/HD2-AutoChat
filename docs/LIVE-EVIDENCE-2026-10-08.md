@@ -1,112 +1,181 @@
 # 实机取证 2026-10-08
 
-机位：build 25480438 / EXE 1.8.46015.0，`game.dll` SHA-256
+机位：Steam build 25480438 / EXE 1.8.46015.0，`game.dll` SHA-256
 `2E2C3B7C2500646DADD5F2B4C6E0504DBB7E7896139F64CDDC0D1813C718F51E`。
 
-时间戳全部是 UTC，本地时间 = UTC+8。
+时间戳全部是 UTC，本地时间 = UTC+8。日志里的 `12:xx:xxZ` = 本地 20:xx。
+
+> **一句话结论：发送通路已在实机跑通并由游戏自身证据确认；"别的玩家是否收到"没有验证，
+> 因为整场会话里本机始终只有一名玩家。**
 
 ---
 
-## 1. 部署方式
+## 1. 部署方式与回退
 
-槽位 336（`data\9ba626afa44a3aa3.patch_336`）。装之前游戏目录里
-`9ba626afa44a3aa3.patch_*` 是 0..335 共 336 个，**没有空位**，所以新层就是 336。
-装之前记录的基线在 `work/deploy/before-layers.json`（707 个层文件）与
-`before-gamedll.sha256`。
+槽位 336（`data\9ba626afa44a3aa3.patch_336`）。装之前 `9ba626afa44a3aa3.patch_*`
+是 0..335，**没有空位**。
 
-回退方式：`python work/standalone/deploy.py --rollback --slot 336`
-（脚本会先核对哈希，确认这个槽位确实是本模组写的才动）。
+回退：
+
+```powershell
+python -B work/standalone/deploy.py --rollback --slot 336
+```
+
+脚本先核对哈希，确认该槽位确实是本模组写的才动手。**实测回退后层文件数 = 707，
+与安装前记录的 707 完全一致**，`game.dll` 哈希不变。
 
 ---
 
-## 2. 0.1.0（只读探针）实机结果
-
-加载器：
+## 2. 加载器与稳定性
 
 ```text
 mods/codex/auto_chat: loaded
-  changes: heap +52 KB, 3 ms; added HD2AutoChat; replaced shutdown, update
-Startup finished: 62 loaded, 0 failed      <- 装之前是 61 loaded, 0 failed
+Startup finished: 62 loaded, 0 failed        <- 装之前是 61 loaded, 0 failed
 ```
 
-探针首轮观测（`Logs\AutoChat.log`）：
+多次会话累计约 40 万帧、230 万次读取，**errors = 0**，**没有产生任何新的崩溃转储**，
+游戏均以 `CloseMainWindow` 正常退出（3–6 秒）。
+
+实机验证到的签名状态：
 
 ```text
-signature check: PASS
-  all 5 code signatures match
-observation [observed]
-  network context: 0x26387415F70
-  peer count: 0 (max observed layout 4)
-  chat flag byte: 0 -> 1
-  chat history: first=0 count=0 (plausible 64-line ring: true)
+signature : match
+send ready: true
 ```
 
-会话结束时的结算行：
-
-```text
-shutdown: frames=29598 reads=177593 bytes=621667 errors=0 last verdict: observed
-```
-
-**结论：** 5 段机器码签名在本 build 上**全部匹配**——参考模组记录的这些偏移，
-到这版二进制为止仍然有效。聊天开关字节是一次真实的状态跃迁（`0` → `1`，
-网络会话建立后文字聊天转为可用），不是常量。整个会话零错误。
-
-`peer count` 全程 0：单人，机器上只有一个玩家。所以"和别的玩家同队"这件事
-**本机没有验证过**。
+`send ready: true` 的含义要说清楚：它证明把一个**已通过签名校验**的绝对地址成功
+转成了可调用的函数指针。它不证明调用就一定能发出去——那要另外的证据，见 §3。
 
 ---
 
-## 3. 0.2.0（可发送）实机结果
+## 3. 发送通路：游戏自己确认接受了消息
+
+强制发送一条（绕过"房间里要有别人"的守卫，纯粹做通路验证），游戏自身的聊天计数：
 
 ```text
-Startup finished: 62 loaded, 0 failed
-status      : observing (read-only)      <- 这一行是 0.1.0 遗留的字符串，0.2.1 已修
-signature   : match
-send ready  : true                       <- 发送函数在真实进程里解析成功
-messages sent: 0
-frames      : 16200
-reads       : 54005
-errors      : 0
+trigger: sending 10 bytes: AUTOTEST-2   [FORCED ...]
+sent 10 bytes to 0 other player(s); history 0/0 -> 0/1
+ring: 1 lines held
 ```
 
-**`send ready : true` 的含义要说清楚：** 它证明 `ffi.cast` 把一个**已验证**的
-绝对地址成功地变成了可调用的函数指针——也就是"这个地址在这版二进制上确实可以
-当函数调"。它**不**证明调用它就一定能成功发出消息，因为那需要在有第二名玩家的
-会话里真的调一次。
-
-`inspect` 通道实机验证：
+随后连发三条，计数稳定递增：
 
 ```text
-inspect: scanned 4096 bytes of the chat object, 0 readable run(s)
+sent 8 bytes  to 0 other player(s); history 0/1 -> 0/2
+sent 8 bytes  to 0 other player(s); history 0/2 -> 0/3
+sent 10 bytes to 0 other player(s); history 0/3 -> 0/4
 ```
 
-聊天对象可读，扫了 4096 字节；0 段可读文本与"单人、聊天历史为空"一致。
+**`history` 是游戏自己维护的字段。** 它从 `0/0` 变到 `0/4`，是游戏在说"这条我收下了"，
+不是模组自称成功。如果那次调用打偏了，这个计数不会动。
 
-**没有验证：发送本身。** 从头到尾 `peer count = 0`，没有第二名玩家，`send_text`
-因此在 `nobody else in the session` 这一条上被拒绝——这是设计内的行为，不是
-故障，但它意味着**发送路径的最后一跳从未执行过**。
+发送文本在聊天对象里的落点（`find` 命令，逐字节精确匹配）：
+
+| 消息 | 命中位置 |
+| --- | --- |
+| `HELLO-FROM-AUTOCHAT` | `chat+0xBA0` |
+| `LINE-ONE` | `chat+0xDC8` |
+| `LINE-TWO` | `chat+0xFF0` |
+| `LINE-THREE` | `chat+0x1218` |
+
+相邻间隔全部是 **0x228**，与从游戏自身历史访问器读出的环形槽步长一致
+（该访问器用 `and edx, 0x3f` 掩码索引、`imul rbp, rax, 0x228` 定位槽，
+所以是 64 槽 × 552 字节）。**文本落在 entry+0x208**（0xDC8 − 0xBA0 = 0x228）。
+
+调用目标经核对是 `game.dll+0x1097560`——就是 32 字节签名校验通过的那一个。
+
+**用户视觉确认：** 用户主动报告"我看到你发了 autotest 啥的的信息"，即这条消息
+出现在他自己的聊天栏里。
 
 ---
 
-## 4. 游戏健康
+## 4. 测试路径上修掉的两个真实缺陷
 
-- 两次启动都正常进到游戏（主菜单渲染正常，128 FPS / 5.3 GB / 8.0 GB）。
-- 两次会话合计约 45,000 帧、23 万次读取，**errors = 0**。
-- 没有产生任何新的崩溃转储（`%LOCALAPPDATA%\CrashDumps` 里最新的仍是
-  2026-10-07 21:41，属于本模组安装之前）。
-- 游戏以正常方式关闭（`CloseMainWindow`，4 秒退出），没有强杀。
+都是**只有实机才会暴露**的，离线测试抓不到：
+
+| 缺陷 | 现象 | 修法 |
+| --- | --- | --- |
+| `ffi.cast` 类型写成 `void *` | `cannot convert 'number' to 'void *'`：LuaJIT 不允许把 Lua 数字传给 `void *` 形参。这是 **Lua 级错误**，被 `pcall` 兜住，所以表现为干净的拒绝而不是崩溃 | functype 形参改 `uint64_t` |
+| 环形读取取"第一段可打印字节" | entry 开头是指针和记账字节，其中一些恰好可打印，于是打印出 `p_` 这种噪音而不是消息 | 改为取**最长**可打印段 |
+
+第一条尤其值得记：**`pcall` 把原生调用错误变成了干净拒绝，代价是这个缺陷对任何离线
+测试都不可见**。
 
 ---
 
-## 5. 下一步要什么才能把"能发"变成已验证
+## 5. 与"进不去游戏"的关系（负向证据）
 
-1. **至少两名玩家在同一小队**（`peer count >= 1`）。
-2. 把一行文字写进
-   `%LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\trigger.txt`。
-3. 日志应出现 `trigger: sending N bytes: ...`，随后
-   `sent N bytes; history A/B -> C/D`。**`history` 前后不同**才是游戏自己承认
-   这条消息进了聊天——那才算证据。
-4. 同时确认：发送瞬间键鼠没有被夺走、聊天栏没有出现。
+用户报告"无法和服务器连接"。为排除本模组，**把模组整个回退后再启动**：
 
-如果日志写的是 `nobody else in the session`，那就是当时确实只有你一个人，
-不是模组坏了。
+```text
+Startup finished: 61 loaded, 0 failed       <- 本模组不在其中
+auto_chat present in this boot: False
+```
+
+模组缺席时该现象依然存在。同时：
+
+- 游戏目录层文件数 **707 = 安装前的 707**
+- `game.dll` 哈希与安装前逐字节一致
+- 最近一小时**无新增崩溃转储**
+
+此外机器上同时运行着**三套会抢游戏流量的工具**：`clash-verge`
+（系统代理）、`uu` 系列（UU 加速器）、`RvRvpnGui`（Radmin VPN）。
+这是"无法连接服务器"更合理的解释，且与模组无关——本模组只读写游戏内存，
+不发起也不拦截任何网络请求。已建议用户只保留其中一套。
+
+---
+
+## 6. 没有验证的部分（不要当成已完成）
+
+### 6.1 网络投递：别人是否收到
+
+**未验证。** 整场会话 `peer count` 读到的**始终是 0**，本机只有一个玩家。向只列出
+自己的会话发送，按构造就到达不了任何人。因此上面的成功只覆盖到"游戏接受了这条消息"，
+**不覆盖"别的客户端收到了它"**。
+
+要验证它，需要小队里真的还有一个人：
+
+```powershell
+python -B tools/watch_for_squad.py
+```
+
+这个脚本会等到 `peer count >= 1`，然后走**正常路径**（不绕过守卫）发一条，并把游戏
+自身的 before/after 打出来。成功的标志是 `history` 前后不同，**再加上那名玩家口述
+他看得见**——最后这一条是人的观察，脚本产生不了。
+
+### 6.2 其他未验证项
+
+- 没有实机进过任务（只在舰船/菜单层）。
+- 发送瞬间键鼠是否真的不受影响——**没有在发送成功的同一时刻实测过**；
+  模组本身不碰输入，但这是推理，不是观测。
+- 聊天开关语义（`(raw % 256) == 0` 是否真等于"聊天关闭"）是参考模组的说法，
+  本仓库没有独立验证。
+- `send` 第二个参数传 `0`，照抄参考调用点，**含义未查证**。
+- 环形 entry 里 `entry+0x208` 之外的结构（发送者名字、时间戳等）没有解析。
+- `inspect` 命令读聊天对象窗口时返回 0 段可读文本，原因未查明。
+
+---
+
+## 7. 复现命令
+
+```powershell
+# 门禁 + 40 项离线测试
+python -B work/standalone/build_mod.py --validate-only
+python -B -m unittest discover -s work/standalone/tests -p "test_*.py"
+
+# 打包
+python -B work/standalone/build_mod.py
+
+# 部署 / 查看 / 回退
+python -B work/standalone/deploy.py --deploy   --slot 336
+python -B work/standalone/deploy.py --status   --slot 336
+python -B work/standalone/deploy.py --rollback --slot 336
+
+# 实机诊断（游戏运行时）
+python -B tools/send.py ring            # 环形历史与每行内容
+python -B tools/send.py "find <文本>"    # 在聊天对象里逐字节搜索
+python -B tools/send.py --status        # 只看 STATUS 与最近日志
+
+# 多人验证（需要第二名玩家）
+python -B tools/watch_for_squad.py
+```
