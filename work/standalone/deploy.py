@@ -24,6 +24,7 @@ import io
 import json
 import os
 import subprocess
+import tempfile
 import sys
 import zipfile
 
@@ -120,9 +121,47 @@ def cmd_status(data_dir, slot):
         print("recorded  : (this mod has no record for this slot)")
 
 
-def cmd_deploy(data_dir, slot):
-    if game_running():
-        raise SystemExit("REFUSING: helldivers2.exe is running; the archive may be mapped")
+def write_layer(path, blob, hot):
+    """Write one layer file, atomically when hot-swapping.
+
+    The normal path writes in place and refuses to run while the game is up, because an
+    in-place write to a file the engine has mapped can change what the engine reads.
+
+    An ATOMIC REPLACE does not have that problem, and this was measured rather than
+    assumed: the layer files are not held with a deny-write lock (`open(path, 'r+b')`
+    succeeds while the game runs) and a same-directory rename works. Writing to a
+    temporary file and renaming it over the target changes the DIRECTORY ENTRY; the old
+    file object -- including any mapping the running game holds -- stays intact and keeps
+    serving the old bytes. So a running game cannot be corrupted by this, and the new
+    bytes are simply there for the next launch.
+
+    It is still opt-in. Modifying the game directory underneath a running game is exactly
+    the kind of thing that has broken things before, so it is a flag the operator chooses,
+    not a default.
+    """
+    if hot:
+        directory = os.path.dirname(path)
+        handle, temp = tempfile.mkstemp(dir=directory, prefix=".dsh-swap-")
+        try:
+            with os.fdopen(handle, "wb") as out:
+                out.write(blob)
+            os.replace(temp, path)          # atomic within one volume
+        except BaseException:
+            if os.path.exists(temp):
+                os.remove(temp)
+            raise
+    else:
+        with open(path, "wb") as out:
+            out.write(blob)
+
+
+def cmd_deploy(data_dir, slot, hot=False):
+    if game_running() and not hot:
+        raise SystemExit(
+            "REFUSING: helldivers2.exe is running; the archive may be mapped.\n"
+            "  Re-run with --hot-swap to replace the layer ATOMICALLY instead, which is "
+            "safe while the game runs: the new bytes are seen by the NEXT launch, and the "
+            "running game keeps the file it already opened.")
     zip_path = newest_zip()
     version = os.path.basename(zip_path).replace("AutoChat-", "").replace(".zip", "")
     payload = payload_from(zip_path)
@@ -147,9 +186,9 @@ def cmd_deploy(data_dir, slot):
                 % (os.path.basename(target), previous.get("sha256", "")[:16], existing[:16]))
 
     for path, blob in zip(slot_paths(data_dir, slot), [payload, b"", b""]):
-        with open(path, "wb") as handle:
-            handle.write(blob)
-        print("wrote %-46s %7d bytes" % (os.path.basename(path), len(blob)))
+        write_layer(path, blob, hot)
+        print("wrote %-46s %7d bytes%s"
+              % (os.path.basename(path), len(blob), " (atomic)" if hot else ""))
 
     record[key] = {"version": version, "sha256": digest, "zip":
                    os.path.basename(zip_path)}
@@ -185,6 +224,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--deploy", action="store_true")
+    parser.add_argument("--hot-swap", dest="hot_swap", action="store_true",
+                        help="replace the layer atomically even while the game runs; "
+                             "the new bytes take effect on the NEXT launch")
     group.add_argument("--rollback", action="store_true")
     group.add_argument("--status", action="store_true")
     parser.add_argument("--slot", type=int, default=336)
@@ -196,7 +238,7 @@ def main():
     if args.status:
         cmd_status(data_dir, args.slot)
     elif args.deploy:
-        cmd_deploy(data_dir, args.slot)
+        cmd_deploy(data_dir, args.slot, hot=args.hot_swap)
     else:
         cmd_rollback(data_dir, args.slot)
 
