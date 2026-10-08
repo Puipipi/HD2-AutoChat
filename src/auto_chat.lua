@@ -548,7 +548,11 @@ local function take_cursor()
     cursor.shows = cursor.shows + 1
     local clip = ffi.new('int32_t[4]')
     if user.GetClipCursor(ffi.cast('void *', clip)) ~= 0 then
-        cursor.clip = {clip[0], clip[1], clip[2], clip[3]}
+        -- Stored with EXPLICIT named fields rather than a positional table. A Lua
+        -- table built as {clip[0], clip[1], ...} is 1-based while the C array it
+        -- came from is 0-based, and mixing the two on the way back silently put nil
+        -- into rect[3]. Named fields remove the convention from the picture.
+        cursor.clip = {left = clip[0], top = clip[1], right = clip[2], bottom = clip[3]}
     else
         cursor.clip = nil
     end
@@ -566,7 +570,8 @@ local function release_cursor()
         for _ = 1, cursor.shows or 0 do user.ShowCursor(false) end
         if cursor.clip then
             local rect = ffi.new('int32_t[4]')
-            for i = 0, 3 do rect[i] = cursor.clip[i + 1] end
+            rect[0], rect[1] = cursor.clip.left, cursor.clip.top
+            rect[2], rect[3] = cursor.clip.right, cursor.clip.bottom
             user.ClipCursor(ffi.cast('void *', rect))
         else
             user.ClipCursor(nil)
@@ -953,6 +958,21 @@ local function timed_send(dt)
     local ok, why = M.send_text(cfg.message, true)
     if not ok then note('timed send refused - ' .. tostring(why)) end
 end
+
+-- Exposed for the offline tests. The cursor handover is the part of the panel most
+-- likely to leave the player stuck with a visible cursor and a dead aim, and it is
+-- pure bookkeeping around counters, so it can be checked without the engine.
+function M.debug_take_cursor() take_cursor() end
+function M.debug_release_cursor() release_cursor() end
+function M.debug_cursor_state()
+    return {taken = cursor.taken, shows = cursor.shows,
+            clip = cursor.clip, engine = cursor.engine,
+            was_shown = cursor.was_shown}
+end
+function M.debug_panel() return PANEL end
+function M.debug_cfg() return cfg end
+function M.debug_timed_send(dt) timed_send(dt) end
+function M.send_text_public(text, verbose, force) return M.send_text(text, verbose, force) end
 
 local function tick()
     M.frames = M.frames + 1

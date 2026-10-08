@@ -125,6 +125,19 @@ local function new_buffer(ctype, arg)
     if ctype == 'size_t[1]' then
         return setmetatable({0, n = 1}, {__index = function() return 0 end})
     end
+    -- Small integer arrays the input path needs: GetClipCursor writes 4 ints into
+    -- one and ClipCursor reads 4 back. A PLAIN table, on purpose: real cdata stores
+    -- writes where a later read finds them, and a metatable-backed buffer does not
+    -- (the metatable intercepts __newindex), which would make every external
+    -- inspection of the buffer report zeros and send the investigation chasing a
+    -- bug in the mod instead of in the mock.
+    local count = ctype:match('^int32_t%[(%d+)%]$')
+    if count then
+        count = tonumber(count)
+        local buf = {n = count}
+        for i = 0, count - 1 do buf[i] = 0 end
+        return buf
+    end
     error('unexpected alloc: ' .. tostring(ctype))
 end
 
@@ -312,9 +325,137 @@ function harness.install()
     end
     function kernel.CreateDirectoryA() return 1 end
     function kernel.QueryPerformanceCounter() return 1 end
+    -- The mod requires this at boot (it compares the foreground window's pid to its
+    -- own before honouring the hotkey), so the mock must provide it or the mod
+    -- stops at "missing kernel32 symbol".
+    harness.own_pid = harness.own_pid or 4242
+    function kernel.GetCurrentProcessId() return harness.own_pid end
+
+    -- ---- fake user32 ---------------------------------------------------------
+    -- Without this the mock's ffi.load ERRORS on user32, `user` ends up nil, and
+    -- every panel input path silently no-ops. The tests still passed, which is
+    -- exactly the danger: the riskiest new code had zero coverage while the suite
+    -- reported green. This mock makes the input path reachable and observable.
+    --
+    -- ShowCursor is a per-thread COUNTER, so the fake must model that: it returns
+    -- the counter value, and the test asserts the take/release calls cancel out.
+    user32_calls = {show = 0, clip = 0, key = {}}
+    harness.user32_calls = user32_calls
+    local cursor_visible = false
+    local cursor_show_count = 0
+    local clip_rect = nil
+    local held_keys = {}
+    harness.user32 = {
+        set_key = function(vk, down) held_keys[vk] = down and true or false end,
+        cursor_visible = function() return cursor_visible end,
+        show_count = function() return cursor_show_count end,
+        clip = function() return clip_rect end,
+        calls = user32_calls,
+    }
+    -- Set the clip rectangle the game would already have in place, so the save and
+    -- restore can be tested as a round trip rather than a one-way clear.
+    --
+    -- The indices must be written EXPLICITLY. `clip_rect = {a, b, c, d}` from a
+    -- Python tuple lands at Lua's 1-based slots, so the C-style 0..3 reads below
+    -- would see nil/0 -- the same class of mistake that made the first version of
+    -- this mock disagree with the real API.
+    harness.user32_set_clip = function(a, b, c, d)
+        if a == nil then clip_rect = nil return end
+        clip_rect = {[0] = a, [1] = b, [2] = c, [3] = d, n = 4}
+    end
+    -- Returned as a STRING on purpose. A Lua table read from Python must be indexed
+    -- 1..n, and getting that wrong is precisely what made the first version of this
+    -- mock silently read zeros -- so the value is flattened to text and compared as
+    -- text, where there is no indexing convention left to get wrong.
+    harness.user32_clip_text = function()
+        if not clip_rect then return 'none' end
+        return string.format('%d,%d,%d,%d',
+            clip_rect[0], clip_rect[1], clip_rect[2], clip_rect[3])
+    end
+    -- Cached, deliberately. Each pcall(ffi.load, 'user32') in this family produces
+    -- ONE library handle whose state persists for the process; building a fresh
+    -- instance per call gives every caller its own clip_rect/held_keys closure, so a
+    -- test that sets state through one handle and reads it through another sees a
+    -- different library. That mismatch is what made the first version of this mock
+    -- report zeros while the state was set correctly.
+    local user32_lib = nil
+    local function new_user32()
+        local lib = {}
+        -- Returns the NEW display counter: negative means hidden. The mod loops
+        -- until this stops being negative, then gives back exactly that many.
+        --
+        -- The argument arrives as a Lua boolean (the mod writes ShowCursor(true) /
+        -- ShowCursor(false)), but the C prototype takes an int. Normalising has to
+        -- handle BOTH: `tonumber(true)` is nil in Lua, and `false ~= 0` is true
+        -- because only nil/false are falsy. Getting either wrong makes the mock
+        -- model the opposite of the real API and the mod looks broken.
+        local function to_int(flag)
+            if flag == true then return 1 end
+            if flag == false or flag == nil then return 0 end
+            return tonumber(flag) or 0
+        end
+        function lib.ShowCursor(show)
+            local n = to_int(show)
+            user32_calls.show = user32_calls.show + 1
+            cursor_show_count = cursor_show_count + (n ~= 0 and 1 or -1)
+            cursor_visible = cursor_show_count >= 0
+            return cursor_show_count
+        end
+        function lib.GetAsyncKeyState(vk)
+            user32_calls.key[vk] = (user32_calls.key[vk] or 0) + 1
+            -- High bit set == down, matching the real API's contract.
+            return held_keys[vk] and -32768 or 0
+        end
+        -- Every pointer argument must go through unwrap(): the harness hands C
+        -- pointers to mocks as wrapped objects, so writing to the wrapper instead of
+        -- the buffer it points at silently loses the write and makes a later read
+        -- report zeros.
+        function lib.GetClipCursor(rect)
+            user32_calls.clip = user32_calls.clip + 1
+            if not clip_rect then return 0 end
+            local buf = unwrap(rect)
+            for i = 0, 3 do buf[i] = clip_rect[i] end
+            return 1
+        end
+        function lib.ClipCursor(rect)
+            user32_calls.clip = user32_calls.clip + 1
+            if rect == nil then
+                clip_rect = nil
+            else
+                local buf = unwrap(rect)
+                clip_rect = {[0] = buf[0], [1] = buf[1], [2] = buf[2], [3] = buf[3]}
+            end
+            return 1
+        end
+        function lib.GetForegroundWindow() return 'WINDOW' end
+        function lib.GetWindowThreadProcessId(win, out)
+            -- Focused by default, so the hotkey is live unless a test says otherwise.
+            unwrap(out)[0] = harness.own_pid or 4242
+            return 1
+        end
+        function lib.GetCursorPos(point)
+            local buf = unwrap(point)
+            buf[0], buf[1] = harness.mouse_x or 0, harness.mouse_y or 0
+            return 1
+        end
+        function lib.ScreenToClient(win, point) return 1 end
+        function lib.GetClientRect(win, rect)
+            local buf = unwrap(rect)
+            buf[0], buf[1] = 0, 0
+            buf[2], buf[3] = harness.client_w or 1920, harness.client_h or 1080
+            return 1
+        end
+        return lib
+    end
+    -- One handle for the whole Lua state, like the real loader.
+    local function user32_handle()
+        if not user32_lib then user32_lib = new_user32() end
+        return user32_lib
+    end
 
     ffi.load = function(name)
         if name == 'kernel32' then return kernel end
+        if name == 'user32' then return user32_handle() end
         error('unexpected load: ' .. name)
     end
 
@@ -961,6 +1102,150 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertEqual(loads - {'kernel32', 'user32', 'game'},
                          set(),
                          'unexpected ffi.load targets: %s' % loads)
+
+    # ------------------------------------------------------- panel cursor handover
+    def test_show_cursor_calls_balance_exactly_on_release(self):
+        """ShowCursor is a per-thread COUNTER. Give back exactly what was taken.
+
+        This is the defect that would leave a player stuck: the panel shows the
+        cursor, and on close hands back the wrong number of calls, so the cursor
+        stays visible and the aim is dead. The mod loops until ShowCursor reports
+        visible, counts the calls used, and returns that many.
+
+        The assertion is COUNTER EQUIVALENCE, not "the cursor is hidden". On the
+        real API the display counter starts at 0 and 0 already means visible, so a
+        correct panel leaves the cursor exactly as it found it -- which for a hidden
+        initial state is the visible-adjacent counter, not a negative one. Asserting
+        "hidden" would encode a wrong model of the API.
+        """
+        lua, h, mod = self.fresh()
+        start_counter = h.user32.show_count()
+        mod.debug_take_cursor()
+        after_take = h.user32.show_count()
+        self.assertGreater(after_take, start_counter,
+                           "taking the cursor must have shown it")
+        state = mod.debug_cursor_state()
+        self.assertTrue(state["taken"], "the cursor must be marked as taken")
+        self.assertEqual(after_take - start_counter, state["shows"],
+                         "the recorded call count must equal the calls actually made")
+
+        mod.debug_release_cursor()
+        self.assertEqual(start_counter, h.user32.show_count(),
+                         "the display counter must return to its starting value, or "
+                         "the cursor leaks one step more visible per panel open")
+
+    def test_take_and_release_cycles_do_not_drift(self):
+        """Ten open/close cycles must leave the counter exactly where it started."""
+        lua, h, mod = self.fresh()
+        start = h.user32.show_count()
+        for cycle in range(10):
+            mod.debug_take_cursor()
+            mod.debug_release_cursor()
+            self.assertEqual(start, h.user32.show_count(),
+                             "cycle %d left the cursor counter at %d, expected %d"
+                             % (cycle, h.user32.show_count(), start))
+
+    def test_take_is_idempotent_and_release_is_safe(self):
+        """A double take must not double-count; a stray release must do nothing."""
+        lua, h, mod = self.fresh()
+        mod.debug_release_cursor()          # release with nothing taken
+        start = h.user32.show_count()
+        mod.debug_take_cursor()
+        mid = h.user32.show_count()
+        mod.debug_take_cursor()             # second take must be a no-op
+        self.assertEqual(mid, h.user32.show_count(),
+                         "a second take must not call ShowCursor again")
+        mod.debug_release_cursor()
+        self.assertEqual(start, h.user32.show_count(),
+                         "release after a redundant take must still balance")
+
+    def test_clip_rectangle_is_restored_not_merely_cleared(self):
+        """The saved clip rect must come back, not just be unset."""
+        lua, h, mod = self.fresh()
+        h.user32_set_clip(10, 20, 300, 400)
+        mod.debug_take_cursor()
+        self.assertIsNone(h.user32.clip(),
+                          "while the panel is open the pointer must not be clipped")
+        state = mod.debug_cursor_state()
+        self.assertIsNotNone(state["clip"],
+                             "the previous clip rectangle must be saved when taken")
+        mod.debug_release_cursor()
+        self.assertEqual("10,20,300,400", h.user32_clip_text(),
+                         "the restored rectangle must be the one that was saved; "
+                         "leaving it unset would free the pointer in game")
+
+    def test_no_user32_means_panel_input_is_inert_not_fatal(self):
+        """With user32 unavailable the panel must no-op, never raise."""
+        lua, h, mod = self.fresh()
+        lua.execute("_G.__saved = nil")
+        # Directly exercise the entry points; a raise here would mean the mod can
+        # take the frame callback down on a machine where user32 will not load.
+        mod.debug_take_cursor()
+        mod.debug_release_cursor()
+        state = mod.debug_cursor_state()
+        self.assertIn("taken", state)
+
+    # ------------------------------------------------------------ timed send
+    def test_timed_send_does_nothing_until_the_interval_elapses(self):
+        lua, h = fresh_image(others=1)
+        mod = h.load(SOURCE)
+        cfg = mod.debug_cfg()
+        cfg["timer_on"] = False
+        before = h.call_count()
+        mod.debug_timed_send(1000)
+        self.assertEqual(before, h.call_count(),
+                         "with the timer off nothing may be sent even with peers present")
+
+    def test_timed_send_respects_the_peer_guard(self):
+        """The timer must NOT bypass the guard: solo means refused, with a reason.
+
+        The whole point of the peer guard is that broadcasting into a session with
+        nobody in it reaches nobody. A timed send that skipped it would fire on a
+        loop forever with no recipient, which is the failure this pins.
+        """
+        lua, h = fresh_image(others=0)
+        mod = h.load(SOURCE)
+        cfg = mod.debug_cfg()
+        cfg["timer_on"] = True
+        cfg["interval"] = 10
+        cfg["elapsed"] = 0
+        before = h.call_count()
+        mod.debug_timed_send(11)            # past the interval
+        self.assertEqual(before, h.call_count(),
+                         "a timed send into a session with nobody else in it must be "
+                         "refused; the timer is not a way around the peer guard")
+
+    def test_timed_send_uses_the_normal_path_when_peers_exist(self):
+        """With another player present the timer sends for real, through the same
+        verified call the manual trigger uses."""
+        lua, h = fresh_image(others=1)
+        mod = h.load(SOURCE)
+        cfg = mod.debug_cfg()
+        cfg["timer_on"] = True
+        cfg["interval"] = 10
+        cfg["elapsed"] = 0
+        before = h.call_count()
+        mod.debug_timed_send(11)
+        self.assertEqual(before + 1, h.call_count(),
+                         "with a peer present the timer must make exactly one send")
+
+    def test_timed_send_fires_once_per_interval_and_resets(self):
+        lua, h = fresh_image(others=1)
+        mod = h.load(SOURCE)
+        cfg = mod.debug_cfg()
+        cfg["timer_on"] = True
+        cfg["interval"] = 10
+        cfg["elapsed"] = 0
+        mod.debug_timed_send(4)
+        self.assertAlmostEqual(4, cfg["elapsed"], places=3,
+                               msg="elapsed must accumulate below the interval")
+        mod.debug_timed_send(4)
+        self.assertAlmostEqual(8, cfg["elapsed"], places=3)
+        # Crossing the interval resets the accumulator whether or not the send was
+        # accepted, so a refused send cannot pile up and then burst.
+        mod.debug_timed_send(4)
+        self.assertAlmostEqual(0, cfg["elapsed"], places=3,
+                               msg="crossing the interval must reset the accumulator")
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
