@@ -1,10 +1,8 @@
-# 构建产物 —— 不入库。ZIP 由 `work/standalone/build_mod.py` 生成。
-dist/
+﻿# 鏋勫缓浜х墿 鈥斺€?涓嶅叆搴撱€俍IP 鐢?`work/standalone/build_mod.py` 鐢熸垚銆?dist/
 
-# Bingus 加载器的信封包工具是构建依赖，不随本仓库分发（见 THIRD_PARTY_NOTICES.md）。
-work/standalone/vendor/
+# Bingus 鍔犺浇鍣ㄧ殑淇″皝鍖呭伐鍏锋槸鏋勫缓渚濊禆锛屼笉闅忔湰浠撳簱鍒嗗彂锛堣 THIRD_PARTY_NOTICES.md锛夈€?work/standalone/vendor/
 
-# 运行期文件与临时产物
+# 杩愯鏈熸枃浠朵笌涓存椂浜х墿
 *.log
 *.tmp
 __pycache__/
@@ -13,10 +11,12 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# 本机的游戏目录探测结果等一次性产物
-work/scratch/
+# 鏈満鐨勬父鎴忕洰褰曟帰娴嬬粨鏋滅瓑涓€娆℃€т骇鐗?work/scratch/
 *.bak
 *.bak-*
 
-# 部署记录是本机状态，不是源码；但安装前基线是证据，要留。
-work/deploy/deployed.json
+# 閮ㄧ讲璁板綍鏄湰鏈虹姸鎬侊紝涓嶆槸婧愮爜锛涗絾瀹夎鍓嶅熀绾挎槸璇佹嵁锛岃鐣欍€?work/deploy/deployed.json
+
+# 一次性提交信息草稿
+work/deploy/cmsg.txt
+work/deploy/_m.txt

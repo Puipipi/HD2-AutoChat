@@ -24,7 +24,7 @@
 --    * 结算数（frame 数、读次数、字节数）写进日志，绝不每帧刷屏；
 --    * update/shutdown 一定调回上一个，绝不断链。
 -- ===========================================================================
-local M = {version = '0.2.1', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.2.6', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false}
 
@@ -126,13 +126,20 @@ M.MAX_PEERS   = 4
 M.LOCAL       = 0xb398
 
 M.CHAT_OBJECT   = 0xc418      -- context + this -> the game's text chat object
-M.HISTORY_FIRST = 0x9590      -- chat + this -> uint32 first line of the ring
-M.HISTORY_COUNT = 0x9594      -- chat + this -> uint32 number of lines kept
+M.HISTORY_FIRST = 0x9590      -- chat + this -> uint32 ring index of the oldest line
+M.HISTORY_COUNT = 0x9594      -- chat + this -> uint32 lines currently held (max 64)
+-- The ring's shape, read out of the game's own history accessor rather than
+-- guessed: the accessor masks the index with 0x3f and multiplies by 0x228, so
+-- there are 64 slots of 552 bytes each.
+M.HISTORY_SLOTS = 64
+M.HISTORY_STRIDE = 0x228
+M.HISTORY_BASE = 0x9598        -- chat + this -> first ring slot
+M.HISTORY_TEXT_SCAN = 0x140   -- how far into a slot to look for the text
 
 -- The send entry point and its call shape. This is the one offset the whole mod
 -- exists to use, and it is only ever called after its 32-byte signature matched.
 M.SEND_RVA  = 0x1097560
-M.SEND_TYPE = 'void (*)(void *, int, const char *)'
+M.SEND_TYPE = 'void (*)(uint64_t, int, const char *)'
 M.MAX_TEXT  = 512             -- the game drops a line longer than this
 M.REGION_PROBE = 4096         -- how far past the chat object to look for its strings
 
@@ -445,7 +452,13 @@ end
 
 -- Returns true plus how many other players are in the session, or false and why.
 -- Every reason is named: "blocked" costs hours, "the chat is off" costs seconds.
-function M.send_text(text, verbose)
+--
+-- `force` exists for exactly ONE purpose: establishing that the call itself
+-- reaches the game, on a machine where no second player is available. Sending
+-- into a session that lists nobody reaches nobody, so a forced send proves the
+-- plumbing and NOT delivery. The default keeps the guard, and the log says which
+-- path was taken.
+function M.send_text(text, verbose, force)
     if not verified then return false, 'signature not verified - refusing to send' end
     if not send_fn then return false, 'send function was never resolved' end
     if type(text) ~= 'string' or #text == 0 then return false, 'empty text' end
@@ -465,12 +478,16 @@ function M.send_text(text, verbose)
     -- as the return value is not the same thing as enforcing it. Sending into a
     -- session that lists nobody is refused rather than broadcast to nobody.
     local others = other_peers(ctx)
-    if others == 0 then return false, 'nobody else in the session' end
+    if others == 0 and not force then return false, 'nobody else in the session' end
 
     local clipped = cut_utf8(text, M.MAX_TEXT)
     local copied = pcall(ffi.copy, chat_buffer, clipped .. '\0')
     if not copied then return false, 'could not stage the text' end
 
+    -- The chat address is a plain integer and the functype takes it as one. Handing
+    -- a Lua number to a `void *` parameter raises "cannot convert 'number' to
+    -- 'void *'"; that refusal is a Lua-level error, so pcall catches it and the game
+    -- keeps running. That is how this was found -- in-game, not by an offline test.
     local before = history_pair(chat)
     local ok, err = pcall(send_fn, chat, 0, chat_buffer)
     if not ok then
@@ -512,6 +529,54 @@ function M.debug_others()
     local ctx = u64(game_base + M.CONTEXT_PTR)
     if ctx == nil or ctx == 0 then return nil end
     return other_peers(ctx)
+end
+
+-- Dumps the chat history ring, slot by slot, and reports the first readable text
+-- run in each occupied slot. This is the view that lets a message be CONFIRMED:
+-- if a line appears here, the chat really holds it.
+--
+-- The ring's shape (64 slots, 0x228 stride) came from the game's own history
+-- accessor: it masks the index with 0x3f and multiplies by 0x228. Where the text
+-- sits INSIDE a slot is not assumed -- each occupied slot is scanned, and the
+-- offset of the first readable run is reported so the layout shows itself.
+function M.dump_ring()
+    if not verified then return nil, 'signature not verified' end
+    local ctx = u64(game_base + M.CONTEXT_PTR)
+    if ctx == nil or ctx == 0 then return nil, 'no network session' end
+    local chat = ctx + M.CHAT_OBJECT
+    local first, count = u32(chat + M.HISTORY_FIRST), u32(chat + M.HISTORY_COUNT)
+    if first == nil or count == nil then return nil, 'history indices unreadable' end
+    if count > M.HISTORY_SLOTS then return nil, 'implausible history count ' .. tostring(count) end
+
+    local lines = {}
+    for i = 0, count - 1 do
+        local slot = (first + i) % M.HISTORY_SLOTS
+        local base = chat + M.HISTORY_BASE + slot * M.HISTORY_STRIDE
+        local blob = read_at(base, M.HISTORY_STRIDE)
+        if blob then
+            -- Report the LONGEST printable run, not the first. An entry starts with
+            -- pointers and bookkeeping bytes, some of which are printable, so "first
+            -- run" reported noise like "p_" instead of the message. Measured layout:
+            -- entries sit 0x228 apart and the text lands at entry+0x208
+            -- (0xDC8 - 0xBA0 = 0x228), so the message is the long run.
+            local best, best_at = '', nil
+            local run, start = {}, nil
+            for b = 1, #blob + 1 do
+                local byte = b <= #blob and blob:byte(b) or 0
+                if (byte >= 0x20 and byte < 0x7f) or byte >= 0x80 then
+                    if not start then start = b - 1 end
+                    run[#run + 1] = string.char(byte)
+                else
+                    if start and #run > #best then
+                        best, best_at = table.concat(run), start
+                    end
+                    start, run = nil, {}
+                end
+            end
+            lines[#lines + 1] = {slot = slot, offset = best_at, text = best}
+        end
+    end
+    return lines, count
 end
 
 -- Searches the chat object for an exact UTF-8 byte sequence, returning the
@@ -712,6 +777,58 @@ local function poll_trigger()
         return
     end
 
+    -- `dump <slot>` prints one ring slot as hex+ASCII, so the layout of a chat
+    -- entry can be read off instead of guessed at.
+    local slot_wanted = request:match('^dump%s+(%d+)$')
+    if slot_wanted then
+        if request == last_trigger then return end
+        last_trigger = request
+        trigger_clear()
+        local ctx = u64(game_base + M.CONTEXT_PTR)
+        if ctx == nil or ctx == 0 then note('dump: no network session') return end
+        local chat = ctx + M.CHAT_OBJECT
+        local slot = tonumber(slot_wanted)
+        local base = chat + M.HISTORY_BASE + slot * M.HISTORY_STRIDE
+        note(string.format('dump: slot %d at chat+0x%X (0x%X bytes)',
+            slot, M.HISTORY_BASE + slot * M.HISTORY_STRIDE, M.HISTORY_STRIDE))
+        for offset = 0, M.HISTORY_STRIDE - 1, 16 do
+            local blob = read_at(base + offset, 16)
+            if blob then
+                local hex, text = {}, {}
+                for i = 1, 16 do
+                    local b = blob:byte(i)
+                    hex[#hex + 1] = string.format('%02X', b)
+                    text[#text + 1] = (b >= 0x20 and b < 0x7f) and string.char(b) or '.'
+                end
+                note(string.format('  +0x%03X  %s  %s', offset,
+                    table.concat(hex, ' '), table.concat(text)))
+            else
+                note(string.format('  +0x%03X  <unreadable>', offset))
+            end
+        end
+        return
+    end
+
+    -- `ring` dumps the chat history ring: the view that confirms a line really
+    -- landed in the chat, whether it came from us or from another player.
+    if request == 'ring' then
+        if last_trigger == 'ring' then return end
+        last_trigger = 'ring'
+        trigger_clear()
+        local lines, count = M.dump_ring()
+        if not lines then
+            note('ring: ' .. tostring(count))
+            return
+        end
+        note(string.format('ring: %s lines held; %d produced readable text',
+            tostring(count), #lines))
+        for i = 1, #lines do
+            note(string.format('  slot %2d  +0x%X  %s',
+                lines[i].slot, lines[i].offset, lines[i].text))
+        end
+        return
+    end
+
     -- `find <text>` searches the chat object for an exact byte sequence and
     -- reports where it sits. This is how a message can be PROVEN present (or
     -- proven absent) without a second player and without trusting a field offset.
@@ -732,8 +849,20 @@ local function poll_trigger()
     if request == last_trigger then return end
     last_trigger = request
     trigger_clear()
-    note(string.format('trigger: sending %d bytes: %s', #request, request))
-    local ok, why = M.send_text(request, true)
+    -- `send!` forces the peer guard open for plumbing verification only. It is
+    -- deliberately not the default: it reaches nobody in a solo session.
+    local force = false
+    local body = request
+    if request:sub(1, 5) == 'send!' then
+        force, body = true, request:sub(6)
+    end
+    if #body == 0 then
+        note('trigger: nothing to send')
+        return
+    end
+    note(string.format('trigger: sending %d bytes: %s%s', #body, body,
+        force and '   [FORCED - peer guard bypassed, reaches nobody in a solo session]' or ''))
+    local ok, why = M.send_text(body, true, force)
     if ok then
         note(string.format('trigger: send returned success (%s other player(s))', tostring(why)))
     else
@@ -827,7 +956,7 @@ note('probe installed: ' .. tostring(M.status))
 -- otherwise be a syntax error. The build extracts that block into README.txt.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.2.1  —— SEND CAPABLE
+--[===[AutoChat / 自动聊天  v0.2.6  —— SEND CAPABLE
 
 English
 -------

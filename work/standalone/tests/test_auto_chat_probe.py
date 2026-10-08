@@ -69,7 +69,13 @@ local REAL_OPEN = io.open
 local cptr = {}
 cptr.__index = cptr
 cptr.__tostring = function(self) return 'cdata<void *>: ' .. tostring(self.value) end
-local function ptr(value) return setmetatable({value = value}, cptr) end
+local function ptr(value)
+    -- Marked with a plain field as well as a metatable. Metatable identity checks
+    -- turned out to be a poor discriminator here (a value that failed the check
+    -- reached Python as a table and was coerced to a boolean), so unwrap keys off
+    -- this field, which cannot fail silently.
+    return setmetatable({value = value, __cptr = true}, cptr)
+end
 harness.ptr = ptr
 
 -- uint8_t[?] and size_t[1] stand-ins for ffi.new. Indexed reads must yield
@@ -156,7 +162,7 @@ function harness.install()
     -- VirtualQuery alike, and a `local` declared below its reader is not in scope
     -- there (the name becomes a nil global read).
     local function unwrap(value)
-        if type(value) == 'table' and getmetatable(value) == cptr then return value.value end
+        if type(value) == 'table' and value.__cptr then return value.value end
         return value
     end
 
@@ -170,19 +176,29 @@ function harness.install()
     -- verified absolute address is cast to a typed pointer and called. This mock
     -- records the address and the arguments so a test can assert BOTH, which is
     -- the only way to show the send was aimed at the verified RVA.
-    harness.calls = {}
+    harness.casts = {}
+    harness.invocations = {}
     ffi.cast = function(ctype, value)        if type(ctype) == 'string' and ctype:find('%(') then
             local address = unwrap(value)
-            harness.calls[#harness.calls + 1] = {address = address}
+            -- Two distinct events, deliberately tracked separately:
+            --   * acquiring a function pointer (a cast) -- happens once, at boot
+            --   * actually calling it -- what a send does
+            -- Keeping them apart is what lets a test say "the send made one call
+            -- to the verified address" without counting the resolver.
+            harness.casts[#harness.casts + 1] = {address = address}
             return function(a1, a2, a3)
-                -- Record plain numbers/strings as well as the raw arguments. A
-                -- cdata pointer does not survive the trip into Python as anything
-                -- useful, so the numeric summary is what a test compares.
-                local top = harness.calls[#harness.calls]
-                top.args = {a1, a2, a3}
-                top.arg1_address = type(a1) == 'table' and a1.value or a1
-                top.arg2 = a2
-                top.arg3_text = type(a3) == 'table' and a3.text or tostring(a3)
+                -- The mock's functype takes the pointer as a NUMBER. The real call
+                -- site casts it to `void *` (LuaJIT refuses to pass a bare number
+                -- where a pointer is expected -- that refusal is what the in-game
+                -- run reported). Modelled as a number so the value survives into
+                -- Python intact instead of degrading into a coerced boolean.
+                local record = {
+                    address = address,
+                    arg1_address = a1,
+                    arg2 = a2,
+                    arg3_text = type(a3) == 'table' and a3.text or tostring(a3),
+                }
+                harness.invocations[#harness.invocations + 1] = record
                 return 0
             end
         end
@@ -337,9 +353,13 @@ end
 -- Read the call log through Lua rather than from Python. lupa converts a Lua
 -- table to a Python object once; a table appended to later would look frozen, so
 -- every assertion goes through these accessors instead.
-function harness.call_count() return #harness.calls end
-function harness.last_call() return harness.calls[#harness.calls] end
-function harness.call_at(i) return harness.calls[i] end
+--
+-- call_count / last_call refer to INVOCATIONS (the send actually happening), not
+-- to the boot-time cast that acquires the function pointer.
+function harness.call_count() return #harness.invocations end
+function harness.last_call() return harness.invocations[#harness.invocations] end
+function harness.call_at(i) return harness.invocations[i] end
+function harness.cast_count() return #harness.casts end
 
 -- Read the synthetic memory from a test, so a wrong expectation can be told apart
 -- from a wrong fixture.
@@ -557,11 +577,12 @@ class AutoChatProbeTest(unittest.TestCase):
         mod = h.load(SOURCE)
         self.assertTrue(mod.send_ready, "send must resolve on a valid image")
 
+        before = h.call_count()
         ok, others = lua.eval("(function() return _G.HD2AutoChat.send_text('hello', false) end)()")
         self.assertTrue(ok, "sending should be accepted when a peer is present")
         self.assertEqual(1, others, "one other player besides us")
 
-        self.assertEqual(1, h.call_count(), "exactly one native call")
+        self.assertEqual(before + 1, h.call_count(), "exactly one new native call")
         call = h.last_call()
         expected = h.code_base + 0x1097560
         self.assertEqual(expected, call["address"],
@@ -587,12 +608,12 @@ class AutoChatProbeTest(unittest.TestCase):
         # send must be refused rather than broadcast to nobody.
         lua, h = fresh_image(others=0)
         mod = h.load(SOURCE)
+        before = h.call_count()
         ok, why = lua.eval("(function() return _G.HD2AutoChat.send_text('hi', false) end)()")
         self.assertFalse(ok, "an empty session must be refused")
         self.assertIn("nobody else", why)
-        self.assertEqual(1, h.call_count(),
-                         "a refused send must not call the native (the only native "
-                         "call is the one that produced the function pointer)")
+        self.assertEqual(before, h.call_count(),
+                         "a refused send must not call the native")
 
     def test_send_refuses_when_chat_is_off(self):
         lua, h = fresh_image(others=1, chat_flag=0)
@@ -621,7 +642,8 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("not verified", why)
         self.assertEqual(0, h.call_count(),
-                         "no native call may happen after a mismatch")
+                         "no native call may happen after a mismatch - not even the "
+                         "resolver, because the signature never validated")
 
     def test_oversized_text_is_cut_without_splitting_a_character(self):
         """cut_utf8 must never emit a partial multi-byte character.
@@ -671,6 +693,51 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertEqual(b"\xe4\xb8\xad" * 170, raw,
                          "the result must decode as whole characters")
         self.assertEqual(0, len(raw) % 3)
+
+    def test_force_is_off_by_default_and_does_not_bypass_other_guards(self):
+        """`force` exists only to prove the call reaches the game.
+
+        It must not weaken anything else: a forced send into a session whose chat
+        is off, or with no session at all, still must not call the native.
+        """
+        lua, h = fresh_image(others=0)
+        mod = h.load(SOURCE)
+
+        # default: refused, and no native call at all
+        before = h.call_count()
+        ok, why = lua.eval("(function() return _G.HD2AutoChat.send_text('x', false) end)()")
+        self.assertFalse(ok)
+        self.assertIn("nobody else", why)
+        self.assertEqual(before, h.call_count(), "the default path must not call")
+
+        # forced: exactly one more native call, and it still reports the truth
+        # about the session rather than pretending somebody is there
+        before = h.call_count()
+        ok, others = lua.eval(
+            "(function() return _G.HD2AutoChat.send_text('x', false, true) end)()")
+        self.assertTrue(ok, "a forced send must reach the native call")
+        self.assertEqual(0, others, "and must still report that nobody else is present")
+        self.assertEqual(before + 1, h.call_count(), "exactly one call is added")
+
+    def test_force_does_not_bypass_the_chat_off_guard(self):
+        lua, h = fresh_image(others=0, chat_flag=0)
+        mod = h.load(SOURCE)
+        before = h.call_count()
+        ok, why = lua.eval(
+            "(function() return _G.HD2AutoChat.send_text('x', false, true) end)()")
+        self.assertFalse(ok, "force must not override 'text chat is off'")
+        self.assertIn("text chat is off", why)
+        self.assertEqual(before, h.call_count())
+
+    def test_force_does_not_bypass_the_signature_gate(self):
+        lua, h = fresh_image(break_send=True, others=0)
+        mod = h.load(SOURCE)
+        before = h.call_count()
+        ok, why = lua.eval(
+            "(function() return _G.HD2AutoChat.send_text('x', false, true) end)()")
+        self.assertFalse(ok, "force must never override an unverified signature")
+        self.assertIn("not verified", why)
+        self.assertEqual(before, h.call_count())
 
     # ---------------------------------------------------------------- chain
     def test_update_always_calls_the_previous_update(self):
