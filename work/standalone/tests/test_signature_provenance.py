@@ -190,6 +190,23 @@ class SignatureProvenanceTest(unittest.TestCase):
                          "the chat object offset must match the `add rcx, 0xc418` "
                          "the chat box performs before calling the sender")
 
+    def test_context_pointer_matches_the_chat_box_global(self):
+        """The chat box loads the network context from this exact global.
+
+        Verified statically by resolving its `mov rcx, [rip+disp32]`: the result is
+        game.dll+0x347cef0, the same global AutoChat dereferences. That is what
+        makes "the same chat object" a fact rather than a resemblance -- the two
+        could otherwise be applying +0xC418 to different objects that merely look
+        alike.
+        """
+        import re
+        src = read_text(SOURCE)
+        declared = re.search(r"M\.CONTEXT_PTR\s*=\s*(0x[0-9a-fA-F]+)", src)
+        self.assertIsNotNone(declared, "M.CONTEXT_PTR must be declared literally")
+        self.assertEqual(0x347CEF0, int(declared.group(1), 16),
+                         "the context global changed; re-run "
+                         "tools/verify_send_site.py against a fresh in-memory dump")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -87,22 +87,40 @@ sent 10 bytes to 0 other player(s); history 0/3 -> 0/4
 ### 3.1 结构证明：我们调的就是聊天框自己调的那个函数
 
 这是"不是本地自绘/回显"这条要求的机械形式。用内存转储反汇编**聊天框自己的调用点**
-（`game.dll+0x186025d`），把那条 `call rel32` 解析出来：
+（`game.dll+0x186025d`），把它的每一条参数准备指令都解析出来：
 
 ```text
-   mov rcx, qword ptr [rip + 0x1c1cc8c]
-   lea r8,  [rdi + 0x16d4]          ; 已输入文本的缓冲区
-   add rcx, 0xc418                  ; 聊天对象 = 上下文 + 0xC418
-   call 0xffffffffff837303          ; → 解析后 = game.dll+0x1097560
+   mov rcx, qword ptr [rip + 0x1c1cc8c]   ; 解析后 = game.dll+0x347CEF0（网络上下文全局）
+   lea r8,  [rdi + 0x16d4]                ; 已输入文本的缓冲区
+   add rcx, 0xc418                        ; 聊天对象 = 上下文 + 0xC418
+   call 0xffffffffff837303                ; 解析后 = game.dll+0x1097560
 
-chat box calls : game.dll+0x1097560
-AutoChat calls : game.dll+0x1097560
-same function  : True
+chat box calls        : game.dll+0x1097560
+AutoChat calls        : game.dll+0x1097560
+same function         : True
+
+chat box context load : game.dll+0x347CEF0
+AutoChat context ptr  : game.dll+0x347CEF0
+same context global   : True
 ```
 
-也就是说：聊天框按回车时，用 `rcx = 聊天对象(ctx+0xC418)`、`r8 = 文本缓冲区`
-去调 `game.dll+0x1097560`；AutoChat 传的是**同一个对象、同一个偏移、同一个函数**。
-所以消息走的是"你手打一条"所走的同一条路径，不是只在本机显示的东西。
+**三个地址全部一致**，而不只是"看起来像"：
+
+| | 聊天框 | AutoChat |
+| --- | --- | --- |
+| 网络上下文全局 | `game.dll+0x347CEF0` | `game.dll+0x347CEF0` |
+| 聊天对象偏移 | `+0xC418` | `+0xC418` |
+| 发送函数 | `game.dll+0x1097560` | `game.dll+0x1097560` |
+
+也就是说：聊天框按回车时，拿**同一个全局**指向的上下文、加**同一个偏移**得到聊天
+对象，再调**同一个函数**；AutoChat 传的是同样这三样。所以消息走的是"你手打一条"
+所走的同一条路径，不是只在本机显示的东西。
+
+（把上下文全局也核对上很重要：否则两边可能是在对一个**长得像**的别的对象加 `+0xC418`，
+那就只是相似而不是同一个。）
+
+`tests/test_signature_provenance.py` 里有三条断言把模组的 `M.SEND_RVA`、
+`M.CHAT_OBJECT`、`M.CONTEXT_PTR` 分别钉死在这三个数字上，防止以后改动让两边悄悄错开。
 
 这条检查是可重复执行的：
 
@@ -111,12 +129,10 @@ python -B work/standalone/tools/verify_send_site.py \
     --dump <section0.bin> --headers <headers.bin>
 ```
 
-（需要**内存转储**：安装目录里那个 `game.dll` 是加壳的，扫它只会得到"签名找不到"。）
+（需要**内存转储**：安装目录里那个 `game.dll` 是加壳的——节名被抹、熵 7.9998，
+代码签名在文件里根本不存在，扫它只会得到"签名找不到"。）
 
-`tests/test_signature_provenance.py` 里另有两条断言把模组的 `M.SEND_RVA` 与
-`M.CHAT_OBJECT` 钉死在上面这两个数字上，防止以后改动让两边悄悄错开。
-
-**这条证明的是"走的是同一条发送路径"，仍然不是"别的客户端收到了"。** 后者见 §6.1。
+**这条证明的是"走的是同一条发送路径"，仍然不是"别的客户端收到了"。** 见 §6.1。
 
 **用户视觉确认：** 用户主动报告"我看到你发了 autotest 啥的的信息"，即这条消息
 出现在他自己的聊天栏里。
@@ -177,7 +193,24 @@ python -B tools/watch_for_squad.py
 自身的 before/after 打出来。成功的标志是 `history` 前后不同，**再加上那名玩家口述
 他看得见**——最后这一条是人的观察，脚本产生不了。
 
-### 6.2 其他未验证项
+### 6.2 "以 -1 广播给所有对等端"这句是**照抄参考模组的说法，本仓库没有独立验证**
+
+参考模组 `better_lobby_management` 的源码注释说：这个发送函数把消息通过
+`rpc_ingame_chat_message` 发给所有未被静音的对等端，目标为 `-1`（除自己外所有端）。
+
+本仓库**没有**独立验证这一点。我能确认的只有：
+
+- 发送函数入口处确实有一条 `mov edx, 0xffffffff`（即 -1），紧跟着一次
+  `call game.dll+0x6b8520`。**这条指令我看到了，但它的含义我没有追证** ——
+  那个 callee 的反汇编落在无效指令上（该二进制带 `.winlice` / `.vm_sec` 虚拟化节），
+  无法可靠地静态追踪。
+- 参考模组的这个说法是**它自己的**观测，本仓库只在"发送路径与聊天框相同"这一点上
+  独立成立（见 §3.1）。
+
+所以：`rpc 广播 / 目标 -1` 这一条应当被视为**未经独立验证的第三方说法**，
+而不是本仓库的结论。真正要确认"大家都看得见"，唯一的办法仍然是 §6.1 的多人实测。
+
+### 6.3 其他未验证项
 
 - 没有实机进过任务（只在舰船/菜单层）。
 - 发送瞬间键鼠是否真的不受影响——**没有在发送成功的同一时刻实测过**；

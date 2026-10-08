@@ -33,13 +33,37 @@ import inspect_code as IC  # noqa: E402
 
 # The chat box's call to the sender lives inside the code at this RVA; the call
 # itself is the instruction at +0x15 (verified by disassembling it -- see the
-# README of this tool for the surrounding sequence).
+# output of this tool for the surrounding sequence).
 CHAT_BOX_SITE = 0x186025D
 CHAT_BOX_CALL_OFFSET = 0x15
 # What AutoChat resolves and calls, after its 32-byte signature check.
 AUTOChat_SEND = 0x1097560
 # The chat object is reached as context+0xC418 in the chat box's own setup.
 CHAT_OBJECT_OFFSET = 0xC418
+# The chat box loads the network context from a global; AutoChat reads the same
+# one. Resolving this RIP-relative load is what ties the two together: it shows
+# the chat box's `add rcx, 0xc418` is applied to EXACTLY the pointer AutoChat
+# dereferences, rather than to some other object that merely looks similar.
+CONTEXT_PTR_RVA = 0x347CEF0
+
+
+def resolve_rip_relative(blob, sections, dumped_index, rva):
+    """Resolve `mov reg, qword ptr [rip + disp32]` at `rva` to an absolute RVA.
+
+    The displacement is relative to the END of the instruction (7 bytes here), not
+    to its start -- getting that wrong yields a plausible-looking address that is
+    off by seven, which is exactly the kind of error that would quietly invalidate
+    a "these are the same" claim.
+    """
+    offset = IC.map_rva(rva, sections, dumped_index)
+    if offset is None:
+        raise SystemExit("0x%X is not in the dumped section" % rva)
+    # 48 8B 0D <disp32>
+    if blob[offset] != 0x48 or blob[offset + 1] != 0x8B or blob[offset + 2] != 0x0D:
+        raise SystemExit("expected `mov rcx, [rip+disp32]` at 0x%X, found %s"
+                         % (rva, blob[offset:offset + 3].hex().upper()))
+    disp = struct.unpack_from("<i", blob, offset + 3)[0]
+    return rva + 7 + disp
 
 
 def find_section_holding(rva, sections, dumped_index):
@@ -79,11 +103,17 @@ def main():
 
     call_rva = CHAT_BOX_SITE + CHAT_BOX_CALL_OFFSET
     target = rel32_call_target(blob, sections, args.section, call_rva)
+    context_global = resolve_rip_relative(blob, sections, args.section, CHAT_BOX_SITE)
+    same_sender = target == AUTOChat_SEND
+    same_context = context_global == CONTEXT_PTR_RVA
 
     print("chat box calls        : game.dll+0x%X" % target)
     print("AutoChat calls        : game.dll+0x%X" % AUTOChat_SEND)
-    same = target == AUTOChat_SEND
-    print("same function         : %s" % same)
+    print("same function         : %s" % same_sender)
+    print()
+    print("chat box context load : game.dll+0x%X" % context_global)
+    print("AutoChat context ptr  : game.dll+0x%X" % CONTEXT_PTR_RVA)
+    print("same context global   : %s" % same_context)
     print()
 
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
@@ -92,25 +122,37 @@ def main():
     for insn in IC.disassemble(blob, IC.map_rva(CHAT_BOX_SITE, sections, args.section),
                                6, md):
         note = ""
-        if insn.mnemonic == "add" and "0xc418" in insn.op_str:
+        if insn.mnemonic == "mov" and at == CHAT_BOX_SITE:
+            note = "   <- the network context global AutoChat reads too"
+        elif insn.mnemonic == "add" and "0xc418" in insn.op_str:
             note = "   <- the chat object, at context+0x%X" % CHAT_OBJECT_OFFSET
         elif insn.mnemonic == "call" and at == call_rva:
-            note = "   <- the sender AutoChat also calls" if same else "   <- NOT our target"
+            note = ("   <- the sender AutoChat also calls" if same_sender
+                    else "   <- NOT our target")
         print("   %-22s %s %s%s" % (insn.bytes.hex().upper()[:20],
                                     insn.mnemonic, insn.op_str, note))
         at += insn.size
     print()
 
-    if same:
-        print("PASS: AutoChat hands the game's own sender the same chat object the")
-        print("      chat box uses, so a message leaves through the path a typed")
-        print("      message takes -- not a local-only display path.")
+    if same_sender and same_context:
+        print("PASS: the chat box builds the call as")
+        print("          rcx = [network context global] + 0x%X" % CHAT_OBJECT_OFFSET)
+        print("          r8  = the typed-text buffer")
+        print("          call game.dll+0x%X" % AUTOChat_SEND)
+        print("      and AutoChat supplies the same context global, the same offset")
+        print("      and the same function -- so the message leaves through the path")
+        print("      a typed message takes, not a local-only display path.")
         print()
         print("      This does NOT establish that other clients receive it. That")
         print("      needs a second player; see tools/watch_for_squad.py.")
         return 0
-    print("FAIL: AutoChat's target is not the sender the chat box calls.")
-    print("      Until this matches, the 'everyone sees it' claim is unsupported.")
+    print("FAIL: AutoChat's call is not identical to the chat box's.")
+    if not same_sender:
+        print("      sender differs: 0x%X vs 0x%X" % (target, AUTOChat_SEND))
+    if not same_context:
+        print("      context global differs: 0x%X vs 0x%X"
+              % (context_global, CONTEXT_PTR_RVA))
+    print("      Until both match, the 'everyone sees it' claim is unsupported.")
     return 1
 
 
