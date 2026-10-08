@@ -980,20 +980,75 @@ end
 -- Everything drawn, plus the resolution the geometry is derived from. When this
 -- string changes the GUI is rebuilt, which is the ONLY way a retained screen GUI
 -- ever updates -- see panel_frame.
-local function panel_signature()
-    local s, ox, oy = PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy
-    return table.concat({
-        PANEL.rw, PANEL.rh,
-        string.format('%.3f', s or 0), ox or 0, oy or 0,
-        tostring(PANEL.hover), tostring(PANEL.editing), tostring(PANEL.hint),
-        cfg.timer_on and 'on' or 'off', cfg.interval,
-        string.format('%.0f', cfg.elapsed), cfg.message,
-        tostring(M.sent or 0), tostring(M.last_peers or '-'),
-        M.version, PANEL.version,
-    }, '|')
+-- ---------------------------------------------------------------- 11a. public API
+-- Other mods can put their own auto-send settings in this panel, as an extra tab.
+--
+-- The shape follows Super Earth Armory Forge's tab model rather than inventing one:
+-- Armory keeps an ordered list of tab keys (ui.tab_order) and switches the whole body
+-- on the selected key. Here the FIRST tab is always the default settings; every mod
+-- that registers adds one more tab beside it, labelled with that mod's name, so a mod
+-- using the feature is visible as a tab rather than buried in a shared list.
+--
+-- Registration is deliberately defensive. A third-party draw call runs inside this
+-- panel's frame, and a raise there would take the panel down with it, so every plugin
+-- call is wrapped and a faulting plugin is dropped for the session with its name
+-- logged rather than retried every frame.
+-- The registry lives on the GLOBAL, not on M, for one practical reason: another mod may
+-- load BEFORE this one and register early. M does not exist yet at that point, so an
+-- API that only appears on M would silently lose those registrations -- a mod loaded
+-- first would just not be in the list, with nothing in any log to say why.
+local REGISTRY = rawget(_G, 'HD2AutoChatPlugins')
+if type(REGISTRY) ~= 'table' then
+    REGISTRY = {version = 1, plugins = {}, by_id = {}}
+    rawset(_G, 'HD2AutoChatPlugins', REGISTRY)
+end
+M.PLUGINS = REGISTRY.plugins
+M.PLUGIN_BY_ID = REGISTRY.by_id
+
+local function plugin_note(message)
+    if type(REGISTRY.log) == 'function' then pcall(REGISTRY.log, message) end
+    note('[plugin] ' .. tostring(message))
 end
 
--- ---------------------------------------------------------------- 11b. drawing
+-- Published immediately, before the boot sequence below can fail, so registering works
+-- regardless of how this mod's own startup goes. The API sits on the REGISTRY rather
+-- than on M because M is not reachable from a mod that loaded first, and this avoids
+-- touching PANEL, which is declared further down.
+function REGISTRY.register(spec)
+    if type(spec) ~= 'table' then return nil, 'register needs a table' end
+    local id = tostring(spec.id or '')
+    if id == '' then return nil, 'a plugin needs a stable id' end
+    if REGISTRY.by_id[id] then return nil, 'that id is already registered' end
+    if type(spec.draw) ~= 'function' then
+        return nil, 'a plugin needs a draw(u, ctx) function'
+    end
+    local entry = {id = id, title = tostring(spec.title or id),
+                   draw = spec.draw, faults = 0}
+    REGISTRY.plugins[#REGISTRY.plugins + 1] = entry
+    REGISTRY.by_id[id] = entry
+    plugin_note('registered "' .. entry.title .. '" (' .. id .. ')')
+    REGISTRY.serial = (REGISTRY.serial or 0) + 1
+    return entry
+end
+
+function REGISTRY.unregister(id)
+    id = tostring(id or '')
+    local entry = REGISTRY.by_id[id]
+    if not entry then return false end
+    for i = #REGISTRY.plugins, 1, -1 do
+        if REGISTRY.plugins[i] == entry then table.remove(REGISTRY.plugins, i) end
+    end
+    REGISTRY.by_id[id] = nil
+    plugin_note('unregistered "' .. entry.title .. '"')
+    REGISTRY.serial = (REGISTRY.serial or 0) + 1
+    return true
+end
+
+-- Convenience aliases on M for callers that already have it.
+function M.register_plugin(spec) return REGISTRY.register(spec) end
+function M.unregister_plugin(id) return REGISTRY.unregister(id) end
+
+
 -- The drawing primitives below are copied from Super Earth Armory Forge's draw()
 -- rather than invented, because its panel is the look that was asked for and it is
 -- known to work in this game:
@@ -1006,13 +1061,46 @@ end
 --   * the same palette and z-layers.
 --
 -- The panel is W x H panel units; `s` is the only thing that changes with resolution.
-local W_PANEL, H_PANEL = 460, 250
+local W_PANEL, H_PANEL = 460, 300
+local TABS_H = 30        -- the tab strip, like Armory's row across the top
+local PAD = 14
 
 local function UI() return sr.Gui, sr.Vector3, sr.Vector2, sr.Color end
 
 -- px/rect/text close over live locals, so the layout numbers below read exactly like
 -- Armory's: plain panel units, no per-call scaling arithmetic.
 local UX = {}
+
+-- What a plugin draws with. `u` mirrors the panel's own helpers so a plugin cannot
+-- reach into this file's state, and cannot draw outside the body it is given.
+local function plugin_api(ctx)
+    return {
+        w = ctx.w, h = ctx.h, scale = UX.s,
+        text = UX.text, rect = UX.rect, border = UX.border,
+        colour = UX.colour, palette = UX.palette,
+        region = function(key) UX.region('plugin:' .. ctx.id .. ':' .. tostring(key)) end,
+        note = plugin_note,
+        version = M.version,
+    }
+end
+
+
+local function panel_signature()
+    local s, ox, oy = PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy
+    return table.concat({
+        PANEL.rw, PANEL.rh,
+        string.format('%.3f', s or 0), ox or 0, oy or 0,
+        tostring(PANEL.hover), tostring(PANEL.editing), tostring(PANEL.hint),
+        cfg.timer_on and 'on' or 'off', cfg.interval,
+        string.format('%.0f', cfg.elapsed), cfg.message,
+        tostring(M.sent or 0), tostring(M.last_peers or '-'),
+        M.version, PANEL.version,
+        tostring(PANEL.active_plugin), tostring(REGISTRY.serial or 0),
+    }, '|')
+end
+
+-- The plugin selected in the tab strip; nil means the default settings.
+PANEL.active_plugin = PANEL.active_plugin
 
 local function draw_panel()
     if not (sr and sr.Gui and sr.Vector3 and sr.Vector2 and sr.Color) then return end
@@ -1153,7 +1241,63 @@ local function draw_panel()
          .. '   PEERS ' .. tostring(M.last_peers or '?'),
          PAD, 27, 10, C.MUTED, W_PANEL - PAD * 2)
 
-    local y = HEAD + 12
+    -- ---------------------------------------------------------------- tab strip
+    -- Armory's model: an ordered list of tab keys, one selected at a time, the whole
+    -- body switched on it. Tab 1 is always the default settings; every mod that
+    -- registered adds one more beside it, so a mod using this feature is visible AS A
+    -- TAB instead of being buried in a shared list.
+    local tabs = {{key = false, title = 'DEFAULT'}}
+    for i = 1, #M.PLUGINS do
+        tabs[#tabs + 1] = {key = M.PLUGINS[i].id, title = M.PLUGINS[i].title}
+    end
+    if PANEL.active_plugin and not M.PLUGIN_BY_ID[PANEL.active_plugin] then
+        PANEL.active_plugin = nil                       -- it unregistered itself
+    end
+    if #tabs > 1 then
+        local ty = HEAD
+        rect(4, ty, W_PANEL - 4, TABS_H, C.PANEL, 952)
+        rect(4, ty + TABS_H - 1, W_PANEL - 4, 1, C.LINE2, 953)
+        local slot = (W_PANEL - 4) / #tabs
+        for i = 1, #tabs do
+            local tab = tabs[i]
+            local tx = 4 + (i - 1) * slot
+            local active = (tab.key == PANEL.active_plugin)
+            if active then
+                rect(tx, ty + TABS_H - 3, slot, 3, C.YELLOW, 954)
+                rect(tx, ty, slot, TABS_H - 3, C.ROW, 953)
+            end
+            text(cut(tab.title, 11, slot - 10), tx + slot / 2, ty + 9, 11,
+                 active and C.YELLOW or C.MUTED, slot - 10, 'center')
+            region('tab:' .. i, tx, ty, slot, TABS_H)
+        end
+    end
+    local body_y = HEAD + (#tabs > 1 and TABS_H or 0)
+
+    -- ---------------------------------------------------------- plugin body
+    local active = PANEL.active_plugin and M.PLUGIN_BY_ID[PANEL.active_plugin] or nil
+    if active then
+        local ok, err = pcall(active.draw, plugin_api({
+            id = active.id, w = W_PANEL, h = H_PANEL, body_y = body_y,
+        }), {body_y = body_y, panel_w = W_PANEL, panel_h = H_PANEL})
+        if not ok then
+            -- A third-party draw runs inside this panel's frame. Drop it for the
+            -- session with its name in the log rather than faulting every frame.
+            active.faults = (active.faults or 0) + 1
+            plugin_note('"' .. active.title .. '" draw failed: ' .. tostring(err))
+            M.unregister_plugin(active.id)
+            PANEL.active_plugin = nil
+        end
+        -- The plugin owns the body; the default rows below are not drawn.
+        UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
+        UX.text, UX.rect = text, rect
+        UX.border, UX.colour, UX.palette = border, color, C
+        UX.region = region
+        UX.width, UX.panel_h = width, H_PANEL
+        PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy = s, ox, oy
+        return
+    end
+
+    local y = body_y + 12
 
     -- message field: click it, then type. This is the row that needed real text.
     text('MESSAGE', PAD, y, 10, C.DIM)
@@ -1207,6 +1351,9 @@ local function draw_panel()
 
     UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
     UX.text, UX.rect = text, rect
+    UX.border, UX.colour, UX.palette = border, color, C
+    UX.region = region
+    UX.width, UX.panel_h = width, H_PANEL
     -- Remembered for the signature and the hit-test, so the layout that was drawn is
     -- the layout that is compared and clicked against.
     PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy = s, ox, oy
@@ -1287,7 +1434,17 @@ local function panel_frame()
     PANEL.hover = hovered
 
     if clicked and hovered then
-        if hovered == 'timer' then
+        local tab_index = tostring(hovered):match('^tab:(%d+)$')
+        if tab_index then
+            -- Tab 1 is always the default settings; the rest follow M.PLUGINS order, so
+            -- the tab strip and the registry cannot drift apart.
+            tab_index = tonumber(tab_index)
+            local plugin = (tab_index > 1) and M.PLUGINS[tab_index - 1] or nil
+            PANEL.active_plugin = plugin and plugin.id or nil
+            PANEL.version = (PANEL.version or 0) + 1
+            note('panel: tab ' .. tostring(tab_index) .. ' -> '
+                 .. tostring(PANEL.active_plugin or 'default'))
+        elseif hovered == 'timer' then
             cfg.timer_on = not cfg.timer_on
             cfg.elapsed = 0
             config_save()

@@ -206,6 +206,61 @@ def show_dump(handle, base, start, end):
         print("%08X  %-47s  %s" % (address, hexpart, text))
 
 
+def font_probe(handle, base):
+    """Read the three font resource ids the way the mod does, from the LIVE process.
+
+    Why this is worth a tool: the ids live in globals the engine fills in at startup, so
+    the file on disk reads as zeros and tells you nothing. The only way to know whether
+    the real-text panel can work on THIS build and THIS launch is to look in the running
+    process. A zero id here means the panel will fall back to the bitmap font, and that
+    is a fact rather than a guess.
+    """
+    def u32(address):
+        raw = read(handle, address, 4)
+        return None if raw is None else ctypes.c_uint32.from_buffer_copy(raw).value
+
+    def u64(address):
+        raw = read(handle, address, 8)
+        return None if raw is None else ctypes.c_uint64.from_buffer_copy(raw).value
+
+    def id64(address):
+        raw = read(handle, address, 8)
+        if raw is None:
+            return None, "unreadable"
+        low = ctypes.c_uint32.from_buffer_copy(raw[0:4]).value
+        high = ctypes.c_uint32.from_buffer_copy(raw[4:8]).value
+        if low == 0 and high == 0:
+            return None, "ZERO (engine has not filled it in)"
+        return "%08x%08x" % (high, low), "populated"
+
+    pe_at = u32(base + 0x3C)
+    stamp = None
+    if pe_at:
+        raw = read(handle, base + pe_at, 12)
+        if raw and raw[0:4] == b"PE\0\0":
+            stamp = ctypes.c_uint32.from_buffer_copy(raw[8:12]).value
+    print("  game.dll base   : 0x%X" % base)
+    print("  PE TimeDateStamp: %s" % ("0x%08X" % stamp if stamp is not None else "unreadable"))
+    print("  expected stamp  : 0x%08X  -> %s"
+          % (GAME_STAMP, "MATCH" if stamp == GAME_STAMP else "different build"))
+
+    for label, rva in (("FONT_RVA", 0x3772268), ("ATLAS_RVA", 0x3772EE8)):
+        value, why = id64(base + rva)
+        print("  %-10s 0x%X  id64=%s  %s" % (label, rva, value or "-", why))
+
+    owner = u64(base + 0x37C5478)
+    print("  MATERIAL   0x%X  owner=%s" % (0x37C5478,
+                                           ("0x%X" % owner) if owner else "NULL"))
+    if owner:
+        value, why = id64(owner + 24)
+        print("             -> material id64=%s  %s" % (value or "-", why))
+    else:
+        print("             -> the engine has not created the material holder yet")
+    print()
+    print("  A populated FONT + MATERIAL means the real-text panel can work on this")
+    print("  launch. Zeros mean it will use the bitmap font, by design, not by bug.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)

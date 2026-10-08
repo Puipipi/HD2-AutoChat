@@ -1523,6 +1523,59 @@ class AutoChatProbeTest(unittest.TestCase):
                              "bitmap panel can be explained from the log rather than "
                              "guessed at")
 
+    # ------------------------------------------- public API / cross-mod tabs
+    def test_another_mod_can_register_and_get_its_own_tab(self):
+        """The cross-mod entry point, exercised the way another mod would use it.
+
+        The user asked for other mods to be able to put their auto-send settings in this
+        panel, visible as their own entry rather than buried in a shared list. This is
+        that contract: register_plugin{id,title,draw} adds one tab beside DEFAULT, and
+        the panel keeps them in registration order.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        before = len(mod.PLUGINS)
+        lua.execute("""
+            local reg = rawget(_G, 'HD2AutoChatPlugins')
+            _G.__reg1 = reg.register({id = 'other_mod', title = 'OTHER MOD',
+                                      draw = function(u, ctx) end})
+            _G.__dup, _G.__dupwhy = reg.register({id = 'other_mod', title = 'AGAIN',
+                                                  draw = function(u, ctx) end})
+        """)
+        mod = h.load(SOURCE)
+        self.assertIsNotNone(lua.eval('_G.__reg1'),
+                             "a valid plugin must register")
+        self.assertEqual(before + 1, len(mod.PLUGINS))
+        self.assertEqual("other_mod", mod.PLUGINS[before + 1]["id"])
+        self.assertIsNone(lua.eval('_G.__dup'),
+                          "a duplicate id must be refused, not shadow the first")
+        self.assertIn("already", str(lua.eval('_G.__dupwhy')))
+
+    def test_a_faulting_plugin_is_dropped_instead_of_taking_the_panel_down(self):
+        """A third-party draw raises inside this panel's frame.
+
+        Without a wrapper the panel dies with the plugin, every frame, and the user
+        loses the whole UI because of someone else's bug. The faulting plugin must be
+        dropped for the session, named in the log, and the panel must survive.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        # The registry is created when the mod loads, so registering comes after it --
+        # which is also the real order for a mod that loads later than this one.
+        lua.execute("""
+            local reg = rawget(_G, 'HD2AutoChatPlugins')
+            reg.register({id = 'bad_mod', title = 'BAD',
+                          draw = function(u, ctx) error('boom') end})
+            _G.HD2AutoChat.debug_panel().active_plugin = 'bad_mod'
+        """)
+        mod.debug_set_open(True)
+        self._run(lua, 700)
+        self._run(lua, 20)
+        self.assertIsNone(lua.eval("rawget(_G.HD2AutoChat, 'PLUGIN_BY_ID')['bad_mod']"),
+                          "a faulting plugin must be dropped for the session")
+        self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
+                      "and must not take the panel down with it")
+
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
                        "createremotethread"):
