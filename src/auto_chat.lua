@@ -972,7 +972,24 @@ end
 function M.debug_panel() return PANEL end
 function M.debug_cfg() return cfg end
 function M.debug_timed_send(dt) timed_send(dt) end
-function M.send_text_public(text, verbose, force) return M.send_text(text, verbose, force) end
+function M.debug_send_text(text, verbose, force) return M.send_text(text, verbose, force) end
+-- Panel layout is pure arithmetic, so it can be checked without an engine. A panel
+-- that draws off-screen or with overlapping rows is a defect the tests can catch
+-- even though the rendering itself cannot be exercised here.
+function M.debug_geometry(rw, rh)
+    PANEL.rw, PANEL.rh = rw, rh
+    local scale, x, y, w, h, row_h, head_h = geometry(rw, rh)
+    local rows = {}
+    for i = 1, #PANEL.rows do
+        rows[i] = {
+            y = y + h - head_h - 14 * scale - i * row_h,
+            h = row_h - 3 * scale,
+        }
+    end
+    return {scale = scale, x = x, y = y, w = w, h = h,
+            row_h = row_h, head_h = head_h, rows = rows,
+            resolution = {rw = rw, rh = rh}}
+end
 
 local function tick()
     M.frames = M.frames + 1

@@ -1247,6 +1247,57 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertAlmostEqual(0, cfg["elapsed"], places=3,
                                msg="crossing the interval must reset the accumulator")
 
+    # ------------------------------------------------------------ panel geometry
+    def test_panel_stays_on_screen_at_every_common_resolution(self):
+        """A panel drawn off-screen is invisible and looks like a dead hotkey.
+
+        The rendering cannot be exercised here, but the layout is arithmetic, so the
+        failure modes that matter -- the panel hanging off an edge, rows overlapping,
+        the close button unreachable -- are all checkable. This is deliberately run
+        across resolutions rather than one, because the scale factor is derived from
+        the resolution and a wrong derivation only shows at some of them.
+        """
+        lua, h, mod = self.fresh()
+        for rw, rh in ((1920, 1080), (2560, 1440), (3840, 2160), (1280, 720),
+                       (1366, 768), (1600, 900), (3440, 1440), (1024, 768)):
+            geo = mod.debug_geometry(rw, rh)
+            x, y, w, hgt = geo["x"], geo["y"], geo["w"], geo["h"]
+            self.assertGreater(w, 0, "%dx%d: width must be positive" % (rw, rh))
+            self.assertGreater(hgt, 0, "%dx%d: height must be positive" % (rw, rh))
+            self.assertGreaterEqual(x, 0, "%dx%d: panel left edge is off-screen" % (rw, rh))
+            self.assertGreaterEqual(y, 0, "%dx%d: panel bottom edge is off-screen" % (rw, rh))
+            self.assertLessEqual(x + w, rw,
+                                 "%dx%d: panel right edge runs off-screen" % (rw, rh))
+            self.assertLessEqual(y + hgt, rh,
+                                 "%dx%d: panel top edge runs off-screen" % (rw, rh))
+            self.assertGreater(geo["scale"], 0, "%dx%d: scale collapsed" % (rw, rh))
+
+    def test_panel_rows_do_not_overlap_and_are_clickable(self):
+        """Each row must have a positive height and must not sit inside another.
+
+        Overlapping hit-boxes would make a click land on whichever row is iterated
+        first, so "INTERVAL -" could fire "CLOSE PANEL" instead.
+        """
+        lua, h, mod = self.fresh()
+        for rw, rh in ((1920, 1080), (3840, 2160), (1280, 720), (1024, 768)):
+            geo = mod.debug_geometry(rw, rh)
+            # A Lua sequence arrives in Python as a 1-based mapping, not a list.
+            rows = geo["rows"]
+            count = len(rows)
+            self.assertEqual(4, count, "%dx%d: expected four rows" % (rw, rh))
+            spans = []
+            for index in range(1, count + 1):
+                row = rows[index]
+                self.assertGreater(row["h"], 0,
+                                   "%dx%d row %d: hit-box height must be positive"
+                                   % (rw, rh, index))
+                spans.append((index, row["y"], row["y"] + row["h"]))
+            spans.sort(key=lambda s: s[1])
+            for (i1, lo1, hi1), (i2, lo2, hi2) in zip(spans, spans[1:]):
+                self.assertLessEqual(hi1, lo2 + 1e-9,
+                                     "%dx%d: rows %d and %d overlap (%.2f > %.2f)"
+                                     % (rw, rh, i1, i2, hi1, lo2))
+
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
                        "createremotethread"):
