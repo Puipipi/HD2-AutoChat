@@ -43,8 +43,15 @@ def walk_up(relative):
 
 
 SOURCE = walk_up(os.path.join("src", "auto_chat.lua"))
+TOOLS = os.path.join(STANDALONE, "tools")
 
 GET_PROC = "void *GetCurrentProcess(void);"
+
+
+def lupa_runtime():
+    """A LuaJIT state, imported lazily so the gate tests stay runnable without it."""
+    import lupa.luajit21 as luajit
+    return luajit.LuaRuntime(unpack_returned_tuples=True)
 
 
 class LiveSourceTest(unittest.TestCase):
@@ -114,6 +121,38 @@ class GateCanFailTest(unittest.TestCase):
         self.assertEqual([], upstream,
                          "if this is no longer empty the source changed shape and "
                          "the note in gates.py is stale")
+
+    # ------------------------------------------------- silent LuaJIT limits
+    def test_source_compiles_under_the_luajit_limits(self):
+        """The silent-skip failures are compile-time, so a successful load is proof.
+
+        A mod the loader skips produces NO log line at all, which makes it the most
+        expensive failure mode in this family. The two causes are compile-time
+        ("too many constants", "function too long"), so compiling the shipped source
+        is real evidence that neither was tripped -- and compiling in the harness uses
+        the same LuaJIT the game does.
+        """
+        lua = lupa_runtime()
+        ok, err = lua.eval("(function(p) local c, e = loadfile(p) "
+                           "return c ~= nil, tostring(e) end)")(SOURCE)
+        self.assertTrue(ok, "the shipped source must compile: %s" % err)
+
+    def test_the_tool_reproduces_the_limit_it_checks(self):
+        """A budget check that cannot reproduce the failure proves nothing.
+
+        The tool asserts its own self-check; this pins that the limit it reports is
+        genuinely reproducible, so it cannot silently decay into always-passing.
+        """
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-B", os.path.join(TOOLS, "bytecode_budget.py"), SOURCE],
+            capture_output=True, text=True)
+        self.assertEqual(0, result.returncode,
+                         "the bytecode budget tool must pass:\n%s\n%s"
+                         % (result.stdout, result.stderr))
+        self.assertIn("constant limit     : reproduced", result.stdout,
+                      "the tool must prove the limit is reproducible, not just claim "
+                      "the file is fine")
 
     # ------------------------------------------------- declared before call
     def test_undeclared_call_is_rejected(self):
