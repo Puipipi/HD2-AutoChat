@@ -84,6 +84,40 @@ sent 10 bytes to 0 other player(s); history 0/3 -> 0/4
 
 调用目标经核对是 `game.dll+0x1097560`——就是 32 字节签名校验通过的那一个。
 
+### 3.1 结构证明：我们调的就是聊天框自己调的那个函数
+
+这是"不是本地自绘/回显"这条要求的机械形式。用内存转储反汇编**聊天框自己的调用点**
+（`game.dll+0x186025d`），把那条 `call rel32` 解析出来：
+
+```text
+   mov rcx, qword ptr [rip + 0x1c1cc8c]
+   lea r8,  [rdi + 0x16d4]          ; 已输入文本的缓冲区
+   add rcx, 0xc418                  ; 聊天对象 = 上下文 + 0xC418
+   call 0xffffffffff837303          ; → 解析后 = game.dll+0x1097560
+
+chat box calls : game.dll+0x1097560
+AutoChat calls : game.dll+0x1097560
+same function  : True
+```
+
+也就是说：聊天框按回车时，用 `rcx = 聊天对象(ctx+0xC418)`、`r8 = 文本缓冲区`
+去调 `game.dll+0x1097560`；AutoChat 传的是**同一个对象、同一个偏移、同一个函数**。
+所以消息走的是"你手打一条"所走的同一条路径，不是只在本机显示的东西。
+
+这条检查是可重复执行的：
+
+```powershell
+python -B work/standalone/tools/verify_send_site.py \
+    --dump <section0.bin> --headers <headers.bin>
+```
+
+（需要**内存转储**：安装目录里那个 `game.dll` 是加壳的，扫它只会得到"签名找不到"。）
+
+`tests/test_signature_provenance.py` 里另有两条断言把模组的 `M.SEND_RVA` 与
+`M.CHAT_OBJECT` 钉死在上面这两个数字上，防止以后改动让两边悄悄错开。
+
+**这条证明的是"走的是同一条发送路径"，仍然不是"别的客户端收到了"。** 后者见 §6.1。
+
 **用户视觉确认：** 用户主动报告"我看到你发了 autotest 啥的的信息"，即这条消息
 出现在他自己的聊天栏里。
 

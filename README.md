@@ -20,7 +20,13 @@
 > 向只列出自己的会话发送，按构造到达不了任何人。上面证明的是"游戏接受了这条消息"，
 > **不是**"别的客户端收到了它"。
 >
-> 见 [实机取证](docs/LIVE-EVIDENCE-2026-10-08.md) §6.1。
+> 见 [实机取证](docs/LIVE-EVIDENCE-2026-10-08.md) §6.1，以及
+> **[多人投递验证 runbook](docs/VERIFY-MULTIPLAYER.md)** —— 照它跑一遍就有答案，
+> 不需要改任何代码。
+>
+> 已经确定的：我们调的是**聊天框自己调的那个函数**（反汇编聊天框调用点，
+> call 解析结果 = game.dll+0x1097560，与模组目标一致，参数也一致），
+> 所以走的不是本地自绘/回显路径。
 
 ---
 
@@ -101,6 +107,9 @@ python -B tools/send.py ring           # 打印聊天历史环形缓冲与每行
 python -B tools/send.py "find 1433223"  # 在聊天对象里逐字节搜索，报告命中位置
 python -B tools/send_and_verify.py 1433223   # 发送并对比游戏自身的 before/after
 python -B tools/watch_for_squad.py     # 等到小队里真有人，再走正常路径发一条
+
+# 从内存转储反汇编，证明我们调的就是聊天框调的那个函数
+# python -B work/standalone/tools/verify_send_site.py --dump <section0.bin> --headers <headers.bin>
 ```
 
 或者手工把一行文字写进：

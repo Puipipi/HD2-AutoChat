@@ -164,6 +164,32 @@ class SignatureProvenanceTest(unittest.TestCase):
         self.assertEqual(set(VERIFIED_PREFIX), set(self.probe),
                          "VERIFIED_PREFIX and M.CODE must describe the same set")
 
+    def test_send_rva_matches_the_chat_box_call_target(self):
+        """The mod's send RVA must BE the function the chat box calls.
+
+        This is the mechanical form of the "everyone sees it" argument: if the mod
+        called anything else, the message would not leave through the path a typed
+        message takes. `tools/verify_send_site.py` proves the chat box's target from
+        the machine code; this pins the mod to the same number, so the two cannot
+        drift apart silently.
+        """
+        import re
+        src = read_text(SOURCE)
+        declared = re.search(r"M\.SEND_RVA\s*=\s*(0x[0-9a-fA-F]+)", src)
+        self.assertIsNotNone(declared, "M.SEND_RVA must be declared literally")
+        self.assertEqual(0x1097560, int(declared.group(1), 16),
+                         "the send RVA changed; re-run tools/verify_send_site.py "
+                         "against a fresh in-memory dump before trusting it")
+
+    def test_chat_object_offset_matches_the_chat_box_setup(self):
+        import re
+        src = read_text(SOURCE)
+        declared = re.search(r"M\.CHAT_OBJECT\s*=\s*(0x[0-9a-fA-F]+)", src)
+        self.assertIsNotNone(declared)
+        self.assertEqual(0xC418, int(declared.group(1), 16),
+                         "the chat object offset must match the `add rcx, 0xc418` "
+                         "the chat box performs before calling the sender")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
