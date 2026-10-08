@@ -755,7 +755,57 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertEqual(before + 1, h.shutdown_calls,
                          "shutdown must chain or the log handle never closes")
 
-    # ---------------------------------------------------------------- static cost
+    # ---------------------------------------------------------------- frame cost
+    def test_observation_is_on_an_interval_not_every_frame(self):
+        """The per-frame cost must not include the observation.
+
+        A frame-budget watchdog reports each mod's cost in ms per second, so work
+        done in `tick` is paid 60-120 times a second. `observe()` reads memory and
+        formats ~10 strings per call; running it every frame was pure cost for no
+        information, because the fields it reads cannot change that fast.
+
+        Measured as native reads: if the interval regressed to every frame, the
+        reads per frame would jump by roughly the observation's own read count.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        # let boot's observation settle, then measure over a window that contains
+        # several observation intervals (the interval is 30 frames)
+        for _ in range(90):
+            lua.eval("_G.update()")
+        before = h.reads
+        frames = 900
+        for _ in range(frames):
+            lua.eval("_G.update()")
+        reads = h.reads - before
+        per_frame = reads / float(frames)
+        self.assertLess(per_frame, 1.5,
+                        "tick must be cheap per frame; measured %.2f native reads "
+                        "per frame over %d frames" % (per_frame, frames))
+
+    def test_observation_interval_is_literal_and_sane(self):
+        """Pin the constant itself, so a later edit cannot quietly remove the gate."""
+        import re
+        src = self.source
+        m = re.search(r"local OBSERVE_FRAMES\s*=\s*(\d+)", src)
+        self.assertIsNotNone(m, "OBSERVE_FRAMES must stay a literal")
+        self.assertGreaterEqual(int(m.group(1)), 10,
+                                "the observation interval should be at least ~10 "
+                                "frames; anything near 1 is the bug this guards")
+        self.assertIn("if M.frames < next_observe then return end", src,
+                      "tick must gate the observation on the interval")
+
+    def test_disabled_use_still_costs_nothing(self):
+        """A dormant mod must not pay for the frame at all."""
+        lua, h = fresh_image(break_send=True)
+        mod = h.load(SOURCE)
+        reads_at_boot = h.reads
+        for _ in range(900):
+            lua.eval("_G.update()")
+        self.assertEqual(reads_at_boot, h.reads,
+                         "a mod that failed its signature check must read nothing "
+                         "on any frame")
+
     def test_idle_frames_do_not_log_every_frame(self):
         lua, h, mod = self.fresh()
         for _ in range(600):

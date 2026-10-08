@@ -24,7 +24,7 @@
 --    * 结算数（frame 数、读次数、字节数）写进日志，绝不每帧刷屏；
 --    * update/shutdown 一定调回上一个，绝不断链。
 -- ===========================================================================
-local M = {version = '0.2.6', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.2.7', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false}
 
@@ -41,7 +41,6 @@ rawset(_G, KEY, M)
 local game, game_base, send_fn = nil, nil, nil
 local chat_buffer, chat_args = nil, nil
 local verified, verify_reason = false, 'not run'
-local last_shape, last_verdict, observed_once = nil, nil, false
 
 -- ---------------------------------------------------------------- environment
 local ok_ffi, ffi = pcall(require, 'ffi')
@@ -626,14 +625,21 @@ function M.find_in_chat(needle, span)
 end
 
 -- ---------------------------------------------------------------- 6. observation
--- Pure reads. Records what the offsets currently hold so the next build can be
--- written against observed values instead of assumptions.
-local function observe()
-    local out = {}
+-- Records what the offsets currently hold. Kept as a diagnostic: the send path
+-- does not depend on it.
+--
+-- `out` is reused across calls rather than allocated fresh. This function used to
+-- run EVERY frame and build ~10 freshly formatted strings each time, only for
+-- tick() to discover "nothing changed" and throw them away. A frame budget
+-- watchdog times each mod's share of the frame, and that was pure per-frame cost
+-- for no information. It now runs on an interval, and reuses its table.
+local function observe(out)
+    -- reuse the table, but never leave a previous call's lines behind
+    for i = #out, 1, -1 do out[i] = nil end
 
     local ctx = u64(game_base + M.CONTEXT_PTR)
     if ctx == nil then
-        out[#out + 1] = 'network context: UNREADABLE'
+        out[1] = 'network context: UNREADABLE'
         return out, 'context_unreadable'
     end
     if ctx == 0 then
@@ -687,7 +693,7 @@ local function observe()
 end
 
 -- ---------------------------------------------------------------- 7. boot
-note(string.format('AutoChat v%s starting (read-only probe)', M.version))
+note(string.format('AutoChat v%s starting (send capable)', M.version))
 note(string.format('base=%s loader api=%s version=%s',
     tostring(M.game_base_text or '-'), tostring(loader.api), tostring(loader.version)))
 
@@ -717,16 +723,15 @@ else
     note('  ' .. verify_reason)
 end
 
--- Declared BEFORE tick() uses them. A `local` declared below its reader is not
--- in scope there: the name silently becomes a global read (nil), which is how
--- `0 >= nil` throws on frame one. The whole state block lives here for that
--- reason, not next to the code that reads it.
-local last_shape, last_verdict, observed_once = nil, nil, false
-local HEARTBEAT_FRAMES = 1800          -- ~30s at 60fps; one line, not one per frame
+-- Trigger-driver and heartbeat state. Declared BEFORE the functions that read
+-- them: a `local` declared below its reader is not in scope there, and the name
+-- silently becomes a global read (nil), which is how `0 >= nil` throws on frame
+-- one. The observation state lives with the tick loop further down.
+local HEARTBEAT_FRAMES = 1800          -- ~30s at 120fps; one line, not one per frame
 local next_heartbeat = HEARTBEAT_FRAMES
 local last_trigger = nil               -- contents last acted on, so a file is sent once
 local next_trigger_poll = 0
-local TRIGGER_POLL_FRAMES = 30         -- ~twice a second at 60fps
+local TRIGGER_POLL_FRAMES = 30         -- a few times a second
 
 -- ---------------------------------------------------------------- 7b. driver
 -- An external trigger file, so the send path can be exercised without shipping a
@@ -871,9 +876,26 @@ local function poll_trigger()
 end
 
 -- ---------------------------------------------------------------- 8. tick
+-- The frame callback. This is the hot path: a frame-budget watchdog reports each
+-- mod's cost in ms per second, so anything done here is paid 60-120 times a
+-- second whether or not it can change.
+--
+-- What is deliberately NOT done here:
+--   * no string.format, no table allocation, no gsub on the steady path;
+--   * observation on an interval, not every frame (it cannot change faster than
+--     the game updates it, and it was ~10 allocations per frame to discover that);
+--   * the trigger file is read on its own interval, not per frame.
+local OBSERVE_FRAMES = 30              -- ~4x a second at 120fps
+local next_observe = 0
+local observe_out = {}                 -- reused by observe(); never reallocated
+local last_shape = ''
+local last_verdict = nil
+local observed_once = false
+
 local function shape_of(values)
-    -- Compare the *shape* of the observation (which fields were readable and
-    -- what they held), so an idle session produces zero further log lines.
+    -- Compare the *shape* of the observation (which fields were readable, and the
+    -- digits stripped off) so an idle session produces no further log lines.
+    -- Builds one string; called only from the observation interval, not per frame.
     if #values == 0 then return '' end
     local parts = {}
     for i = 1, #values do
@@ -886,9 +908,14 @@ local function tick()
     M.frames = M.frames + 1
     if not verified then return end
 
+    -- Trigger polling has its own frame gate inside poll_trigger(), so this call
+    -- is a comparison on most frames.
     pcall(poll_trigger)
 
-    local values, verdict = observe()
+    if M.frames < next_observe then return end
+    next_observe = M.frames + OBSERVE_FRAMES
+
+    local values, verdict = observe(observe_out)
     local shape = shape_of(values)
     if not observed_once or verdict ~= last_verdict or shape ~= last_shape then
         observed_once = true
@@ -956,7 +983,7 @@ note('probe installed: ' .. tostring(M.status))
 -- otherwise be a syntax error. The build extracts that block into README.txt.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.2.6  —— SEND CAPABLE
+--[===[AutoChat / 自动聊天  v0.2.7  —— SEND CAPABLE
 
 English
 -------
