@@ -478,6 +478,10 @@ function harness.install()
         Application = {
             main_world = function() return harness.main_world end,
             worlds = function() return {harness.main_world} end,
+            -- The mod asks whether a resource is actually LOADED before using its id.
+            -- Without this the font path stops at "not loaded" and the material and
+            -- Gui.text steps are never exercised.
+            can_get = function(kind, name) return harness.can_get ~= false end,
         },
         Gui = {
             resolution = function() return harness.res_w or 1920, harness.res_h or 1080 end,
@@ -637,24 +641,38 @@ function harness.build_image(opts)
     -- default image leaves them zero, which is the "engine has not filled them in yet"
     -- state the mod has to survive. `font_ids = true` populates them so the real-text
     -- path can be exercised as well as the fallback.
+    -- A minimal but REAL PE header, ALWAYS, written as CONTIGUOUS bytes. This used to be
+    -- written only for the font_ids fixture, and that was a blind spot with a real cost:
+    -- without it the read at the image base failed, read_font_ids() returned "PE header
+    -- unreadable" before it touched anything, and a call to a function that DID NOT EXIST
+    -- (`u32_off`) was never reached by any test. In game it faulted on the first panel
+    -- draw and the only symptom was "the UI looks wrong".
+    --
+    -- Contiguous matters: the memory mock refuses a read that spans a byte it was never
+    -- given, so a scatter of individual u32 writes reads back as nothing at all.
+    local PE_AT = 0x100
+    local dos = string.rep('\0', 0x40)
+    -- e_lfanew at 0x3c, little endian
+    dos = dos:sub(1, 0x3c) .. string.char(0x00, 0x01, 0x00, 0x00)
+    harness.bytes(base, dos)
+    -- 'PE\0\0', Machine, then TimeDateStamp == GAME_STAMP (0x6AB3B43F), little endian
+    -- 16 bytes, not 12: the lookup reads a fixed 16-byte header, and the memory mock
+    -- refuses a read that runs past the last byte it was given.
+    harness.bytes(base + PE_AT,
+                  'PE\0\0' .. string.rep('\0', 4)
+                  .. string.char(0x3F, 0xB4, 0xB3, 0x6A) .. string.rep('\0', 4))
+
     if opts.font_ids then
-        -- A minimal but REAL PE header. The font lookup refuses to read its offsets
-        -- until the build stamp checks out, and that check is what stops a valid-looking
-        -- offset from being used on the wrong build -- so the fixture satisfies it
-        -- instead of the mod being written to skip it.
-        local pe_at = 0x100
-        harness.u32(base + 0x3c, pe_at)                 -- e_lfanew
-        harness.bytes(base + pe_at, 'PE\0\0')
-        harness.u32(base + pe_at + 8, 0x6AB3B43F)       -- TimeDateStamp == GAME_STAMP
         local material_owner = base + 0x5000000
-        -- An IdString64 sits in memory as two dwords, low half first.
-        harness.u32(base + 0x3772268, 0x55667788)
-        harness.u32(base + 0x3772268 + 4, 0x11223344)
-        harness.u32(base + 0x3772ee8, 0xddeeff00)
-        harness.u32(base + 0x3772ee8 + 4, 0x99aabbcc)
+        -- An IdString64 sits in memory as two dwords, low half first. Each id is written
+        -- as one contiguous 8-byte run for the same reason as the header above.
+        harness.bytes(base + 0x3772268,
+                      string.char(0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11))
+        harness.bytes(base + 0x3772ee8,
+                      string.char(0x00, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99))
         harness.u64(base + 0x37c5478, material_owner)
-        harness.u32(material_owner + 24, 0x4b5a6978)
-        harness.u32(material_owner + 28, 0x0f1e2d3c)
+        harness.bytes(material_owner + 24,
+                      string.char(0x78, 0x69, 0x5A, 0x4B, 0x3C, 0x2D, 0x1E, 0x0F))
     end
 
     local ctx = harness.ctx_base
@@ -1667,6 +1685,87 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertGreater(probe["y"], 0,
                            "a plugin's click region must be offset with its drawing, or "
                            "clicks land in the wrong place")
+
+    def test_the_font_lookup_actually_reads_the_ids_without_faulting(self):
+        """The lookup must get PAST the PE header and read the three ids.
+
+        This is the test the missing `u32_off` needed and did not have. The lookup used
+        to return "PE header unreadable" in every test -- the fixture had no PE header --
+        so a call to a function that did not exist at all was never reached here, while in
+        game it faulted on the first panel draw. The fixture now always carries a header,
+        so the read path is genuinely exercised.
+        """
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 700)
+        self._run(lua, 20)
+        self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
+                      "reading the font ids must not fault; it did, so the panel fell "
+                      "back to the bitmap font (error: %s)"
+                      % lua.eval("tostring(_G.HD2AutoChat.draw_error_text)"))
+        font = mod.debug_font()
+        self.assertTrue(font["resolved"], "the lookup must have been attempted")
+        why = str(font["why"])
+        self.assertNotIn("PE header unreadable", why,
+                         "the lookup must get past the PE header; stopping there is how "
+                         "the rest of the font path went untested")
+        self.assertNotIn("nil value", why,
+                         "the lookup reached a call to something that does not exist: %s"
+                         % why)
+
+    def test_the_real_font_path_reaches_gui_text(self):
+        """Assert the font path is CALLED, not merely that drawing did not fault.
+
+        The goal calls for exactly this, and it is the trap this file has fallen into
+        twice: font_resolve was correct and called from nowhere, and later a missing
+        u32_off made it fault on every attempt. Both times the panel still laid out and
+        still recorded regions, so a test that only checks "the panel drew" passes while
+        the text is secretly the bitmap fallback -- and the only symptom in game is "the
+        UI looks wrong", which is how it was reported.
+
+        So this one COUNTS the calls.
+        """
+        lua, h = fresh_image(font_ids=True)
+        h.can_get = True                      # the engine reports its resources loaded
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 700)
+        self._run(lua, 20)
+        font = mod.debug_font()
+        self.assertTrue(font["ok"],
+                        "the engine font must resolve when the ids are present and the "
+                        "resources are loaded; it reported: %s" % font["why"])
+        self.assertGreaterEqual(h.material_made or 0, 1,
+                                "resolving the font must create the ink material")
+        self.assertGreaterEqual(h.text_drawn or 0, 1,
+                                "Gui.text must actually be called; zero calls means the "
+                                "panel is drawing the bitmap fallback while reporting "
+                                "success")
+        self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
+                      "and none of this may fault")
+
+    def test_the_bitmap_fallback_still_draws_when_the_font_is_unavailable(self):
+        """The other direction: no ids, no fault, and the panel still lays out.
+
+        A fallback that quietly drew nothing would be indistinguishable from a font
+        problem, so the fallback has to be shown to produce a laid-out panel.
+        """
+        lua, h = fresh_image()                 # the image carries no font ids
+        # And the engine reports its resources NOT loaded, so the debug-font fallback is
+        # unavailable too. Without this the fallback SUCCEEDS and the bitmap path -- the
+        # one that runs on a machine where the font never resolves -- goes untested.
+        h.can_get = False
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 700)
+        self._run(lua, 20)
+        self.assertFalse(mod.debug_font()["ok"],
+                         "with no ids and nothing loaded, no engine font can resolve")
+        self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
+                      "the fallback must not fault")
+        self.assertGreaterEqual(len(mod.debug_panel()["regions"]), 4,
+                                "the panel must still lay out on the fallback path")
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",

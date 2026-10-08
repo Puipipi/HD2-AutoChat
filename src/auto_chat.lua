@@ -228,6 +228,20 @@ local function u32(address)
     if not s then return nil end
     return s:byte(1) + s:byte(2) * 256 + s:byte(3) * 65536 + s:byte(4) * 16777216
 end
+-- Read a little-endian u32 out of a byte string that has ALREADY been read, at a
+-- 0-based offset. Distinct from u32, which takes an ADDRESS.
+--
+-- This was missing entirely and the font lookup called it, so read_font_ids() faulted
+-- on every attempt: the ids were never read, the engine font was never resolved, and the
+-- panel silently drew with the 4x5 bitmap fallback. In game the symptom was only "the UI
+-- looks wrong" -- nothing said a call had failed, because font_resolve marks itself
+-- resolved before doing the work, so it faulted once and then reported failure forever.
+local function u32_off(bytes, offset)
+    if type(bytes) ~= 'string' then return nil end
+    local a, b, c, d = bytes:byte(offset + 1, offset + 4)
+    if not d then return nil end
+    return a + b * 256 + c * 65536 + d * 16777216
+end
 local function u64(address)
     local lo, hi = u32(address), u32(address + 4)
     if not lo or not hi then return nil end
