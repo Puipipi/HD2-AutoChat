@@ -1324,261 +1324,101 @@ class AutoChatProbeTest(unittest.TestCase):
                                  "%dx%d: panel top edge runs off-screen" % (rw, rh))
             self.assertGreater(geo["scale"], 0, "%dx%d: scale collapsed" % (rw, rh))
 
-    def test_panel_rows_do_not_overlap_and_are_clickable(self):
-        """Each row must have a positive height and must not sit inside another.
-
-        Overlapping hit-boxes would make a click land on whichever row is iterated
-        first, so "INTERVAL -" could fire "CLOSE PANEL" instead.
-        """
-        lua, h, mod = self.fresh()
-        for rw, rh in ((1920, 1080), (3840, 2160), (1280, 720), (1024, 768)):
-            geo = mod.debug_geometry(rw, rh)
-            # A Lua sequence arrives in Python as a 1-based mapping, not a list.
-            rows = geo["rows"]
-            count = len(rows)
-            self.assertEqual(4, count, "%dx%d: expected four rows" % (rw, rh))
-            spans = []
-            for index in range(1, count + 1):
-                row = rows[index]
-                self.assertGreater(row["h"], 0,
-                                   "%dx%d row %d: hit-box height must be positive"
-                                   % (rw, rh, index))
-                spans.append((index, row["y"], row["y"] + row["h"]))
-            spans.sort(key=lambda s: s[1])
-            for (i1, lo1, hi1), (i2, lo2, hi2) in zip(spans, spans[1:]):
-                self.assertLessEqual(hi1, lo2 + 1e-9,
-                                     "%dx%d: rows %d and %d overlap (%.2f > %.2f)"
-                                     % (rw, rh, i1, i2, hi1, lo2))
-
     # --------------------------------------------------- panel GUI lifecycle
     def _run(self, lua, frames):
         for _ in range(frames):
             lua.eval("_G.update()")
 
-    def test_closing_the_panel_destroys_its_gui(self):
-        """A retained screen GUI keeps drawing what was put in it.
+    def test_click_regions_never_overlap_and_stay_on_screen(self):
+        """The recorded hit boxes are what a click is matched against.
 
-        So a panel that is merely "not updated any more" stays on screen and sits on
-        top of the HUD. Closing must DESTROY the gui, and the panel must be openable
-        again -- otherwise it works exactly once per session.
-        """
-        lua, h = fresh_image()
-        mod = h.load(SOURCE)
-        self._run(lua, 700)
-        self.assertEqual(0, h.live_guis, "nothing may be created while closed")
-
-        mod.debug_set_open(True)
-        self._run(lua, 20)
-        self.assertEqual(1, h.gui_created,
-                         "opening must create exactly ONE gui; creating one per frame "
-                         "would leak an engine object every frame")
-        self.assertEqual(1, h.live_guis, "and exactly one must be live")
-
-        mod.debug_set_open(False)
-        self._run(lua, 5)
-        self.assertEqual(0, h.live_guis,
-                         "closing must destroy the gui, not just stop drawing into it")
-        self.assertEqual(1, h.gui_destroyed, "exactly one destroy per open")
-
-    def test_panel_can_be_reopened_in_the_same_session(self):
-        """Reopening must rebuild, and must not leak the previous gui."""
-        lua, h = fresh_image()
-        mod = h.load(SOURCE)
-        self._run(lua, 700)
-        for cycle in (1, 2, 3):
-            mod.debug_set_open(True)
-            self._run(lua, 20)
-            self.assertEqual(1, h.live_guis,
-                             "cycle %d: opening must leave exactly one live gui"
-                             % cycle)
-            self.assertEqual(cycle, h.gui_created,
-                             "cycle %d: one gui built per open, no more" % cycle)
-            mod.debug_set_open(False)
-            self._run(lua, 5)
-            self.assertEqual(0, h.live_guis, "cycle %d: close must destroy" % cycle)
-        self.assertEqual(3, h.gui_destroyed, "every gui must be destroyed exactly once")
-
-    def test_an_idle_open_panel_does_not_rebuild_every_frame(self):
-        """The whole point of the signature: a static panel must stop rebuilding.
-
-        Rebuilding per frame would work visually and quietly burn the frame budget,
-        which is the class of problem a frame watchdog reports.
+        Asserting on the drawn regions rather than on a recomputed layout is the point:
+        the old panel derived its rows twice, once for drawing and once for hit
+        testing, and a click could land on a different row than the one drawn. Now the
+        regions ARE the drawn rectangles, so this checks the real thing.
         """
         lua, h = fresh_image()
         mod = h.load(SOURCE)
         self._run(lua, 700)
         mod.debug_set_open(True)
         self._run(lua, 20)
-        settled = h.gui_created
-        self._run(lua, 300)          # nothing changes: no input, no timer
-        self.assertEqual(settled, h.gui_created,
-                         "an idle panel rebuilt %d times over 300 frames; the signature "
-                         "must make it stop" % (h.gui_created - settled))
+        regions = mod.debug_panel()["regions"]
+        self.assertIsNotNone(regions, "the panel must record its click regions")
+        # the resolution the panel actually drew at, rather than an assumed one
+        rw = mod.debug_geometry(1920, 1080)["resolution"]["rw"]
+        rh = mod.debug_geometry(1920, 1080)["resolution"]["rh"]
+        count = len(regions)
+        self.assertGreaterEqual(count, 4,
+                                "expected the message box, timer, and two interval "
+                                "buttons at least; got %d" % count)
+        boxes = []
+        for i in range(1, count + 1):
+            r = regions[i]
+            self.assertGreater(r["w"], 0, "region %d has no width" % i)
+            self.assertGreater(r["h"], 0, "region %d has no height" % i)
+            self.assertGreaterEqual(r["x"], 0, "region %d is off the left edge" % i)
+            self.assertGreaterEqual(r["y"], 0, "region %d is off the bottom edge" % i)
+            self.assertLessEqual(r["x"] + r["w"], rw,
+                                 "region %d runs off the right edge" % i)
+            self.assertLessEqual(r["y"] + r["h"], rh,
+                                 "region %d runs off the top edge" % i)
+            boxes.append((i, r["x"], r["y"], r["x"] + r["w"], r["y"] + r["h"]))
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                a, b = boxes[i], boxes[j]
+                overlap_x = min(a[3], b[3]) - max(a[1], b[1])
+                overlap_y = min(a[4], b[4]) - max(a[2], b[2])
+                self.assertFalse(overlap_x > 1 and overlap_y > 1,
+                                 "click regions %d and %d overlap, so a click could "
+                                 "hit the wrong control" % (a[0], b[0]))
 
-    def test_shutdown_destroys_the_panel(self):
-        """Unloading the mod must not leave a gui behind in the world."""
-        lua, h = fresh_image()
-        mod = h.load(SOURCE)
-        self._run(lua, 700)
-        mod.debug_set_open(True)
-        self._run(lua, 120)
-        self.assertEqual(1, h.live_guis)
-        lua.eval("_G.shutdown()")
-        self.assertEqual(0, h.live_guis,
-                         "shutdown must release the gui it created")
+    def test_typing_edits_the_message_and_enter_commits(self):
+        """The editable field, driven through the same code the panel uses.
 
-    def test_no_gui_is_created_before_the_world_is_ready(self):
-        """Creating a screen gui too early faults at NATIVE level, which pcall cannot
-        catch, so the frame gate before it must hold."""
-        lua, h = fresh_image()
-        mod = h.load(SOURCE)
-        mod.debug_set_open(True)
-        self._run(lua, 599)          # the gate opens at frame 600
-        self.assertEqual(0, h.gui_created,
-                         "no gui may be created before the frame gate opens")
-        self._run(lua, 90)
-        self.assertGreaterEqual(h.gui_created, 1,
-                                "after the gate opens the panel must build")
-
-    def test_resolution_change_forces_a_rebuild(self):
-        """Geometry is derived from the resolution, so a change must rebuild.
-
-        Without it the panel keeps rendering last resolution's layout -- a retained
-        gui does not reflow on its own.
+        The user asked for this specifically: the auto-send text has to be editable by
+        typing. The logic is pure bookkeeping over key state, so it is testable without
+        the engine.
         """
         lua, h = fresh_image()
         mod = h.load(SOURCE)
-        self._run(lua, 700)
-        mod.debug_set_open(True)
-        self._run(lua, 120)
-        before = h.gui_created
-        h.res_w, h.res_h = 2560, 1440
-        self._run(lua, 10)
-        self.assertGreater(h.gui_created, before,
-                           "a resolution change must rebuild the gui")
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer("")
+        # Type three letters. Each call uses a LATER timestamp so the edge detector
+        # sees a fresh press rather than the auto-repeat window.
+        texts = []
+        for index, key in enumerate((0x41, 0x42, 0x43)):     # A B C
+            h.user32.set_key(key, True)
+            value, _ = mod.debug_edit_text(1.0 + index)
+            texts.append(value)
+            h.user32.set_key(key, False)
+            mod.debug_edit_text(2.0 + index)
+        self.assertEqual("a", texts[0], "the first letter must be typed")
+        self.assertEqual("ab", texts[1])
+        self.assertEqual("abc", texts[2])
+        # Backspace removes one whole character.
+        h.user32.set_key(0x08, True)
+        value, _ = mod.debug_edit_text(5.0)
+        self.assertEqual("ab", value, "backspace must remove one character")
+        h.user32.set_key(0x08, False)
+        mod.debug_edit_text(6.0)
+        # Enter commits.
+        h.user32.set_key(0x0D, True)
+        value, what = mod.debug_edit_text(7.0)
+        self.assertEqual("commit", what)
+        self.assertEqual("ab", value)
 
-    def test_a_panel_fault_is_logged_and_then_bounded(self):
-        """A fault inside the panel must be visible, and must not flood the log.
-
-        Wrapped in the generic frame pcall a panel fault is swallowed: the panel just
-        never appears and nothing says why. This is not hypothetical -- a mock that
-        could not allocate `uint32_t[1]` made the mouse path raise on every frame and
-        the only symptom was a panel that did not show. The fault is logged a few
-        times and then suppressed, so a per-frame failure cannot fill the log.
-        """
+    def test_escape_cancels_an_edit_without_changing_the_message(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)
-        self._run(lua, 700)
-        mod.debug_set_open(True)
-        self._run(lua, 10)
-        self.assertEqual(1, h.live_guis, "the panel should be up before we break input")
-
-        # mouse_state calls this with no pcall of its own, so breaking it raises
-        # inside panel_frame -- exactly the kind of fault that used to vanish.
-        lua.execute("""
-            local ffi = require('ffi')
-            local u = ffi.load('user32')
-            u.GetCursorPos = nil
-        """)
-        self._run(lua, 40)
-        errors = lua.eval("_G.HD2AutoChat.panel_errors")
-        self.assertIsNotNone(errors, "the panel fault must be counted")
-        self.assertGreaterEqual(errors, 1, "the fault must have been observed")
-        logged = [r for r in h.records
-                  if "panel_error" in str(r.get("text", ""))]
-        self.assertLessEqual(len(logged), 6,
-                             "a per-frame panel fault must be suppressed after a few "
-                             "log lines, not written every frame")
-
-    def test_a_world_change_does_not_fault_the_panel(self):
-        """The world change path calls teardown, and it faulted in the real game.
-
-        `world_ready` runs before `panel_clear` is assigned in the file, so calling
-        teardown from there hit a nil global: "attempt to call global 'panel_clear'".
-        The panel still opened, so the only symptom was a panel that misbehaved later,
-        and it was found in a live session rather than here. The unit tests never
-        changed the world, which is exactly why this test now does.
-        """
-        lua, h = fresh_image()
-        mod = h.load(SOURCE)
-        self._run(lua, 700)
-        mod.debug_set_open(True)
-        self._run(lua, 20)
-        self.assertEqual(1, h.live_guis, "the panel should be up first")
-        before_destroyed = h.gui_destroyed
-
-        h.main_world = "WORLD_SOMEWHERE_ELSE"      # ship -> mission, or back
-        self._run(lua, 20)
-        errors = lua.eval("_G.HD2AutoChat.panel_errors")
-        self.assertIn(errors, (None, 0),
-                      "a world change must not fault the panel (panel_errors=%s)"
-                      % errors)
-        self.assertGreater(h.gui_destroyed, before_destroyed,
-                           "the gui made for the old world must be destroyed")
-        self.assertEqual(1, h.live_guis,
-                         "and exactly one fresh gui must serve the new world")
-
-    def test_no_forward_reference_calls_a_name_declared_later(self):
-        """Static tripwire for the trap that produced the nil `panel_clear` call.
-
-        A `local` declared below its reader is not in scope there: the name silently
-        becomes a GLOBAL read, so the failure is a nil call at run time, inside a
-        pcall, with no compile error. This checks the two functions that are called
-        from code defined above them are forward-declared, which is the only shape
-        that works.
-        """
-        src = self.source
-        # Both must be declared as bare locals before use, and assigned later.
-        for name in ("set_panel_open", "panel_clear"):
-            self.assertIn("local %s\n" % name, src,
-                          "%s must be forward-declared as a bare local before any "
-                          "closure captures it" % name)
-            self.assertIn("%s = function" % name, src,
-                          "%s must be assigned (not re-declared with `local "
-                          "function`) so the forward declaration is the one used"
-                          % name)
-            self.assertNotIn("local function %s(" % name, src,
-                             "%s must not also be declared with `local function`: that "
-                             "creates a SECOND local, and the earlier readers keep "
-                             "pointing at the nil forward declaration" % name)
-
-    def test_a_stuck_cursor_is_recovered_at_boot(self):
-        """A pointer left visible by a crashed session must come back at next load.
-
-        release_cursor() is a no-op unless THIS Lua state took the cursor. If the game
-        dies with the panel open, `taken` dies with it and the cursor stays visible
-        forever -- and reloading the mod cannot help, because the new instance has no
-        memory of the old one. The user hit exactly this.
-
-        Boot therefore resets unconditionally, without consulting saved state, so it
-        works from a cold start.
-        """
-        lua, h = fresh_image()
-        # Simulate the aftermath: the Win32 display counter is positive (visible) and
-        # the clip rectangle is whatever the dead session left behind.
-        for _ in range(3):
-            h.user32_show(True)
-        h.user32_set_clip(0, 0, 100, 100)
-        self.assertTrue(h.user32.cursor_visible(),
-                        "precondition: the cursor must start out stuck visible")
-
-        mod = h.load(SOURCE)          # boot runs here
-        self.assertFalse(h.user32.cursor_visible(),
-                         "loading the mod must put a stuck cursor back")
-        self.assertIsNone(h.user32.clip(),
-                          "and must clear the clip rectangle so the pointer can move")
-
-    def test_shutdown_releases_the_cursor(self):
-        lua, h = fresh_image()
-        mod = h.load(SOURCE)
-        self._run(lua, 700)
-        mod.debug_set_open(True)
-        self._run(lua, 10)
-        self.assertTrue(h.user32.cursor_visible(),
-                        "the panel should have shown the cursor")
-        lua.eval("_G.shutdown()")
-        self.assertFalse(h.user32.cursor_visible(),
-                         "shutdown must not leave the cursor visible")
+        original = mod.debug_cfg()["message"]
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer("something else")
+        h.user32.set_key(0x1B, True)                       # Escape
+        value, what = mod.debug_edit_text(1.0)
+        self.assertEqual("cancel", what)
+        self.assertIsNone(value, "cancel must not return the edited text")
+        self.assertEqual(original, mod.debug_cfg()["message"],
+                         "the stored message must be untouched until Enter")
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",

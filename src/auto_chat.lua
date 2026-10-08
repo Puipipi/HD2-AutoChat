@@ -1,6 +1,6 @@
 -- HD2-Addon: mods/codex/auto_chat
 -- ===========================================================================
---  自动聊天 / AutoChat —— 不打开聊天栏直接发消息 + 游戏内面板 (v0.3.0)
+--  自动聊天 / AutoChat —— 不打开聊天栏直接发消息 + 游戏内面板 (v0.4.0)
 --
 --  为什么能绕开聊天栏：
 --    聊天框做四件事——夺取键鼠、画框、收集按键、调用发送。把玩家卡住的是前两件。
@@ -22,7 +22,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.3.0', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.4.0', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -479,7 +479,117 @@ do
     end
 end
 
--- ---------------------------------------------------------------- 10. config
+-- The bitmap fallback, used only when the engine font could not be resolved. Drawn in
+-- engine-resolution pixels with a TOP-LEFT origin, so the caller does not have to know
+-- that the glyph rows are stored top-down.
+
+-- ---------------------------------------------------------------- 10. real font
+-- The engine's own UI font, resolved exactly the way Super Earth Armory Forge does it:
+-- three IDs are read out of the RUNNING game.dll and turned into a font + an ink
+-- material. They read as zero on disk because they are globals the engine fills in at
+-- startup, so this must be read from the live process -- which is what this mod
+-- already does.
+--
+-- Verified against the binary before writing this: our game.dll's PE TimeDateStamp is
+-- 0x6AB3B43F, the same value Armory gates its lookup on, so these RVAs are valid for
+-- this build. They are still only used after the stamp check, and the text drawing
+-- falls back to the built-in 4x5 bitmap font if the lookup fails, so a mismatch
+-- degrades the look instead of leaving a blank panel.
+M.GAME_STAMP = 0x6AB3B43F
+M.FONT_RVA = 0x3772268
+M.ATLAS_RVA = 0x3772EE8
+M.MATERIAL_RVA = 0x37C5478
+M.ATLAS_ID = '88bac99b00000000'
+
+local FONT = {resolved = false, ok = false, why = 'not tried', font = nil,
+              material = nil, ink = nil, kind = 'bitmap'}
+
+-- An IdString64 stored in memory holds the two halves swapped relative to the text
+-- form of the same id, so this reads low-then-high. Getting that order wrong yields a
+-- plausible-looking id that simply never draws.
+local function resource_hex(bytes)
+    if not bytes or #bytes ~= 8 or bytes == string.rep('\0', 8) then return nil end
+    return string.format('%08x%08x', u32_off(bytes, 4), u32_off(bytes, 0))
+end
+
+local function read_font_ids()
+    if not game_base then return nil, 'game.dll base unknown' end
+    local dos = read_at(game_base, 64)
+    if not dos then return nil, 'PE header unreadable' end
+    local pe = u32_off(dos, 60)
+    if not pe or pe == 0 then return nil, 'e_lfanew unreadable' end
+    local head = read_at(game_base + pe, 16)
+    if not head then return nil, 'PE head unreadable' end
+    if head:sub(1, 4) ~= 'PE\0\0' then return nil, 'not a PE image' end
+    if u32_off(head, 8) ~= M.GAME_STAMP then
+        return nil, string.format('game.dll is another build (stamp %s)',
+                                  hex(u32_off(head, 8) or 0))
+    end
+    local font_id = resource_hex(read_at(game_base + M.FONT_RVA, 8))
+    local atlas_id = resource_hex(read_at(game_base + M.ATLAS_RVA, 8))
+    local owner = read_at(game_base + M.MATERIAL_RVA, 8)
+    local owner_at = owner and (u32_off(owner, 0) + u32_off(owner, 4) * 4294967296) or nil
+    local material_id = owner_at and owner_at ~= 0
+                        and resource_hex(read_at(owner_at + 24, 8)) or nil
+    if not (font_id and atlas_id and material_id) then
+        return nil, 'the engine has not filled in its font ids yet'
+    end
+    return {font = font_id, material = material_id, atlas = atlas_id}
+end
+
+-- Resolve once, on the first draw. Returns true when real text can be drawn.
+local function font_resolve(gui)
+    if FONT.resolved then return FONT.ok end
+    FONT.resolved = true
+    if not (sr and sr.IdString64 and sr.Gui and sr.Gui.material and sr.Material
+            and type(sr.IdString64.from_hex) == 'function') then
+        FONT.why = 'engine font API not present in this state'
+        return false
+    end
+    local ids, why = read_font_ids()
+    if not ids then FONT.why = why return false end
+    local ok, result = pcall(function()
+        local ink = sr.Gui.material(gui, sr.IdString64.from_hex(ids.material))
+        if not ink then return nil, 'material handle refused' end
+        sr.Material.set_texture(ink, sr.IdString64.from_hex(M.ATLAS_ID),
+                                sr.IdString64.from_hex(ids.atlas))
+        return {font = sr.IdString64.from_hex(ids.font),
+                material = sr.IdString64.from_hex(ids.material)}
+    end)
+    if not ok or not result then
+        FONT.why = 'material setup failed: ' .. tostring(ok and result or result)
+        return false
+    end
+    FONT.font, FONT.material, FONT.ink = result.font, result.material, result
+    FONT.ok, FONT.kind = true, 'engine font ' .. tostring(ids.font)
+    return true
+end
+
+-- A text call that cannot take the panel down. Real text when the font resolved,
+-- otherwise the caller falls back to the bitmap font.
+local function ink_text(x, y, value, size, colour, layer)
+    if not FONT.ok then return false end
+    local ok = pcall(Gui.text, PANEL.gui, value, FONT.font, size, FONT.material,
+                     Vector3(x, y, layer or 962), colour)
+    if not ok then
+        -- Degrade for the rest of the session rather than faulting every frame.
+        FONT.ok, FONT.why = false, 'Gui.text refused; using the bitmap font'
+        return false
+    end
+    return true
+end
+
+-- Width in screen pixels, measured by the engine when it can. Used to lay the editing
+-- cursor after the text rather than guessing per-character widths.
+local function ink_width(value, size)
+    if not FONT.ok then return nil end
+    local ok, lo, hi = pcall(Gui.text_extents, PANEL.gui, value, FONT.font, size)
+    if ok and lo and hi then
+        local a, b = lo.x or lo[1], hi.x or hi[1]
+        if a and b and b > a then return b - a end
+    end
+    return nil
+end
 local cfg = {timer_on = false, interval = 30,
              message = 'HELLO FROM AUTOCHAT', elapsed = 0}
 local function config_load()
@@ -511,8 +621,30 @@ end
 -- engine call that broke instead of dying invisibly.
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
                lfail = 0, version = 0,
-               rows = {}, rw = 0, rh = 0}
-for i = 0, 3 do PANEL.rows[#PANEL.rows + 1] = {id = i} end
+               rw = 0, rh = 0}
+
+local function bitmap_text(x, y, value, cell, colour)
+    if not (sr and sr.Gui and sr.Vector3 and sr.Vector2) then return end
+    value = tostring(value):upper()
+    local cx = x
+    for i = 1, #value do
+        local g = GLYPHS[value:sub(i, i)]
+        if g then
+            for r = 1, 5 do
+                local row = g[r]
+                for col = 1, 4 do
+                    if row:sub(col, col) == '1' then
+                        pcall(sr.Gui.rect, PANEL.gui,
+                              sr.Vector3(cx + (col - 1) * cell,
+                                         y + (5 - r) * cell, 955),
+                              sr.Vector2(cell, cell), colour)
+                    end
+                end
+            end
+        end
+        cx = cx + 5 * cell
+    end
+end
 
 local cursor = {taken = false, shows = 0, clip = nil, engine = false, was_shown = nil}
 -- Forward declarations for functions used by code that is defined earlier in the file.
@@ -650,92 +782,6 @@ local function key_pressed(vk)
     key_prev[vk] = down
     return down and not was and focused()
 end
-local function colour(a, r, g, b)
-    if not Color then return nil end
-    return Color(a, r, g, b)
-end
-local function geometry(rw, rh)
-    local scale = math.min(rw / 1920, rh / 1080)
-    local row_h = 26 * scale
-    local head_h = 34 * scale
-    local w = 460 * scale
-    local h = head_h + (#PANEL.rows) * row_h + 26 * scale
-    local x = 40 * scale
-    local y = rh - h - 40 * scale
-    return scale, x, y, w, h, row_h, head_h
-end
-local function draw_targets()
-    return PANEL.draw_guis or (PANEL.gui and {{gui = PANEL.gui}}) or {}
-end
-local function rect(x, y, w, h, c, layer)
-    local targets = draw_targets()
-    for i = 1, #targets do
-        local entry = targets[i]
-        pcall(Gui.rect, entry.gui or entry, Vector3(x, y, layer or 980),
-              Vector2(w, h), c)
-    end
-end
-local function draw_panel_unused_v1()
-    local scale, x, y, w, h, row_h, head_h = geometry(PANEL.rw, PANEL.rh)
-    local white = colour(255, 242, 244, 247)
-    local dim = colour(255, 150, 160, 170)
-    local gold = colour(255, 255, 215, 60)
-    local green = colour(255, 126, 211, 115)
-    rect(x, y, w, h, colour(220, 18, 26, 34))
-    rect(x, y + h - 3 * scale, w, 3 * scale, gold)
-
-    local cell = math.max(1, math.floor(2 * scale + 0.5))
-    local function text(px, py, s, c)
-        local cx = px
-        s = tostring(s):upper()
-        for i = 1, #s do
-            local g = GLYPHS[s:sub(i, i)]
-            if g then
-                for r = 1, 5 do
-                    local row = g[r]
-                    for col = 1, 4 do
-                        if row:sub(col, col) == '1' then
-                            rect(cx + (col - 1) * cell, py + (5 - r) * cell,
-                                 cell, cell, c or white)
-                        end
-                    end
-                end
-            end
-            cx = cx + 5 * cell
-        end
-        return cx
-    end
-
-    local pad = 10 * scale
-    text(x + pad, y + h - head_h + 10 * scale, 'AUTOCHAT v' .. M.version, gold)
-    text(x + pad, y + h - head_h - 8 * scale,
-         'K=CLOSE  SENT ' .. tostring(M.sent or 0)
-         .. '  PEERS ' .. tostring(M.last_peers or '?'), dim)
-
-    for i = 1, #PANEL.rows do
-        local row = PANEL.rows[i]
-        local ry = y + h - head_h - 14 * scale - i * row_h
-        rect(x + pad, ry, w - 2 * pad, row_h - 3 * scale,
-             (PANEL.hover == row.id) and colour(220, 40, 56, 70)
-                                      or colour(200, 26, 36, 46))
-        local label
-        if row.id == 0 then
-            label = 'TIMED SEND: ' .. (cfg.timer_on and 'ON' or 'OFF')
-        elseif row.id == 1 then
-            label = 'INTERVAL ' .. tostring(cfg.interval) .. 'S   -'
-        elseif row.id == 2 then
-            label = 'INTERVAL ' .. tostring(cfg.interval) .. 'S   +'
-        else
-            label = 'CLOSE PANEL'
-        end
-        text(x + pad * 2, ry + (row_h - 3 * scale) / 2 - 3 * scale, label,
-             (row.id == 0 and cfg.timer_on) and green or white)
-    end
-
-    text(x + pad, y + 8 * scale,
-         'MSG ' .. cfg.message .. '  ' .. string.format('%.0f', cfg.elapsed)
-         .. '/' .. tostring(cfg.interval) .. 'S', dim)
-end
 local function mouse_state()
     if not user then return nil end
     local win = user.GetForegroundWindow()
@@ -751,11 +797,101 @@ local function mouse_state()
     if not (cw > 0 and ch > 0) then return nil end
     local cx, cy = point[0], point[1]
     if cx < 0 or cy < 0 or cx >= cw or cy >= ch then return nil end
-    -- client pixels (top-left) -> Gui units (bottom-left)
+    -- Returned in the SAME space the draw code records its regions in: engine
+    -- resolution pixels with a bottom-left origin. The client rect is not always the
+    -- render resolution (borderless / DPI scaling), so the window size is remembered
+    -- and used to scale, instead of assuming the two are equal.
+    PANEL.client_w, PANEL.client_h = cw, ch
     return cx * PANEL.rw / cw, (ch - cy) * PANEL.rh / ch
 end
-local function world_ready()
-    refresh_engine()
+-- ---------------------------------------------------------------- 11c. editing
+-- Keyboard entry for the message field, built the way Super Earth Armory Forge builds
+-- its name/search entry: a table of {virtual-key, normal, shifted} and an edge detector
+-- that also auto-repeats.
+--
+-- Worth being explicit: while the field has focus this polls the WHOLE KEYBOARD via
+-- GetAsyncKeyState, not just the K hotkey. That is the same thing Armory does to accept
+-- typed text, and it only happens while the panel is open AND the message box is
+-- focused; the rest of the time the only key read is K. Nothing is logged or sent
+-- anywhere -- the characters go into the message field and nowhere else.
+local NAME_KEYS = {}
+for c = 0x41, 0x5A do
+    NAME_KEYS[#NAME_KEYS + 1] = {c, string.char(c + 32), string.char(c)}
+end
+for n = 0, 9 do
+    NAME_KEYS[#NAME_KEYS + 1] = {0x30 + n, tostring(n), tostring(n)}
+    NAME_KEYS[#NAME_KEYS + 1] = {0x60 + n, tostring(n), tostring(n)}
+end
+for _, k in ipairs({{0x20, ' ', ' '}, {0xBD, '-', '_'}, {0x6D, '-', '-'},
+                    {0xBE, '.', '.'}, {0xBC, ',', ','}, {0xBB, '=', '+'},
+                    {0xBA, ';', ':'}, {0xBF, '/', '?'}, {0xDE, "'", '"'},
+                    {0xDB, '[', '{'}, {0xDD, ']', '}'}, {0xC0, '`', '~'}}) do
+    NAME_KEYS[#NAME_KEYS + 1] = k
+end
+
+local VK = {SHIFT = 0x10, CTRL = 0x11, ENTER = 0x0D, ESCAPE = 0x1B,
+            BACKSPACE = 0x08, SPACE = 0x20}
+
+-- Edge detection with auto-repeat: true on the press, then again after a delay, then
+-- repeatedly. Identical timings to Armory's, so typing feels the same.
+M.key_held = M.key_held or {}
+local key_held = M.key_held
+local function pressed(name, vk, now)
+    local down = key_down(vk)
+    local h = key_held[name]
+    if not down then key_held[name] = nil return false end
+    if not h then key_held[name] = {next = now + 0.4} return true end
+    if now >= h.next then h.next = now + 0.08 return true end
+    return false
+end
+
+local MAX_MESSAGE = 200
+
+-- Returns the edited text, or nil to keep the current one. Pure enough to test offline:
+-- it takes `now` and reads keys through key_down, which the harness controls.
+local function edit_text(now)
+    local text = PANEL.edit_text
+    if text == nil then text = cfg.message or '' end
+
+    if pressed('Enter', VK.ENTER, now) then
+        PANEL.edit_text = nil
+        return text, 'commit'
+    end
+    if pressed('Escape', VK.ESCAPE, now) then
+        PANEL.edit_text = nil
+        return nil, 'cancel'
+    end
+    if pressed('Backspace', VK.BACKSPACE, now) then
+        -- Walk back over a whole UTF-8 character, not one byte: a byte cut in the
+        -- middle of a multi-byte character produces text that cannot be decoded.
+        local trimmed = text:gsub('[\194-\244][\128-\191]*$', '')
+        if #trimmed == #text then trimmed = text:sub(1, -2) end
+        text = trimmed
+    end
+    local shift = key_down(VK.SHIFT)
+    for _, k in ipairs(NAME_KEYS) do
+        if #text < MAX_MESSAGE and pressed('N' .. k[1], k[1], now) then
+            text = text .. (shift and k[3] or k[2])
+        end
+    end
+    PANEL.edit_text = text
+    return text, 'typing'
+end
+
+-- Exposed for the offline tests: the editing logic is pure bookkeeping around key
+-- state, so it can be driven without the engine.
+function M.debug_edit_text(now) return edit_text(now or 0) end
+function M.debug_set_editing(on)
+    PANEL.editing = on and true or false
+    PANEL.edit_text = nil
+    PANEL.edit_backup = cfg.message
+end
+function M.debug_set_edit_buffer(value)
+    PANEL.edit_text = value
+    return PANEL.edit_text
+end
+
+local function world_ready()    refresh_engine()
     if not sr then return false end
     local ok, world = pcall(sr.Application.main_world)
     if not ok or world == nil then return false end
@@ -797,12 +933,11 @@ end
 -- string changes the GUI is rebuilt, which is the ONLY way a retained screen GUI
 -- ever updates -- see panel_frame.
 local function panel_signature()
-    local scale, x, y, w, h = geometry(PANEL.rw, PANEL.rh)
+    local s, ox, oy = PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy
     return table.concat({
         PANEL.rw, PANEL.rh,
-        math.floor(scale * 1000 + 0.5), math.floor(x + 0.5), math.floor(y + 0.5),
-        math.floor(w + 0.5), math.floor(h + 0.5),
-        tostring(PANEL.hover),
+        string.format('%.3f', s or 0), ox or 0, oy or 0,
+        tostring(PANEL.hover), tostring(PANEL.editing), tostring(PANEL.hint),
         cfg.timer_on and 'on' or 'off', cfg.interval,
         string.format('%.0f', cfg.elapsed), cfg.message,
         tostring(M.sent or 0), tostring(M.last_peers or '-'),
@@ -810,68 +945,217 @@ local function panel_signature()
     }, '|')
 end
 
--- Draw everything in one pass, exactly as Armory's draw() does. Nothing here may
--- allocate per frame: this runs only when the signature changes.
+-- ---------------------------------------------------------------- 11b. drawing
+-- The drawing primitives below are copied from Super Earth Armory Forge's draw()
+-- rather than invented, because its panel is the look that was asked for and it is
+-- known to work in this game:
+--
+--   * panel units -> screen pixels, every edge ROUNDED TO A WHOLE PIXEL (fractional
+--     positions are what make text and lines look soft at 1440p/4K);
+--   * a top-left origin, converted to the engine's bottom-left space in one place;
+--   * text that auto-shrinks in whole pixels to fit a width limit, with the engine
+--     measuring when it can and a per-character estimate when it cannot;
+--   * the same palette and z-layers.
+--
+-- The panel is W x H panel units; `s` is the only thing that changes with resolution.
+local W_PANEL, H_PANEL = 460, 250
+
+local function UI() return sr.Gui, sr.Vector3, sr.Vector2, sr.Color end
+
+-- px/rect/text close over live locals, so the layout numbers below read exactly like
+-- Armory's: plain panel units, no per-call scaling arithmetic.
+local UX = {}
+
 local function draw_panel()
-    local scale, x, y, w, h, row_h, head_h = geometry(PANEL.rw, PANEL.rh)
-    local white = colour(255, 242, 244, 247)
-    local dim = colour(255, 150, 160, 170)
-    local gold = colour(255, 255, 215, 60)
-    local green = colour(255, 126, 211, 115)
-    rect(x, y, w, h, colour(220, 18, 26, 34))
-    rect(x, y + h - 3 * scale, w, 3 * scale, gold)
+    if not (sr and sr.Gui and sr.Vector3 and sr.Vector2 and sr.Color) then return end
+    local Gui, Vector3, Vector2, Color = UI()
+    local gui = PANEL.gui
+    local width, height = PANEL.rw, PANEL.rh
 
-    local cell = math.max(1, math.floor(2 * scale + 0.5))
-    local function text(px, py, s, c)
-        local cx = px
-        s = tostring(s):upper()
-        for i = 1, #s do
-            local g = GLYPHS[s:sub(i, i)]
-            if g then
-                for r = 1, 5 do
-                    local row = g[r]
-                    for col = 1, 4 do
-                        if row:sub(col, col) == '1' then
-                            rect(cx + (col - 1) * cell, py + (5 - r) * cell,
-                                 cell, cell, c or white)
-                        end
-                    end
-                end
+    -- same clamp Armory uses: never bigger than the screen, never past the edge
+    local want = height / 1080 * 0.8 * (PANEL.ui_scale or 1)
+    local fit = height * 0.96 / H_PANEL
+    local s = math.min(want, fit, (width - 60) / W_PANEL)
+    if s <= 0 then return end
+    local function px(v) return math.floor(v + 0.5) end
+    local ox = px(30 * s)
+    local oy = px((height - H_PANEL * s) / 2)
+    if oy < 0 then oy = 0 end
+
+    local function color(r, g, b, a) return Color(a or 255, r, g, b) end
+    local C = {
+        BG = color(11, 12, 13, 246), PANEL = color(18, 19, 21),
+        ROW = color(26, 28, 31), ROW_HI = color(34, 36, 40),
+        FIELD = color(10, 11, 12), LINE = color(44, 46, 50), LINE2 = color(62, 65, 70),
+        TEXT = color(233, 230, 220), MUTED = color(143, 146, 150), DIM = color(93, 97, 102),
+        YELLOW = color(255, 231, 16), INK = color(18, 17, 4),
+        SOFT = color(255, 231, 16, 26), GOOD = color(92, 201, 170), BAD = color(255, 107, 91),
+    }
+
+    local function rect(x, y, w, h, c, z)
+        local x0, x1 = px(ox + x * s), px(ox + (x + w) * s)
+        local y0, y1 = px(oy + y * s), px(oy + (y + h) * s)
+        if x1 <= x0 then x1 = x0 + 1 end
+        if y1 <= y0 then y1 = y0 + 1 end
+        pcall(Gui.rect, gui, Vector3(x0, height - y1, z or 951),
+              Vector2(x1 - x0, y1 - y0), c)
+    end
+    local function font_px(size) return math.max(7, px(size * s)) end
+
+    -- Engine measurement when available, else the same per-character estimate Armory
+    -- uses (deliberately on the wide side).
+    local function measure_px(value, sz)
+        if FONT.ok then
+            local ok, lo, hi = pcall(Gui.text_extents, gui, value, FONT.font, sz)
+            if ok and lo and hi then
+                local a = (lo.x ~= nil and lo.x) or lo[1]
+                local b = (hi.x ~= nil and hi.x) or hi[1]
+                if a and b and b > a then return b - a end
             end
-            cx = cx + 5 * cell
         end
-        return cx
+        local w = 0
+        for ch in value:gmatch('.') do
+            local b = ch:byte()
+            if b >= 128 then w = w + (b >= 192 and 1.0 or 0)
+            else
+                w = w + (ch:find('[%%@MWmw]') and 0.98
+                         or ch:find('[%u+=<>#&]') and 0.8
+                         or ch:find('%d') and 0.66
+                         or ch:find('[%s%.,:;!|il\'%-%(%)%[%]]') and 0.36
+                         or 0.62)
+            end
+        end
+        return w * sz
     end
 
-    local pad = 10 * scale
-    text(x + pad, y + h - head_h + 10 * scale, 'AUTOCHAT v' .. M.version, gold)
-    text(x + pad, y + h - head_h - 8 * scale,
-         'K=CLOSE  SENT ' .. tostring(M.sent or 0)
-         .. '  PEERS ' .. tostring(M.last_peers or '?'), dim)
-
-    for i = 1, #PANEL.rows do
-        local row = PANEL.rows[i]
-        local ry = y + h - head_h - 14 * scale - i * row_h
-        rect(x + pad, ry, w - 2 * pad, row_h - 3 * scale,
-             (PANEL.hover == row.id) and colour(220, 40, 56, 70)
-                                      or colour(200, 26, 36, 46))
-        local label
-        if row.id == 0 then
-            label = 'TIMED SEND: ' .. (cfg.timer_on and 'ON' or 'OFF')
-        elseif row.id == 1 then
-            label = 'INTERVAL ' .. tostring(cfg.interval) .. 'S   -'
-        elseif row.id == 2 then
-            label = 'INTERVAL ' .. tostring(cfg.interval) .. 'S   +'
-        else
-            label = 'CLOSE PANEL'
+    -- Real text, shrunk in whole pixels to fit `limit`, with right/center alignment.
+    -- Returns its width in panel units. `nil` limit means no shrinking.
+    local function text(value, x, y, size, c, limit, align)
+        if value == nil or value == '' then return 0 end
+        value = tostring(value)
+        local sz = font_px(size)
+        local w = measure_px(value, sz) / s
+        while limit and w > limit and sz > 6 do
+            sz = math.max(6, math.min(sz - 1, math.floor(sz * limit / w)))
+            w = measure_px(value, sz) / s
         end
-        text(x + pad * 2, ry + (row_h - 3 * scale) / 2 - 3 * scale, label,
-             (row.id == 0 and cfg.timer_on) and green or white)
+        local tx = x
+        if align == 'right' then tx = x - w elseif align == 'center' then tx = x - w / 2 end
+        local top = y + (size - sz / s) * 0.5
+        if FONT.ok then
+            local ok = pcall(Gui.text, gui, value, FONT.font, sz, FONT.material,
+                             Vector3(px(ox + tx * s), px(height - oy - top * s - sz * 0.8), 954),
+                             c or C.TEXT)
+            if not ok then FONT.ok = false end
+        end
+        if not FONT.ok then
+            -- Fallback: the 4x5 bitmap font, so a failed font lookup degrades the
+            -- look instead of leaving a blank panel.
+            bitmap_text(ox + tx * s, height - oy - (top + size) * s, value,
+                        math.max(1, math.floor(sz / 5 + 0.5)), c or C.TEXT)
+        end
+        return w
+    end
+    local function border(x, y, w, h, c, z)
+        rect(x, y, w, 1, c, z or 952); rect(x, y + h - 1, w, 1, c, z or 952)
+        rect(x, y, 1, h, c, z or 952); rect(x + w - 1, y, 1, h, c, z or 952)
+    end
+    -- Text cut to fit at a readable size: "LONG MESSAGE GOES HER.."
+    local function cut(value, size, limit)
+        value = tostring(value)
+        if measure_px(value, font_px(size)) / s <= limit then return value end
+        local function shorter(v)
+            local w = (v:gsub('[\194-\244][\128-\191]*$', ''))
+            return #w < #v and w or v:sub(1, -2)
+        end
+        while #value > 3 and measure_px(value .. '..', font_px(size)) / s > limit do
+            value = shorter(value)
+        end
+        return (value:gsub('[%s,%-]+$', '')) .. '..'
     end
 
-    text(x + pad, y + 8 * scale,
-         'MSG ' .. cfg.message .. '  ' .. string.format('%.0f', cfg.elapsed)
-         .. '/' .. tostring(cfg.interval) .. 'S', dim)
+    PANEL.regions = PANEL.regions or {}
+    local regions = PANEL.regions
+    for i = #regions, 1, -1 do regions[i] = nil end
+    local function region(key, x, y, w, h)
+        regions[#regions + 1] = {
+            key = key,
+            x = px(ox + x * s), y = px(height - oy - (y + h) * s),
+            w = px(w * s), h = px(h * s),
+        }
+    end
+
+    -- ---- layout (panel units, top-left origin, exactly like Armory's screens) ----
+    local PAD = 14
+    local HEAD = 40
+    rect(0, 0, W_PANEL, H_PANEL, C.BG, 950)
+    rect(0, 0, 4, H_PANEL, C.YELLOW)                       -- the accent stripe
+    border(0, 0, W_PANEL, H_PANEL, C.LINE2, 952)
+    rect(4, HEAD, W_PANEL - 4, 1, C.LINE2, 952)
+
+    text('AUTOCHAT', PAD, 11, 15, C.YELLOW)
+    text('v' .. M.version, W_PANEL - PAD, 13, 11, C.DIM, nil, 'right')
+    text('K CLOSES   SENT ' .. tostring(M.sent or 0)
+         .. '   PEERS ' .. tostring(M.last_peers or '?'),
+         PAD, 27, 10, C.MUTED, W_PANEL - PAD * 2)
+
+    local y = HEAD + 12
+
+    -- message field: click it, then type. This is the row that needed real text.
+    text('MESSAGE', PAD, y, 10, C.DIM)
+    y = y + 14
+    local focus = PANEL.editing
+    rect(PAD, y, W_PANEL - PAD * 2, 26, focus and C.ROW_HI or C.FIELD, 953)
+    border(PAD, y, W_PANEL - PAD * 2, 26, focus and C.YELLOW or C.LINE, 954)
+    local shown = cfg.message or ''
+    if focus then shown = shown .. '_' end                     -- the caret
+    local field_w = W_PANEL - PAD * 2 - 16
+    text(cut(shown, 13, field_w), PAD + 8, y + 7, 13,
+         focus and C.TEXT or C.MUTED, field_w)
+    region('message', PAD, y, W_PANEL - PAD * 2, 26)
+    y = y + 34
+
+    -- timed send
+    rect(PAD, y, W_PANEL - PAD * 2, 26,
+         PANEL.hover == 'timer' and C.ROW_HI or C.ROW, 953)
+    text('TIMED SEND', PAD + 8, y + 7, 13, C.TEXT)
+    text(cfg.timer_on and 'ON' or 'OFF', W_PANEL - PAD - 8, y + 7, 13,
+         cfg.timer_on and C.GOOD or C.DIM, nil, 'right')
+    region('timer', PAD, y, W_PANEL - PAD * 2, 26)
+    y = y + 30
+
+    -- interval
+    rect(PAD, y, W_PANEL - PAD * 2, 26,
+         PANEL.hover == 'interval' and C.ROW_HI or C.ROW, 953)
+    text('INTERVAL', PAD + 8, y + 7, 13, C.TEXT)
+    local btn_w, btn_h = 26, 20
+    local right = W_PANEL - PAD - 8
+    rect(right - btn_w, y + 3, btn_w, btn_h,
+         PANEL.hover == 'plus' and C.ROW_HI or C.FIELD, 954)
+    text('+', right - btn_w / 2, y + 7, 13, C.YELLOW, nil, 'center')
+    region('plus', right - btn_w, y + 3, btn_w, btn_h)
+    rect(right - btn_w * 3 - 6, y + 3, btn_w, btn_h,
+         PANEL.hover == 'minus' and C.ROW_HI or C.FIELD, 954)
+    text('-', right - btn_w * 2.5 - 6, y + 7, 13, C.YELLOW, nil, 'center')
+    region('minus', right - btn_w * 3 - 6, y + 3, btn_w, btn_h)
+    text(tostring(cfg.interval) .. 'S', right - btn_w * 3 - 14, y + 7, 13,
+         C.TEXT, nil, 'right')
+    y = y + 34
+
+    text('NEXT IN ' .. string.format('%.0f', cfg.elapsed) .. 'S   '
+         .. (cfg.timer_on and 'RUNNING' or 'STOPPED'),
+         PAD, y, 10, cfg.timer_on and C.GOOD or C.DIM, W_PANEL - PAD * 2)
+    y = y + 18
+    text('CLICK THE MESSAGE BOX, TYPE, ENTER TO SAVE', PAD, y, 10, C.DIM,
+         W_PANEL - PAD * 2)
+    y = y + 18
+    if PANEL.hint then text(PANEL.hint, PAD, y, 10, C.YELLOW, W_PANEL - PAD * 2) end
+
+    UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
+    UX.text, UX.rect = text, rect
+    -- Remembered for the signature and the hit-test, so the layout that was drawn is
+    -- the layout that is compared and clicked against.
+    PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy = s, ox, oy
 end
 
 -- Assigned now that take_cursor / release_cursor / panel_clear all exist. The
@@ -922,41 +1206,79 @@ local function panel_frame()
     local clicked = down and not mouse_was_down
     mouse_was_down = down
 
-    local scale, x, y, w, h, row_h, head_h = geometry(PANEL.rw, PANEL.rh)
-    local pad = 10 * scale
-    local hover = -1
-    if gx then
-        for i = 1, #PANEL.rows do
-            local row = PANEL.rows[i]
-            local ry = y + h - head_h - 14 * scale - i * row_h
-            if gx >= x + pad and gx <= x + w - pad
-               and gy >= ry and gy <= ry + row_h - 3 * scale then
-                hover = row.id
-                if clicked then
-                    if row.id == 0 then
-                        cfg.timer_on = not cfg.timer_on
-                        cfg.elapsed = 0
-                        config_save()
-                        note('panel: timed send ' .. (cfg.timer_on and 'ON' or 'OFF'))
-                    elseif row.id == 1 then
-                        cfg.interval = math.max(5, cfg.interval - 5)
-                        config_save()
-                    elseif row.id == 2 then
-                        cfg.interval = math.min(3600, cfg.interval + 5)
-                        config_save()
-                    elseif row.id == 3 then
-                        set_panel_open(false)
-                        note('panel closed from its own button')
-                    end
-                    PANEL.version = (PANEL.version or 0) + 1
-                    write_status()
-                    if not PANEL.open then return end
-                end
+    -- Panel-space hit testing, the way Armory does it: the regions are recorded in
+    -- SCREEN pixels while drawing, and the pointer is converted into the same space.
+    -- Nothing recomputes the layout here, so a region can never disagree with what was
+    -- drawn -- which is what happened when the two were derived separately.
+    local function to_panel(cx, cy)
+        if not (UX.s and UX.s > 0) then return nil end
+        return (cx - UX.ox) / UX.s, (UX.height - cy - UX.oy) / UX.s
+    end
+    local function hit(px_, py_)
+        local regions = PANEL.regions
+        if not (regions and px_) then return nil end
+        for i = 1, #regions do
+            local r = regions[i]
+            if px_ >= r.x and px_ <= r.x + r.w
+               and py_ >= r.y and py_ <= r.y + r.h then
+                return r.key
             end
         end
+        return nil
     end
-    PANEL.hover = hover
+
+    -- gx/gy are already in engine resolution with a bottom-left origin, which is
+    -- exactly the space the regions were recorded in, so no further conversion.
+    local hovered = hit(gx, gy)
+    PANEL.hover = hovered
+
+    if clicked and hovered then
+        if hovered == 'timer' then
+            cfg.timer_on = not cfg.timer_on
+            cfg.elapsed = 0
+            config_save()
+            note('panel: timed send ' .. (cfg.timer_on and 'ON' or 'OFF'))
+        elseif hovered == 'minus' then
+            cfg.interval = math.max(5, cfg.interval - 5)
+            config_save()
+        elseif hovered == 'plus' then
+            cfg.interval = math.min(3600, cfg.interval + 5)
+            config_save()
+        elseif hovered == 'message' then
+            PANEL.editing = not PANEL.editing
+            PANEL.hint = PANEL.editing
+                        and 'TYPE THE MESSAGE   ENTER SAVES   ESC CANCELS'
+                        or nil
+            PANEL.edit_backup = cfg.message
+            note('panel: message editing ' .. (PANEL.editing and 'ON' or 'OFF'))
+        end
+        PANEL.version = (PANEL.version or 0) + 1
+        write_status()
+    end
     if not PANEL.open then return end
+
+    -- Message editing. While the field has focus the editor owns the keyboard, so the
+    -- K hotkey cannot fire mid-word.
+    if PANEL.editing then
+        local now = (M.frames or 0) / 120
+        local value, what = edit_text(now)
+        if what == 'commit' then
+            cfg.message = value or cfg.message
+            config_save()
+            PANEL.editing = nil
+            PANEL.hint = 'MESSAGE SAVED'
+            note('panel: message set to: ' .. tostring(cfg.message))
+        elseif what == 'cancel' then
+            cfg.message = PANEL.edit_backup or cfg.message
+            PANEL.editing = nil
+            PANEL.hint = 'EDIT CANCELLED'
+            note('panel: message edit cancelled')
+        else
+            cfg.message = value or cfg.message
+            PANEL.hint = 'ENTER SAVES   ESC CANCELS'
+        end
+        PANEL.version = (PANEL.version or 0) + 1
+    end
 
     -- One path for both creating and updating, exactly like Armory: a retained screen
     -- GUI renders the primitives it was given until it is REBUILT, so the rebuild is
@@ -979,8 +1301,25 @@ local function panel_frame()
         PANEL.lfail = 0
         PANEL.gui = gui
         PANEL.draw_guis = {{gui = gui}}
+        -- The signature is recorded only AFTER the draw succeeds. Assigning it first
+        -- meant a throwing draw left the panel marked "already drawn": the signature
+        -- matched from then on, nothing was ever drawn again, and the only symptom was
+        -- an empty panel. A failed draw must leave the panel dirty so the next frame
+        -- retries rather than rendering nothing forever.
+        PANEL.sig = nil
+        local draw_ok, draw_err = pcall(draw_panel)
+        if not draw_ok then
+            -- Named, not swallowed. A throwing draw leaves the panel blank, and
+            -- "blank panel" is indistinguishable from "font missing" or "wrong
+            -- origin" without the message.
+            M.draw_errors = (M.draw_errors or 0) + 1
+            M.draw_error_text = tostring(draw_err)
+            if M.draw_errors <= 3 then
+                note('draw_panel error: ' .. tostring(draw_err))
+            end
+            return
+        end
         PANEL.sig = signature
-        draw_panel()
     end
 end
 
@@ -1139,22 +1478,26 @@ function M.debug_panel_signature() return panel_signature() end
 function M.debug_cfg() return cfg end
 function M.debug_timed_send(dt) timed_send(dt) end
 function M.debug_send_text(text, verbose, force) return M.send_text(text, verbose, force) end
--- Panel layout is pure arithmetic, so it can be checked without an engine. A panel
--- that draws off-screen or with overlapping rows is a defect the tests can catch
--- even though the rendering itself cannot be exercised here.
+-- Panel layout is pure arithmetic, so it can be checked without an engine: a panel
+-- that would draw off-screen is a defect the tests can catch even though the rendering
+-- itself cannot be exercised here. The numbers come from the same expression the
+-- drawing uses, so a layout change cannot drift away from this check.
 function M.debug_geometry(rw, rh)
     PANEL.rw, PANEL.rh = rw, rh
-    local scale, x, y, w, h, row_h, head_h = geometry(rw, rh)
-    local rows = {}
-    for i = 1, #PANEL.rows do
-        rows[i] = {
-            y = y + h - head_h - 14 * scale - i * row_h,
-            h = row_h - 3 * scale,
-        }
-    end
-    return {scale = scale, x = x, y = y, w = w, h = h,
-            row_h = row_h, head_h = head_h, rows = rows,
-            resolution = {rw = rw, rh = rh}}
+    local want = rh / 1080 * 0.8 * (PANEL.ui_scale or 1)
+    local fit = rh * 0.96 / H_PANEL
+    local s = math.min(want, fit, (rw - 60) / W_PANEL)
+    local ox = math.floor(0.5 + 30 * s)
+    local oy = math.floor(0.5 + (rh - H_PANEL * s) / 2)
+    if oy < 0 then oy = 0 end
+    return {
+        scale = s,
+        x = ox, y = oy,
+        w = math.floor(0.5 + W_PANEL * s),
+        h = math.floor(0.5 + H_PANEL * s),
+        panel_units = {w = W_PANEL, h = H_PANEL},
+        resolution = {rw = rw, rh = rh},
+    }
 end
 function M.debug_ready() return world_ready() end
 function M.debug_key(K) return key_pressed(K) end
@@ -1282,7 +1625,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.3.0  —— SEND + IN-GAME PANEL
+--[===[AutoChat / 自动聊天  v0.4.0  —— SEND + IN-GAME PANEL
 
 English
 -------
@@ -1304,7 +1647,8 @@ The panel (hotkey K)
   - draws every pixel, text included, with Gui.rect: no engine font, no material
   - while it is open the mouse is released so you can click; on close the cursor
     and the clip rectangle are restored exactly as they were
-  - rows: TIMED SEND on/off, INTERVAL -/+, CLOSE PANEL
+  - a MESSAGE box you can click and type into (ENTER saves, ESC cancels),
+    a TIMED SEND toggle and INTERVAL -/+ buttons
 
 Timed send
 ----------
