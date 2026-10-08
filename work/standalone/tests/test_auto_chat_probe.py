@@ -27,6 +27,10 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("lupa is required: python -m pip install lupa")
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import gates  # noqa: E402  (needs the path setup above)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _walk_up(relative):
     current = HERE
@@ -41,6 +45,20 @@ def _walk_up(relative):
 
 
 SOURCE = _walk_up(os.path.join("src", "auto_chat.lua"))
+
+# Where Super Earth Armory Forge's source might be on this machine. This repo does
+# NOT redistribute it, so the reference-comparison test skips when it is absent --
+# a skip with a reason, never a silent pass.
+# tests -> standalone -> work -> auto-chat -> mods -> workspace root
+_WORKSPACE = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.dirname(HERE)))))
+REFERENCE_SOURCE_CANDIDATES = [
+    os.path.join(_WORKSPACE, "outputs", "validated-2026-10-04", "hud-compatibility",
+                 "sources", "installed-Super-Earth-Armory-Forge-v6.2.1-0-0.lua"),
+    os.path.join(_WORKSPACE, "outputs", "validated-2026-10-05", "crash-165213-no-smooth",
+                 "source-audit", "sources",
+                 "mods__patpatpatrick__mod_lag_finder.lua"),
+]
 
 # ---------------------------------------------------------------- fake engine
 # A tiny flat memory model. Every read the mod performs goes through it, so the
@@ -887,6 +905,54 @@ class AutoChatProbeTest(unittest.TestCase):
                              '%s lives in kernel32; declaring it as user32 both '
                              'misleads readers and risks a mismatched prototype'
                              % kernel_symbol)
+
+    def test_user32_prototypes_match_the_reference_source_verbatim(self):
+        """Compare our declarations against Armory Forge's OWN source, not a table.
+
+        The whole safety argument for declaring user32 is "our prototypes are
+        byte-identical to the reference's, so whichever mod declares first the
+        process holds one identical signature and neither is disabled". Asserting
+        that against a hand-copied table in gates.py only proves the table and the
+        source agree with each other -- both could be wrong together.
+
+        This reads the reference mod's declaration list directly and compares.
+
+        If the reference source is not present (this repo deliberately does NOT
+        redistribute it), the test SKIPS with a clear reason rather than passing
+        silently -- a silent pass here would be worse than no test.
+        """
+        reference = None
+        for candidate in REFERENCE_SOURCE_CANDIDATES:
+            if os.path.exists(candidate):
+                reference = candidate
+                break
+        if reference is None:
+            self.skipTest("reference source not present (not redistributed): %s"
+                          % ", ".join(REFERENCE_SOURCE_CANDIDATES))
+
+        with io.open(reference, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+
+        # The reference declares each prototype as a quoted string in a table. If a
+        # prototype is not there, the reference is not declaring that name at all,
+        # which is worth reporting rather than silently skipping.
+        ours = self.source
+        checked, absent = [], []
+        for name, prototype in gates.REFERENCE_PROTOTYPES.items():
+            if prototype in text:
+                checked.append(name)
+                self.assertIn(prototype, ours,
+                              "the reference declares %s as %r but our source does "
+                              "not carry that exact string; a differing prototype "
+                              "would change the C signature other mods see"
+                              % (name, prototype))
+            else:
+                absent.append(name)
+        self.assertTrue(checked,
+                        "not one of the reference prototypes was found in %s; "
+                        "either the reference layout changed or the expected table "
+                        "in gates.py is wrong (absent: %s)"
+                        % (reference, ", ".join(sorted(absent))))
 
     def test_user32_is_the_only_non_kernel_dependency(self):
         """Nothing beyond user32+kernel32 should be loaded: each DLL is another
