@@ -244,18 +244,57 @@ def do_remove(args):
     return 0
 
 
+def do_library_only(args):
+    """Refresh the library directory WITHOUT touching the manager's index.
+
+    The library is just files on disk, so this is safe while the manager runs: nothing
+    reads them until the manager next loads. The INDEX is the part that must not be
+    edited underneath a running manager, because it holds that file in memory and writes
+    its own copy back over any edit.
+
+    Split out because of what actually happens: the manager is nearly always open, so
+    "close it and run --import" kept not happening and the library sat at an old version.
+    This gets the safe half done immediately.
+    """
+    zip_path = os.path.abspath(args.zip or newest_zip())
+    target = os.path.join(LIBRARY, LIB_DIR_NAME)
+    print("artifact : %s (%d bytes)" % (os.path.basename(zip_path),
+                                        os.path.getsize(zip_path)))
+    build_library(zip_path, target)
+    print("library  : %s" % target)
+    for root, dirs, files in os.walk(target):
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            print("   %-42s %8d" % (os.path.relpath(path, target), os.path.getsize(path)))
+    data = load_index()
+    index, entry = find_entry(data)
+    print()
+    if entry is None:
+        print("index    : NOT indexed yet -- run --import with the manager CLOSED")
+    else:
+        print("index    : indexed at position %d" % index)
+        print("           contentHash %s"
+              % ("matches the refreshed library" if entry.get("contentHash") == content_hash(target)
+                 else "is STALE -- run --import with the manager CLOSED"))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="report state, change nothing")
     group.add_argument("--import", dest="do_import", action="store_true",
-                       help="build the library entry and index it")
+                       help="build the library and index it (manager must be closed)")
+    group.add_argument("--library-only", dest="library_only", action="store_true",
+                       help="refresh library files only; safe while the manager runs")
     group.add_argument("--remove", action="store_true", help="undo the import")
     parser.add_argument("--zip", default=None, help="override the artifact")
     args = parser.parse_args()
     if args.check:
         return check(args)
+    if args.library_only:
+        return do_library_only(args)
     if args.do_import:
         return do_import(args)
     return do_remove(args)
