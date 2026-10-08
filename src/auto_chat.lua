@@ -1129,7 +1129,20 @@ local function tick()
     M.frames = M.frames + 1
     if not verified then return end
     pcall(poll_trigger)
-    pcall(panel_frame)
+    -- The panel gets its OWN pcall so a failure is NAMEABLE. Wrapped in the generic
+    -- frame pcall it would be swallowed, the panel would simply not appear, and the
+    -- cause would be invisible -- which is how a mock bug in the mouse path hid
+    -- behind 60 green tests. Logged a few times only, so a per-frame fault cannot
+    -- flood the log.
+    local panel_ok, panel_err = pcall(panel_frame)
+    if not panel_ok then
+        M.panel_errors = (M.panel_errors or 0) + 1
+        if M.panel_errors <= 5 then
+            note('panel_error ' .. tostring(panel_err))
+        elseif M.panel_errors == 6 then
+            note('panel_error: further panel faults suppressed for this session')
+        end
+    end
 
     if M.frames >= next_observe then
         next_observe = M.frames + OBSERVE_FRAMES

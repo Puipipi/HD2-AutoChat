@@ -1449,6 +1449,39 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertGreater(h.gui_created, before,
                            "a resolution change must rebuild the gui")
 
+    def test_a_panel_fault_is_logged_and_then_bounded(self):
+        """A fault inside the panel must be visible, and must not flood the log.
+
+        Wrapped in the generic frame pcall a panel fault is swallowed: the panel just
+        never appears and nothing says why. This is not hypothetical -- a mock that
+        could not allocate `uint32_t[1]` made the mouse path raise on every frame and
+        the only symptom was a panel that did not show. The fault is logged a few
+        times and then suppressed, so a per-frame failure cannot fill the log.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 10)
+        self.assertEqual(1, h.live_guis, "the panel should be up before we break input")
+
+        # mouse_state calls this with no pcall of its own, so breaking it raises
+        # inside panel_frame -- exactly the kind of fault that used to vanish.
+        lua.execute("""
+            local ffi = require('ffi')
+            local u = ffi.load('user32')
+            u.GetCursorPos = nil
+        """)
+        self._run(lua, 40)
+        errors = lua.eval("_G.HD2AutoChat.panel_errors")
+        self.assertIsNotNone(errors, "the panel fault must be counted")
+        self.assertGreaterEqual(errors, 1, "the fault must have been observed")
+        logged = [r for r in h.records
+                  if "panel_error" in str(r.get("text", ""))]
+        self.assertLessEqual(len(logged), 6,
+                             "a per-frame panel fault must be suppressed after a few "
+                             "log lines, not written every frame")
+
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
                        "createremotethread"):
