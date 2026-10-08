@@ -1279,6 +1279,42 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertIn("taken", state)
 
     # ------------------------------------------------------------ timed send
+    def test_a_refused_timed_send_records_why_for_the_panel(self):
+        """A refusal must leave a trace the PLAYER can see, not only a log line.
+
+        This is how "timed send does nothing" was reported: the timer was firing on
+        schedule and the send was being refused because the squad was empty -- correct
+        behaviour -- but the only record was a line in a log file nobody opens. The
+        panel prints this field, so the same situation now explains itself on screen.
+        """
+        lua, h = fresh_image(others=0)          # a session with nobody else in it
+        mod = h.load(SOURCE)
+        cfg = mod.debug_cfg()
+        cfg["timer_on"] = True
+        cfg["interval"] = 5
+        cfg["elapsed"] = 0
+        mod.debug_timed_send(6)                 # past the interval
+        last = mod.debug_last_send()
+        self.assertIsNotNone(last, "the attempt must be recorded")
+        self.assertFalse(last["ok"], "a solo session must refuse")
+        # The panel shows this text upper-cased, so compare without case.
+        self.assertIn("nobody else", str(last["why"]).lower(),
+                      "and the record must SAY why, in words the panel can show")
+
+    def test_a_successful_timed_send_records_how_many_players(self):
+        lua, h = fresh_image(others=2)
+        mod = h.load(SOURCE)
+        cfg = mod.debug_cfg()
+        cfg["timer_on"] = True
+        cfg["interval"] = 5
+        cfg["elapsed"] = 0
+        mod.debug_timed_send(6)
+        last = mod.debug_last_send()
+        self.assertIsNotNone(last, "the attempt must be recorded")
+        self.assertTrue(last["ok"], "with players present the send must go through")
+        self.assertIn("2", str(last["why"]),
+                      "and it must say how many players it reached")
+
     def test_timed_send_does_nothing_until_the_interval_elapses(self):
         lua, h = fresh_image(others=1)
         mod = h.load(SOURCE)

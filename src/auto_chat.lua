@@ -1773,6 +1773,7 @@ end
 function M.debug_font() return {resolved = FONT.resolved, ok = FONT.ok, why = FONT.why, kind = FONT.kind} end
 function M.debug_panel_signature() return panel_signature() end
 function M.debug_cfg() return cfg end
+function M.debug_last_send() return M.last_send end
 function M.debug_timed_send(dt) timed_send(dt) end
 function M.debug_send_text(text, verbose, force) return M.send_text(text, verbose, force) end
 -- Panel layout is pure arithmetic, so it can be checked without an engine: a panel
