@@ -7,7 +7,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | 0.2.0（可发送） |
+| 版本 | 0.2.1（可发送） |
 | 资源名 | `mods/codex/auto_chat` |
 | GUID | `a1000000-0000-4000-8000-000000000022` |
 | 前置 | Bingus Shared Loader v15+ / API 1 |
@@ -82,10 +82,19 @@ size_t VirtualQuery(const void *address, void *info, size_t length);
 
 ## 怎么用
 
-1. 把 `dist/AutoChat-0.2.0.zip` 导入模组管理器，启用 **AutoChat** 与
+1. 把 `dist/AutoChat-0.2.1.zip` 导入模组管理器，启用 **AutoChat** 与
    **Bingus Shared Loader**，部署。
 2. 进游戏，**确保小队里至少还有一名其他玩家**。
-3. 把一行文字写进：
+3. 用随仓库的脚本发（它写触发文件、等一会儿、再把日志贴回来）：
+
+```powershell
+python -B tools/send.py 1433223        # 把这段文字作为一条聊天发出去
+python -B tools/send.py inspect        # 不发送，改为倾倒聊天对象里的可读文本
+python -B tools/send.py find 1433223   # 在聊天对象里搜这段字节，报告命中位置
+python -B tools/send.py --status       # 只看 STATUS 和最近日志，什么都不发
+```
+
+或者手工把一行文字写进：
 
 ```text
 %LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\trigger.txt
@@ -94,6 +103,9 @@ size_t VirtualQuery(const void *address, void *info, size_t length);
 第一行非空内容会被发送一次，然后文件被清空；要再发一遍就再写一次。
 写 `inspect` 则**不发送**，改为把聊天对象里所有可读文本段倾倒进日志——
 这样不用第二个玩家也能确认聊天通道在读。
+
+**发送要求小队里至少还有一名其他玩家。** 只有你一个人的话会得到
+`nobody else in the session`——这是设计内的拒绝，不是故障。
 
 4. 看日志：
 
