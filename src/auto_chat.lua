@@ -972,6 +972,12 @@ local function draw_panel()
     local gui = PANEL.gui
     local width, height = PANEL.rw, PANEL.rh
 
+    -- Resolve the engine font on the first draw. This call is the whole real-text
+    -- path: without it the lookup never runs, the panel draws with the bitmap
+    -- fallback forever, and the symptom is simply "the text looks like the old
+    -- panel" -- the font code was present, correct, and unreachable.
+    font_resolve(gui)
+
     -- same clamp Armory uses: never bigger than the screen, never past the edge
     local want = height / 1080 * 0.8 * (PANEL.ui_scale or 1)
     local fit = height * 0.96 / H_PANEL
@@ -1473,7 +1479,8 @@ function M.debug_cursor_state()
             clip = cursor.clip, engine = cursor.engine,
             was_shown = cursor.was_shown}
 end
-function M.debug_panel() return PANEL end
+;function M.debug_panel() return PANEL end
+function M.debug_font() return {resolved = FONT.resolved, ok = FONT.ok, why = FONT.why, kind = FONT.kind} end
 function M.debug_panel_signature() return panel_signature() end
 function M.debug_cfg() return cfg end
 function M.debug_timed_send(dt) timed_send(dt) end

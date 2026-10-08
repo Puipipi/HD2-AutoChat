@@ -482,11 +482,28 @@ function harness.install()
         Gui = {
             resolution = function() return harness.res_w or 1920, harness.res_h or 1080 end,
             rect = function(gui, position, size, colour) end,
+            material = function(gui, id)
+                harness.material_made = (harness.material_made or 0) + 1
+                return {id = id}
+            end,
+            text = function(gui, value, font, size, material, position, colour)
+                harness.text_drawn = (harness.text_drawn or 0) + 1
+                harness.last_text = value
+            end,
+            text_extents = function(gui, value, font, size)
+                return {x = 0}, {x = #tostring(value) * size * 0.6}
+            end,
         },
         Vector3 = function(x, y, z) return {x = x, y = y, z = z} end,
         Vector2 = function(x, y) return {x = x, y = y} end,
         Color = function(a, r, g, b) return {a = a, r = r, g = g, b = b} end,
         IdString64 = {from_hex = function(s) return s end},
+        Material = {
+            set_texture = function(material, texture_id, atlas_id)
+                harness.texture_set = {material = material, texture = texture_id,
+                                       atlas = atlas_id}
+            end,
+        },
         World = {
             create_screen_gui = function(world, ...)
                 harness.gui_created = harness.gui_created + 1
@@ -615,6 +632,30 @@ function harness.build_image(opts)
     harness.bytes(base + 0x186025d, BOX)
     harness.bytes(base + 0xbeb103,  MSGRPC)
     harness.bytes(base + 0x1097a7c, HIST)
+
+    -- Font resource ids, as the engine fills them in at run time. OFF by default: the
+    -- default image leaves them zero, which is the "engine has not filled them in yet"
+    -- state the mod has to survive. `font_ids = true` populates them so the real-text
+    -- path can be exercised as well as the fallback.
+    if opts.font_ids then
+        -- A minimal but REAL PE header. The font lookup refuses to read its offsets
+        -- until the build stamp checks out, and that check is what stops a valid-looking
+        -- offset from being used on the wrong build -- so the fixture satisfies it
+        -- instead of the mod being written to skip it.
+        local pe_at = 0x100
+        harness.u32(base + 0x3c, pe_at)                 -- e_lfanew
+        harness.bytes(base + pe_at, 'PE\0\0')
+        harness.u32(base + pe_at + 8, 0x6AB3B43F)       -- TimeDateStamp == GAME_STAMP
+        local material_owner = base + 0x5000000
+        -- An IdString64 sits in memory as two dwords, low half first.
+        harness.u32(base + 0x3772268, 0x55667788)
+        harness.u32(base + 0x3772268 + 4, 0x11223344)
+        harness.u32(base + 0x3772ee8, 0xddeeff00)
+        harness.u32(base + 0x3772ee8 + 4, 0x99aabbcc)
+        harness.u64(base + 0x37c5478, material_owner)
+        harness.u32(material_owner + 24, 0x4b5a6978)
+        harness.u32(material_owner + 28, 0x0f1e2d3c)
+    end
 
     local ctx = harness.ctx_base
     local context = opts.context == nil and ctx or opts.context
@@ -1419,6 +1460,68 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertIsNone(value, "cancel must not return the edited text")
         self.assertEqual(original, mod.debug_cfg()["message"],
                          "the stored message must be untouched until Enter")
+
+    # ------------------------------------------------------------ font / drawing
+    def test_panel_draws_even_when_the_font_cannot_be_resolved(self):
+        """A missing font must degrade the LOOK, not blank the panel.
+
+        The default harness image leaves the font ids zeroed, which is exactly the
+        runtime state before the engine fills them in. The panel must still lay out and
+        record its click regions, via the bitmap fallback.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 20)
+        self.assertIn(lua.eval("tostring(_G.HD2AutoChat.draw_errors)"), ("nil",),
+                      "drawing must not fault when the font is unavailable")
+        regions = mod.debug_panel()["regions"]
+        self.assertGreaterEqual(len(regions), 4,
+                                "the panel must still lay out and record its regions "
+                                "without the engine font")
+
+    def test_a_failed_draw_is_not_recorded_as_drawn(self):
+        """A throwing draw must leave the panel dirty so the next frame retries.
+
+        The signature used to be stored BEFORE the draw. A draw that threw therefore
+        left the panel marked "already drawn": every later frame saw a matching
+        signature, drew nothing, and the only symptom was a permanently blank panel
+        with no further errors. This pins the ordering.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 20)
+        panel = mod.debug_panel()
+        self.assertIsNotNone(panel["sig"],
+                             "a successful draw must record its signature")
+        self.assertIsNotNone(panel["ui_s"],
+                             "and must have measured a layout scale")
+
+    def test_the_font_is_actually_attempted_on_the_first_draw(self):
+        """The real-text path must be REACHED, not merely present.
+
+        This is the defect it exists for: font_resolve() was written, correct, and
+        called from nowhere, so the panel silently used the bitmap fallback forever and
+        the only symptom was "the text looks like the old panel". A resolver that is
+        never invoked is invisible to every other test, so this asserts the attempt
+        happened and recorded WHY it went the way it did.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 20)
+        font = mod.debug_font()
+        self.assertTrue(font["resolved"],
+                        "the first draw must attempt to resolve the engine font; if it "
+                        "was never tried the panel is stuck on the bitmap fallback")
+        self.assertIsNotNone(font["why"],
+                             "the resolver must record why it succeeded or failed, so a "
+                             "bitmap panel can be explained from the log rather than "
+                             "guessed at")
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
