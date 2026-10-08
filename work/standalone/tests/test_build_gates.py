@@ -84,11 +84,28 @@ class GateCanFailTest(unittest.TestCase):
 
     # ------------------------------------------------------------- user32
     def test_user32_gate_fires_on_pcall_style_cdef(self):
+        """A user32 declaration with the WRONG prototype must still be rejected.
+
+        The gate no longer bans user32 outright -- the panel legitimately needs
+        GetCursorPos/GetAsyncKeyState/ShowCursor/ClipCursor, declared as verbatim
+        copies of Super Earth Armory Forge's prototypes so that whichever mod
+        declares first, the process holds one identical signature. What must never
+        pass is a DIFFERENT prototype: LuaJIT keeps the first declaration, so a
+        mismatch silently changes what every other mod sees.
+
+        The mutation declares GetCursorPos with a plausible-looking but
+        non-identical prototype -- the shape a careless re-declaration takes.
+        """
         mutated = self.source.replace(
             GET_PROC, GET_PROC + "\n    int GetCursorPos(void *point);")
         failures = gates.check_user32(mutated)
         self.assertTrue(failures, "a user32 declaration must be rejected")
         self.assertIn("GetCursorPos", " ".join(failures))
+
+    def test_user32_gate_accepts_the_reference_prototypes(self):
+        """The approved declarations must pass, or the panel could never ship."""
+        self.assertEqual([], gates.check_user32(self.source),
+                         "the shipped source's user32 declarations must be accepted")
 
     def test_upstream_pattern_really_cannot_see_this_style(self):
         """Pins the reason the extra pattern exists, instead of assuming it."""

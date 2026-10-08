@@ -14,11 +14,41 @@ import re
 # C namespace is process-global and `ffi.cdef` keeps the FIRST declaration, so
 # re-declaring GetCursorPos with a different prototype silently disables every
 # other mod that declared it first. This shipped once.
+#
+# GetCurrentProcessId is deliberately NOT here: it is kernel32, not user32, and the
+# original list misclassified it. That misclassification is why the gate once
+# reported a kernel32 declaration as a user32 clash. See KERNEL32_LOOKALIKES.
 USER32 = frozenset({
     "GetCursorPos", "GetClientRect", "ScreenToClient", "GetForegroundWindow",
-    "GetAsyncKeyState", "GetWindowThreadProcessId", "GetCurrentProcessId",
-    "ShowCursor", "ClipCursor", "SetCursorPos", "GetKeyState",
+    "GetAsyncKeyState", "GetWindowThreadProcessId",
+    "ShowCursor", "ClipCursor", "SetCursorPos", "GetKeyState", "GetClipCursor",
+    "GetSystemMetrics",
 })
+
+# Kernel32 symbols that are frequently mistaken for user32. Declaring these inside a
+# "user32" block is a reader trap and risks a mismatched prototype, so the gate
+# refuses to let them be listed there.
+KERNEL32_LOOKALIKES = frozenset({
+    "GetCurrentProcessId", "GetCurrentProcess", "ReadProcessMemory",
+    "VirtualQuery", "GetModuleHandleA", "QueryPerformanceCounter",
+    "CreateDirectoryA", "GetCurrentThreadId",
+})
+
+# The verbatim prototypes from Super Earth Armory Forge v6.2.1's own build_input().
+# Checked byte for byte: the whole point is that two mods declaring the same symbol
+# must agree exactly, since only the first declaration survives.
+REFERENCE_PROTOTYPES = {
+    "GetForegroundWindow": "void *GetForegroundWindow(void);",
+    "GetWindowThreadProcessId": "uint32_t GetWindowThreadProcessId(void*,void*);",
+    "GetCursorPos": "int GetCursorPos(void*);",
+    "ScreenToClient": "int ScreenToClient(void*,void*);",
+    "GetClientRect": "int GetClientRect(void*,void*);",
+    "GetAsyncKeyState": "int16_t GetAsyncKeyState(int key);",
+    "ShowCursor": "int ShowCursor(int show);",
+    "ClipCursor": "int ClipCursor(const void *rect);",
+    "GetClipCursor": "int GetClipCursor(void *rect);",
+    "GetSystemMetrics": "int GetSystemMetrics(int index);",
+}
 
 # This mod deliberately does NOT declare process-memory write primitives. It does
 # now send chat (a game-level action), so the module is no longer "read-only" in
@@ -66,10 +96,71 @@ def called_symbols(source):
 
 
 def check_user32(source):
-    clash = declared_symbols(source) & USER32
-    if clash:
-        return ["user32 symbol(s) declared: %s" % ", ".join(sorted(clash))]
-    return []
+    """user32 declarations are permitted ONLY as exact copies of the reference.
+
+    LuaJIT's C namespace is process-global and `ffi.cdef` keeps the FIRST
+    declaration, so re-declaring GetCursorPos with a different prototype silently
+    disables every mod that declared it first. That shipped once, and the original
+    gate banned the whole symbol set.
+
+    The in-game panel needs GetAsyncKeyState / ShowCursor / ClipCursor / GetCursorPos,
+    so the ban is relaxed deliberately (approved) -- and replaced with a stricter
+    check that keeps the property the ban was protecting:
+
+      * every user32 name declared must use a prototype BYTE-IDENTICAL to
+        Super Earth Armory Forge's own declaration, so whichever mod declares first
+        the process holds one identical prototype and neither is disabled;
+      * each declaration must sit inside pcall(ffi.cdef, ...) so an already-declared
+        symbol cannot abort the load;
+      * no user32 name may be declared outside an `already_declared` guard.
+
+    A wrong prototype, a stray declaration, or an unguarded cdef all still fail.
+    """
+    problems = []
+    declared = declared_symbols(source)
+
+    # 1. Every declaration of a clobber-prone symbol must be the approved prototype,
+    # exactly. Checking only that the approved string is present somewhere is not
+    # enough: a file could carry the good prototype AND a bad second one, and only
+    # the bad one would matter at run time.
+    for name in sorted(USER32):
+        approved = REFERENCE_PROTOTYPES.get(name)
+        # Any C declaration of this symbol, however it is spelled.
+        found = re.findall(r"\b[\w \*]+?\b%s\s*\([^;]*\)\s*;" % re.escape(name), source)
+        for declaration in found:
+            if approved is None:
+                problems.append("declares user32 symbol %s, which has no approved "
+                                "prototype in REFERENCE_PROTOTYPES" % name)
+            elif declaration.strip() != approved:
+                problems.append(
+                    "declares %s as %r, but the approved prototype is %r. LuaJIT "
+                    "keeps the FIRST declaration, so a different prototype changes "
+                    "what every other mod sees." % (name, declaration.strip(), approved))
+
+    # 2. Every user32 cdef must be inside a pcall. A single-quoted cdef is how this
+    # mod family iterates a declaration table, so that is the shape checked.
+    for match in re.finditer(r"ffi\.cdef\s*,\s*'([^']*)'", source):
+        snippet = match.group(1)
+        for name in sorted(set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", snippet)) & USER32):
+            if "pcall" not in source[max(0, match.start() - 40):match.start()]:
+                problems.append("ffi.cdef for user32 symbol %s is not inside a pcall; "
+                                "an already-declared symbol would abort the load"
+                                % name)
+
+    # 3. Declaring user32 at all requires the runtime guard to exist.
+    if (declared & USER32) and "already_declared" not in source:
+        problems.append("declares user32 symbols without an already_declared() guard, "
+                        "so it cannot avoid clobbering a mod that declared them first")
+
+    # 4. kernel32 names must not be smuggled into the user32 list.
+    for name in sorted(declared & KERNEL32_LOOKALIKES):
+        # Only a problem when the name sits among the user32 declarations.
+        window = re.search(r"USER32_DECLS(.*?)\n\}", source, re.S)
+        if window and re.search(r"\b%s\b" % re.escape(name), window.group(1)):
+            problems.append("%s lives in kernel32 but is listed among the user32 "
+                            "declarations; that misleads readers and invites a "
+                            "mismatched prototype" % name)
+    return problems
 
 
 def check_called_are_declared(source):

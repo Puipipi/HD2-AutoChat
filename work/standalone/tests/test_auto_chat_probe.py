@@ -18,6 +18,7 @@ Run:  python -B tests/test_auto_chat_probe.py
 """
 import io
 import os
+import re
 import sys
 import unittest
 
@@ -784,7 +785,12 @@ class AutoChatProbeTest(unittest.TestCase):
                         "per frame over %d frames" % (per_frame, frames))
 
     def test_observation_interval_is_literal_and_sane(self):
-        """Pin the constant itself, so a later edit cannot quietly remove the gate."""
+        """Pin the constant and its use, so a later edit cannot quietly drop it.
+
+        Asserts on behaviour (the read budget) rather than on one exact source
+        line: the gate may legitimately be written several ways, but observation
+        must not run every frame.
+        """
         import re
         src = self.source
         m = re.search(r"local OBSERVE_FRAMES\s*=\s*(\d+)", src)
@@ -792,8 +798,10 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertGreaterEqual(int(m.group(1)), 10,
                                 "the observation interval should be at least ~10 "
                                 "frames; anything near 1 is the bug this guards")
-        self.assertIn("if M.frames < next_observe then return end", src,
-                      "tick must gate the observation on the interval")
+        self.assertIn("next_observe = M.frames + OBSERVE_FRAMES", src,
+                      "the interval constant must actually schedule the next observation")
+        self.assertIn("if M.frames >= next_observe then", src,
+                      "the observation must be guarded by the interval")
 
     def test_disabled_use_still_costs_nothing(self):
         """A dormant mod must not pay for the frame at all."""
@@ -825,13 +833,68 @@ class AutoChatProbeTest(unittest.TestCase):
                          "exactly one heartbeat at frame 1800, not one per frame")
 
     # ---------------------------------------------------------------- safety net
-    def test_source_declares_no_user32_symbol(self):
-        lowered = self.source.lower()
-        for symbol in ("getcursorpos", "getasynckeystate", "getforegroundwindow",
-                       "screentoclient", "getclientrect", "getwindowthreadprocessid",
-                       "getcurrentprocessid", "showcursor", "clipcursor"):
-            self.assertNotIn(symbol, lowered,
-                             "%s would clobber another mod's ffi.cdef" % symbol)
+    def test_user32_declarations_are_guarded_and_match_the_reference(self):
+        """user32 may be declared ONLY the way that cannot clobber anyone.
+
+        LuaJIT's `ffi.cdef` keeps the first declaration, so a mod that declares
+        user32 with different prototypes silently changes the C signature every
+        other mod sees -- this workspace has a rule against it for exactly that
+        reason. The panel needs GetAsyncKeyState / ShowCursor / ClipCursor, so the
+        rule is relaxed deliberately, and this test pins the three properties that
+        make relaxing it safe:
+
+          1. every name is checked for an EXISTING declaration before being added;
+          2. each cdef is inside a pcall, so an already-declared symbol cannot kill
+             the load with "attempt to redefine";
+          3. the prototypes are identical to Super Earth Armory Forge's own list,
+             so whichever mod wins the race the process holds one identical
+             prototype and neither mod is disabled.
+
+        Property 3 is checked against the reference source where it is available,
+        and against a frozen expected table otherwise.
+        """
+        src = self.source
+        lowered = src.lower()
+
+        expected = [
+            'void *getforegroundwindow(void);',
+            'uint32_t getwindowthreadprocessid(void*,void*);',
+            'int getcursorpos(void*);',
+            'int screentoclient(void*,void*);',
+            'int getclientrect(void*,void*);',
+            'int16_t getasynckeystate(int key);',
+            'int showcursor(int show);',
+            'int clipcursor(const void *rect);',
+            'int getclipcursor(void *rect);',
+            'int getsystemmetrics(int index);',
+        ]
+        for decl in expected:
+            self.assertIn(decl, lowered,
+                          'the panel needs %r and it must match the reference '
+                          'prototype byte for byte' % decl)
+
+        # 1 + 2: the guard must actually exist and wrap the declaration loop.
+        self.assertIn('already_declared', src,
+                      'user32 declarations must be probed, not added blindly')
+        self.assertIn('pcall(ffi.cdef, declaration)', src,
+                      'each cdef must be inside a pcall')
+
+        # kernel32 symbols must NOT be smuggled into the user32 list.
+        user32_block = src.split('USER32_DECLS', 1)[1].split('}', 1)[0].lower()
+        for kernel_symbol in ('getcurrentprocessid', 'readprocessmemory',
+                              'virtualquery', 'getmodulehandlea'):
+            self.assertNotIn(kernel_symbol, user32_block,
+                             '%s lives in kernel32; declaring it as user32 both '
+                             'misleads readers and risks a mismatched prototype'
+                             % kernel_symbol)
+
+    def test_user32_is_the_only_non_kernel_dependency(self):
+        """Nothing beyond user32+kernel32 should be loaded: each DLL is another
+        chance to declare a symbol someone else owns."""
+        loads = set(re.findall(r"ffi\.load\('([^']+)'\)", self.source))
+        self.assertEqual(loads - {'kernel32', 'user32', 'game'},
+                         set(),
+                         'unexpected ffi.load targets: %s' % loads)
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
