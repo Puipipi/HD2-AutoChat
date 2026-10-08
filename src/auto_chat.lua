@@ -515,11 +515,15 @@ local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1
 for i = 0, 3 do PANEL.rows[#PANEL.rows + 1] = {id = i} end
 
 local cursor = {taken = false, shows = 0, clip = nil, engine = false, was_shown = nil}
--- Forward declaration for the single open/close path used by the hotkey, the CLOSE
--- row and the tests. It must be declared BEFORE any closure that captures it: a
--- `local` introduced after its reader leaves the reader holding nil, and the call
--- raises on the first hotkey press.
+-- Forward declarations for functions used by code that is defined earlier in the file.
+-- A `local` introduced AFTER its reader leaves the reader holding nil, the call
+-- raises, and -- because the panel runs inside a pcall -- the only symptom is a panel
+-- that does not work. Both of these were hit for real:
+--   * set_panel_open is called by panel_frame (defined later) and by the tests;
+--   * panel_clear is called by world_ready, which is defined BEFORE panel_clear.
+-- The second one reached the live game and was caught only by the panel_error log.
 local set_panel_open
+local panel_clear
 local key_prev = {}
 local mouse_was_down = false
 
@@ -590,6 +594,39 @@ local function keep_cursor()
         if set_show then pcall(set_show, true) end
         if set_clip then pcall(set_clip, false) end
     end
+end
+
+-- Unconditional "give the pointer back".
+--
+-- release_cursor() is a no-op unless this process took the cursor, which is correct
+-- for normal use and wrong after a crash: if the game dies with the panel open, the
+-- `taken` flag dies with the Lua state and the cursor stays visible with no way back.
+-- A stuck pointer cannot be fixed by reloading the mod either, because the new
+-- instance has no memory of the old one.
+--
+-- This clears the clip rectangle and drives the Win32 display counter to hidden
+-- without consulting any saved state, so it works from a cold start. It is called at
+-- boot and at shutdown: boot rescues a cursor left stuck by a previous session,
+-- shutdown is a belt-and-braces release for the normal path.
+local function force_release_cursor()
+    if not user then return end
+    pcall(function() user.ClipCursor(nil) end)
+    -- The display counter is per-thread and we cannot read it, so drive it to JUST
+    -- hidden rather than a large negative number. Overshooting is not harmless: the
+    -- take path loops until the cursor reports visible with a bounded count, so a
+    -- counter pushed far below zero can no longer be brought back and the panel ends
+    -- up with an invisible pointer. Measured: resetting to -32 made the panel's own
+    -- loop stop at -11 and the cursor never appeared.
+    pcall(function()
+        local guard = 0
+        while user.ShowCursor(false) >= 0 and guard < 40 do guard = guard + 1 end
+    end)
+    local set_show, set_clip = window_fn('set_show_cursor'), window_fn('set_clip_cursor')
+    if set_show then pcall(set_show, false) end
+    if set_clip then pcall(set_clip, true) end
+    cursor.taken = false
+    cursor.shows = 0
+    cursor.clip = nil
 end
 local function focused()
     if not user then return false end
@@ -738,9 +775,13 @@ end
 -- ---------------------------------------------------------------- dest / rebuild
 -- The screen GUI is DESTROYED, not left in place. A retained GUI keeps rendering
 -- whatever was drawn into it, so the panel would stay on screen after closing and
--- block the HUD underneath. Every teardown path resets the build ladder too, so the
--- panel can be opened again in the same session rather than working exactly once.
-local function panel_clear()
+-- block the HUD underneath. Destroying it also clears the signature, so the next open
+-- rebuilds rather than reusing a destroyed handle.
+--
+-- Assigned to the forward-declared local (see above the cursor table), NOT declared
+-- here with `local function`: world_ready above calls it, and a `local` introduced
+-- after its reader leaves the reader holding nil.
+panel_clear = function()
     if sr and PANEL.gui and PANEL.world then
         pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui)
     end
@@ -1167,7 +1208,7 @@ end
 local function summarize()
     -- Release everything owned: the cursor, and the gui. A gui left behind would be
     -- rendered by the engine after the mod is gone.
-    pcall(release_cursor)
+    pcall(force_release_cursor)
     pcall(panel_clear)
     note(string.format('shutdown: frames=%d reads=%d bytes=%d errors=%d sent=%d',
         M.frames, M.reads, M.bytes, M.errors, M.sent or 0))
@@ -1179,6 +1220,11 @@ note(string.format('AutoChat v%s starting (send + panel)', M.version))
 note('user32 declarations: added[' .. tostring(M.user32_added)
      .. '] reused[' .. tostring(M.user32_reused) .. ']')
 config_load()
+-- Rescue the pointer FIRST, before anything else can fail. If a previous session died
+-- with the panel open, the cursor is still visible and this is the only place that can
+-- put it back: the state that would have released it died with the old Lua state.
+force_release_cursor()
+note('cursor reset at boot (recovers a pointer left stuck by a previous session)')
 
 local ok_verify, verify_reason2 = verify()
 verified, verify_reason = ok_verify, verify_reason2

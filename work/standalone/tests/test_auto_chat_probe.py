@@ -367,6 +367,14 @@ function harness.install()
         if a == nil then clip_rect = nil return end
         clip_rect = {[0] = a, [1] = b, [2] = c, [3] = d, n = 4}
     end
+    -- Drive the display counter directly, so a test can reproduce the state a crashed
+    -- session leaves behind (cursor visible, nobody left to hide it).
+    harness.user32_show = function(show)
+        local n = show and 1 or 0
+        cursor_show_count = cursor_show_count + (n ~= 0 and 1 or -1)
+        cursor_visible = cursor_show_count >= 0
+        return cursor_show_count
+    end
     -- Returned as a STRING on purpose. A Lua table read from Python must be indexed
     -- 1..n, and getting that wrong is precisely what made the first version of this
     -- mock silently read zeros -- so the value is flattened to text and compared as
@@ -1481,6 +1489,96 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertLessEqual(len(logged), 6,
                              "a per-frame panel fault must be suppressed after a few "
                              "log lines, not written every frame")
+
+    def test_a_world_change_does_not_fault_the_panel(self):
+        """The world change path calls teardown, and it faulted in the real game.
+
+        `world_ready` runs before `panel_clear` is assigned in the file, so calling
+        teardown from there hit a nil global: "attempt to call global 'panel_clear'".
+        The panel still opened, so the only symptom was a panel that misbehaved later,
+        and it was found in a live session rather than here. The unit tests never
+        changed the world, which is exactly why this test now does.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 20)
+        self.assertEqual(1, h.live_guis, "the panel should be up first")
+        before_destroyed = h.gui_destroyed
+
+        h.main_world = "WORLD_SOMEWHERE_ELSE"      # ship -> mission, or back
+        self._run(lua, 20)
+        errors = lua.eval("_G.HD2AutoChat.panel_errors")
+        self.assertIn(errors, (None, 0),
+                      "a world change must not fault the panel (panel_errors=%s)"
+                      % errors)
+        self.assertGreater(h.gui_destroyed, before_destroyed,
+                           "the gui made for the old world must be destroyed")
+        self.assertEqual(1, h.live_guis,
+                         "and exactly one fresh gui must serve the new world")
+
+    def test_no_forward_reference_calls_a_name_declared_later(self):
+        """Static tripwire for the trap that produced the nil `panel_clear` call.
+
+        A `local` declared below its reader is not in scope there: the name silently
+        becomes a GLOBAL read, so the failure is a nil call at run time, inside a
+        pcall, with no compile error. This checks the two functions that are called
+        from code defined above them are forward-declared, which is the only shape
+        that works.
+        """
+        src = self.source
+        # Both must be declared as bare locals before use, and assigned later.
+        for name in ("set_panel_open", "panel_clear"):
+            self.assertIn("local %s\n" % name, src,
+                          "%s must be forward-declared as a bare local before any "
+                          "closure captures it" % name)
+            self.assertIn("%s = function" % name, src,
+                          "%s must be assigned (not re-declared with `local "
+                          "function`) so the forward declaration is the one used"
+                          % name)
+            self.assertNotIn("local function %s(" % name, src,
+                             "%s must not also be declared with `local function`: that "
+                             "creates a SECOND local, and the earlier readers keep "
+                             "pointing at the nil forward declaration" % name)
+
+    def test_a_stuck_cursor_is_recovered_at_boot(self):
+        """A pointer left visible by a crashed session must come back at next load.
+
+        release_cursor() is a no-op unless THIS Lua state took the cursor. If the game
+        dies with the panel open, `taken` dies with it and the cursor stays visible
+        forever -- and reloading the mod cannot help, because the new instance has no
+        memory of the old one. The user hit exactly this.
+
+        Boot therefore resets unconditionally, without consulting saved state, so it
+        works from a cold start.
+        """
+        lua, h = fresh_image()
+        # Simulate the aftermath: the Win32 display counter is positive (visible) and
+        # the clip rectangle is whatever the dead session left behind.
+        for _ in range(3):
+            h.user32_show(True)
+        h.user32_set_clip(0, 0, 100, 100)
+        self.assertTrue(h.user32.cursor_visible(),
+                        "precondition: the cursor must start out stuck visible")
+
+        mod = h.load(SOURCE)          # boot runs here
+        self.assertFalse(h.user32.cursor_visible(),
+                         "loading the mod must put a stuck cursor back")
+        self.assertIsNone(h.user32.clip(),
+                          "and must clear the clip rectangle so the pointer can move")
+
+    def test_shutdown_releases_the_cursor(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 10)
+        self.assertTrue(h.user32.cursor_visible(),
+                        "the panel should have shown the cursor")
+        lua.eval("_G.shutdown()")
+        self.assertFalse(h.user32.cursor_visible(),
+                         "shutdown must not leave the cursor visible")
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
