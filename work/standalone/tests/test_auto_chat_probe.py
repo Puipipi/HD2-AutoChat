@@ -126,12 +126,16 @@ local function new_buffer(ctype, arg)
         return setmetatable({0, n = 1}, {__index = function() return 0 end})
     end
     -- Small integer arrays the input path needs: GetClipCursor writes 4 ints into
-    -- one and ClipCursor reads 4 back. A PLAIN table, on purpose: real cdata stores
-    -- writes where a later read finds them, and a metatable-backed buffer does not
-    -- (the metatable intercepts __newindex), which would make every external
-    -- inspection of the buffer report zeros and send the investigation chasing a
-    -- bug in the mod instead of in the mock.
-    local count = ctype:match('^int32_t%[(%d+)%]$')
+    -- one and ClipCursor reads 4 back; GetCursorPos/GetClientRect fill int32 pairs,
+    -- and GetWindowThreadProcessId writes a uint32 pid. A PLAIN table, on purpose:
+    -- real cdata stores writes where a later read finds them, and a metatable-backed
+    -- buffer does not (the metatable intercepts __newindex), which would make every
+    -- external inspection of the buffer report zeros.
+    --
+    -- Missing an element type here does not fail loudly: the mod's own pcall around
+    -- the frame turns it into a silent early return, and the panel simply never
+    -- appears. That is exactly how the mouse path went untested.
+    local count = ctype:match('^u?int32_t%[(%d+)%]$')
     if count then
         count = tonumber(count)
         local buf = {n = count}
@@ -452,6 +456,46 @@ function harness.install()
         if not user32_lib then user32_lib = new_user32() end
         return user32_lib
     end
+
+    -- ---- fake engine (stingray) ---------------------------------------------
+    -- Without this, world_ready() returns false on every frame and the whole panel
+    -- lifecycle is unreachable -- the second blind spot of the same kind as the
+    -- user32 one. The counters let a test assert that GUIs are created AND
+    -- destroyed, which is the property that decides whether a closed panel really
+    -- disappears or just stops being updated.
+    harness.gui_created, harness.gui_destroyed = 0, 0
+    harness.live_guis = 0
+    harness.main_world = 'WORLD_MAIN'
+    _G.stingray = {
+        Application = {
+            main_world = function() return harness.main_world end,
+            worlds = function() return {harness.main_world} end,
+        },
+        Gui = {
+            resolution = function() return harness.res_w or 1920, harness.res_h or 1080 end,
+            rect = function(gui, position, size, colour) end,
+        },
+        Vector3 = function(x, y, z) return {x = x, y = y, z = z} end,
+        Vector2 = function(x, y) return {x = x, y = y} end,
+        Color = function(a, r, g, b) return {a = a, r = r, g = g, b = b} end,
+        IdString64 = {from_hex = function(s) return s end},
+        World = {
+            create_screen_gui = function(world, ...)
+                harness.gui_created = harness.gui_created + 1
+                harness.live_guis = harness.live_guis + 1
+                return {world = world, id = harness.gui_created}
+            end,
+            destroy_gui = function(world, gui)
+                harness.gui_destroyed = harness.gui_destroyed + 1
+                harness.live_guis = harness.live_guis - 1
+            end,
+        },
+        Window = {
+            show_cursor = function() return false end,
+            set_show_cursor = function(v) return v end,
+            set_clip_cursor = function(v) return v end,
+        },
+    }
 
     ffi.load = function(name)
         if name == 'kernel32' then return kernel end
@@ -1297,6 +1341,113 @@ class AutoChatProbeTest(unittest.TestCase):
                 self.assertLessEqual(hi1, lo2 + 1e-9,
                                      "%dx%d: rows %d and %d overlap (%.2f > %.2f)"
                                      % (rw, rh, i1, i2, hi1, lo2))
+
+    # --------------------------------------------------- panel GUI lifecycle
+    def _run(self, lua, frames):
+        for _ in range(frames):
+            lua.eval("_G.update()")
+
+    def test_closing_the_panel_destroys_its_gui(self):
+        """A retained screen GUI keeps drawing what was put in it.
+
+        So a panel that is merely "not updated any more" stays on screen and sits on
+        top of the HUD. Closing must DESTROY the gui, and the panel must be openable
+        again -- otherwise it works exactly once per session.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        self.assertEqual(0, h.live_guis, "nothing may be created while closed")
+
+        mod.debug_set_open(True)
+        self._run(lua, 20)
+        self.assertEqual(1, h.gui_created,
+                         "opening must create exactly ONE gui; creating one per frame "
+                         "would leak an engine object every frame")
+        self.assertEqual(1, h.live_guis, "and exactly one must be live")
+
+        mod.debug_set_open(False)
+        self._run(lua, 5)
+        self.assertEqual(0, h.live_guis,
+                         "closing must destroy the gui, not just stop drawing into it")
+        self.assertEqual(1, h.gui_destroyed, "exactly one destroy per open")
+
+    def test_panel_can_be_reopened_in_the_same_session(self):
+        """Reopening must rebuild, and must not leak the previous gui."""
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        for cycle in (1, 2, 3):
+            mod.debug_set_open(True)
+            self._run(lua, 20)
+            self.assertEqual(1, h.live_guis,
+                             "cycle %d: opening must leave exactly one live gui"
+                             % cycle)
+            self.assertEqual(cycle, h.gui_created,
+                             "cycle %d: one gui built per open, no more" % cycle)
+            mod.debug_set_open(False)
+            self._run(lua, 5)
+            self.assertEqual(0, h.live_guis, "cycle %d: close must destroy" % cycle)
+        self.assertEqual(3, h.gui_destroyed, "every gui must be destroyed exactly once")
+
+    def test_an_idle_open_panel_does_not_rebuild_every_frame(self):
+        """The whole point of the signature: a static panel must stop rebuilding.
+
+        Rebuilding per frame would work visually and quietly burn the frame budget,
+        which is the class of problem a frame watchdog reports.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 20)
+        settled = h.gui_created
+        self._run(lua, 300)          # nothing changes: no input, no timer
+        self.assertEqual(settled, h.gui_created,
+                         "an idle panel rebuilt %d times over 300 frames; the signature "
+                         "must make it stop" % (h.gui_created - settled))
+
+    def test_shutdown_destroys_the_panel(self):
+        """Unloading the mod must not leave a gui behind in the world."""
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 120)
+        self.assertEqual(1, h.live_guis)
+        lua.eval("_G.shutdown()")
+        self.assertEqual(0, h.live_guis,
+                         "shutdown must release the gui it created")
+
+    def test_no_gui_is_created_before_the_world_is_ready(self):
+        """Creating a screen gui too early faults at NATIVE level, which pcall cannot
+        catch, so the frame gate before it must hold."""
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        self._run(lua, 599)          # the gate opens at frame 600
+        self.assertEqual(0, h.gui_created,
+                         "no gui may be created before the frame gate opens")
+        self._run(lua, 90)
+        self.assertGreaterEqual(h.gui_created, 1,
+                                "after the gate opens the panel must build")
+
+    def test_resolution_change_forces_a_rebuild(self):
+        """Geometry is derived from the resolution, so a change must rebuild.
+
+        Without it the panel keeps rendering last resolution's layout -- a retained
+        gui does not reflow on its own.
+        """
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 120)
+        before = h.gui_created
+        h.res_w, h.res_h = 2560, 1440
+        self._run(lua, 10)
+        self.assertGreater(h.gui_created, before,
+                           "a resolution change must rebuild the gui")
 
     def test_source_declares_no_write_symbol(self):
         for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",

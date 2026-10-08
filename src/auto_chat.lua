@@ -510,11 +510,16 @@ end
 -- exists, and each stage advances only on success so a failure names the exact
 -- engine call that broke instead of dying invisibly.
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
-               stage = 0, ladder_done = false, lfail = 0, lnext = 0,
+               lfail = 0, version = 0,
                rows = {}, rw = 0, rh = 0}
 for i = 0, 3 do PANEL.rows[#PANEL.rows + 1] = {id = i} end
 
 local cursor = {taken = false, shows = 0, clip = nil, engine = false, was_shown = nil}
+-- Forward declaration for the single open/close path used by the hotkey, the CLOSE
+-- row and the tests. It must be declared BEFORE any closure that captures it: a
+-- `local` introduced after its reader leaves the reader holding nil, and the call
+-- raises on the first hotkey press.
+local set_panel_open
 local key_prev = {}
 local mouse_was_down = false
 
@@ -633,7 +638,7 @@ local function rect(x, y, w, h, c, layer)
               Vector2(w, h), c)
     end
 end
-local function draw_panel()
+local function draw_panel_unused_v1()
     local scale, x, y, w, h, row_h, head_h = geometry(PANEL.rw, PANEL.rh)
     local white = colour(255, 242, 244, 247)
     local dim = colour(255, 150, 160, 170)
@@ -717,62 +722,156 @@ local function world_ready()
     if not sr then return false end
     local ok, world = pcall(sr.Application.main_world)
     if not ok or world == nil then return false end
-    PANEL.world = world
     local okr, rw, rh = pcall(Gui.resolution)
     if not okr or type(rw) ~= 'number' or rw < 640 or rh < 480 then return false end
+    -- A new world means every gui made for the old one is stale, and the geometry
+    -- must be recomputed. Teardown here (rather than only in the frame body) is what
+    -- makes a world change safe: the panel is rebuilt from scratch for the new world.
+    if PANEL.world ~= nil and world ~= PANEL.world then
+        panel_clear()
+    end
+    PANEL.world = world
     PANEL.rw, PANEL.rh = rw, rh
     return true
 end
+
+-- ---------------------------------------------------------------- dest / rebuild
+-- The screen GUI is DESTROYED, not left in place. A retained GUI keeps rendering
+-- whatever was drawn into it, so the panel would stay on screen after closing and
+-- block the HUD underneath. Every teardown path resets the build ladder too, so the
+-- panel can be opened again in the same session rather than working exactly once.
+local function panel_clear()
+    if sr and PANEL.gui and PANEL.world then
+        pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui)
+    end
+    PANEL.gui, PANEL.draw_guis = nil, nil
+    PANEL.sig = nil
+    -- lfail is deliberately NOT reset here: it counts how many times the engine
+    -- refused to hand out a gui, and the give-up decision is per session, not per
+    -- open. Resetting it would let a world that always refuses be retried forever.
+    PANEL.panel_wanted = false
+end
+
+-- Everything drawn, plus the resolution the geometry is derived from. When this
+-- string changes the GUI is rebuilt, which is the ONLY way a retained screen GUI
+-- ever updates -- see panel_frame.
+local function panel_signature()
+    local scale, x, y, w, h = geometry(PANEL.rw, PANEL.rh)
+    return table.concat({
+        PANEL.rw, PANEL.rh,
+        math.floor(scale * 1000 + 0.5), math.floor(x + 0.5), math.floor(y + 0.5),
+        math.floor(w + 0.5), math.floor(h + 0.5),
+        tostring(PANEL.hover),
+        cfg.timer_on and 'on' or 'off', cfg.interval,
+        string.format('%.0f', cfg.elapsed), cfg.message,
+        tostring(M.sent or 0), tostring(M.last_peers or '-'),
+        M.version, PANEL.version,
+    }, '|')
+end
+
+-- Draw everything in one pass, exactly as Armory's draw() does. Nothing here may
+-- allocate per frame: this runs only when the signature changes.
+local function draw_panel()
+    local scale, x, y, w, h, row_h, head_h = geometry(PANEL.rw, PANEL.rh)
+    local white = colour(255, 242, 244, 247)
+    local dim = colour(255, 150, 160, 170)
+    local gold = colour(255, 255, 215, 60)
+    local green = colour(255, 126, 211, 115)
+    rect(x, y, w, h, colour(220, 18, 26, 34))
+    rect(x, y + h - 3 * scale, w, 3 * scale, gold)
+
+    local cell = math.max(1, math.floor(2 * scale + 0.5))
+    local function text(px, py, s, c)
+        local cx = px
+        s = tostring(s):upper()
+        for i = 1, #s do
+            local g = GLYPHS[s:sub(i, i)]
+            if g then
+                for r = 1, 5 do
+                    local row = g[r]
+                    for col = 1, 4 do
+                        if row:sub(col, col) == '1' then
+                            rect(cx + (col - 1) * cell, py + (5 - r) * cell,
+                                 cell, cell, c or white)
+                        end
+                    end
+                end
+            end
+            cx = cx + 5 * cell
+        end
+        return cx
+    end
+
+    local pad = 10 * scale
+    text(x + pad, y + h - head_h + 10 * scale, 'AUTOCHAT v' .. M.version, gold)
+    text(x + pad, y + h - head_h - 8 * scale,
+         'K=CLOSE  SENT ' .. tostring(M.sent or 0)
+         .. '  PEERS ' .. tostring(M.last_peers or '?'), dim)
+
+    for i = 1, #PANEL.rows do
+        local row = PANEL.rows[i]
+        local ry = y + h - head_h - 14 * scale - i * row_h
+        rect(x + pad, ry, w - 2 * pad, row_h - 3 * scale,
+             (PANEL.hover == row.id) and colour(220, 40, 56, 70)
+                                      or colour(200, 26, 36, 46))
+        local label
+        if row.id == 0 then
+            label = 'TIMED SEND: ' .. (cfg.timer_on and 'ON' or 'OFF')
+        elseif row.id == 1 then
+            label = 'INTERVAL ' .. tostring(cfg.interval) .. 'S   -'
+        elseif row.id == 2 then
+            label = 'INTERVAL ' .. tostring(cfg.interval) .. 'S   +'
+        else
+            label = 'CLOSE PANEL'
+        end
+        text(x + pad * 2, ry + (row_h - 3 * scale) / 2 - 3 * scale, label,
+             (row.id == 0 and cfg.timer_on) and green or white)
+    end
+
+    text(x + pad, y + 8 * scale,
+         'MSG ' .. cfg.message .. '  ' .. string.format('%.0f', cfg.elapsed)
+         .. '/' .. tostring(cfg.interval) .. 'S', dim)
+end
+
+-- Assigned now that take_cursor / release_cursor / panel_clear all exist. The
+-- forward declaration sits above (before the hook that closes over it), because a
+-- `local` declared after its reader would leave the reader holding nil.
+set_panel_open = function(open)
+    open = open and true or false
+    if open == PANEL.open then return PANEL.open end
+    PANEL.open = open
+    M.panel_open = open
+    PANEL.version = (PANEL.version or 0) + 1
+    if open then
+        take_cursor()
+    else
+        release_cursor()
+        panel_clear()
+    end
+    return PANEL.open
+end
+
 local function panel_frame()
-    -- Never before the ship world exists: creating the GUI too early killed a
-    -- frame callback outright in the failure catalog.
+    -- Not before the world exists: creating a screen GUI too early faults at native
+    -- level, and pcall does not catch native faults.
     if M.frames < 600 then return end
     if not world_ready() then return end
 
-    if not PANEL.ladder_done then
-        if M.frames < PANEL.lnext then return end
-        PANEL.lnext = M.frames + 30
-        PANEL.stage = PANEL.stage + 1
-        if PANEL.stage == 1 then
-            local okg, gui = pcall(sr.World.create_screen_gui, PANEL.world, 'scale', 1, 1)
-            if not okg or gui == nil then
-                PANEL.stage = 0
-                PANEL.lfail = PANEL.lfail + 1
-                note('panel ladder: create gui failed (' .. PANEL.lfail .. '/3): '
-                     .. tostring(gui))
-                if PANEL.lfail >= 3 then
-                    PANEL.ladder_done = true
-                    note('panel disabled for this session after 3 failed creates')
-                end
-                return
-            end
-            PANEL.gui = gui
-            PANEL.draw_guis = {{gui = gui}}
-            note('panel ladder: create gui OK')
-            return
-        end
-        if PANEL.stage == 2 then
-            note('panel ladder: draw panel OK')
-            PANEL.ladder_done = true
-            return
-        end
-        PANEL.stage = 0
-        PANEL.ladder_done = true
-        return
-    end
-    if not PANEL.gui then return end
-
     -- hotkey K (0x4B)
     if key_pressed(0x4B) then
-        PANEL.open = not PANEL.open
-        M.panel_open = PANEL.open
-        if PANEL.open then take_cursor() else release_cursor() end
+        set_panel_open(not PANEL.open)
         note('panel ' .. (PANEL.open and 'opened' or 'closed'))
         write_status()
     end
 
     if not PANEL.open then
         release_cursor()
+        return
+    end
+    if PANEL.lfail >= 3 then
+        -- Three refusals from the engine. Stop calling into it every frame; the panel
+        -- stays off for the rest of the session. lfail resets on any success, so an
+        -- isolated refusal does not count toward the three.
         return
     end
 
@@ -805,18 +904,43 @@ local function panel_frame()
                         cfg.interval = math.min(3600, cfg.interval + 5)
                         config_save()
                     elseif row.id == 3 then
-                        PANEL.open = false
-                        M.panel_open = false
-                        release_cursor()
+                        set_panel_open(false)
                         note('panel closed from its own button')
                     end
+                    PANEL.version = (PANEL.version or 0) + 1
                     write_status()
+                    if not PANEL.open then return end
                 end
             end
         end
     end
     PANEL.hover = hover
-    draw_panel()
+    if not PANEL.open then return end
+
+    -- One path for both creating and updating, exactly like Armory: a retained screen
+    -- GUI renders the primitives it was given until it is REBUILT, so the rebuild is
+    -- the redraw. Creating in the ladder and then immediately rebuilding (the first
+    -- version of this) destroyed a gui that had just been made, which is pure waste
+    -- and doubles the number of engine objects per open.
+    local signature = panel_signature()
+    if signature ~= PANEL.sig then
+        if PANEL.gui then
+            pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui)
+            PANEL.gui, PANEL.draw_guis = nil, nil
+        end
+        local okg, gui = pcall(sr.World.create_screen_gui, PANEL.world, 'scale', 1, 1)
+        if not okg or gui == nil then
+            PANEL.lfail = PANEL.lfail + 1
+            note('panel: the world refused a gui (' .. PANEL.lfail .. '/3): '
+                 .. tostring(gui))
+            return
+        end
+        PANEL.lfail = 0
+        PANEL.gui = gui
+        PANEL.draw_guis = {{gui = gui}}
+        PANEL.sig = signature
+        draw_panel()
+    end
 end
 
 -- ---------------------------------------------------------------- 12. driver
@@ -970,6 +1094,7 @@ function M.debug_cursor_state()
             was_shown = cursor.was_shown}
 end
 function M.debug_panel() return PANEL end
+function M.debug_panel_signature() return panel_signature() end
 function M.debug_cfg() return cfg end
 function M.debug_timed_send(dt) timed_send(dt) end
 function M.debug_send_text(text, verbose, force) return M.send_text(text, verbose, force) end
@@ -990,6 +1115,15 @@ function M.debug_geometry(rw, rh)
             row_h = row_h, head_h = head_h, rows = rows,
             resolution = {rw = rw, rh = rh}}
 end
+function M.debug_ready() return world_ready() end
+function M.debug_key(K) return key_pressed(K) end
+-- Open/close go through ONE function so the tests exercise the SAME path the hotkey
+-- and the CLOSE row use. A test that poked PANEL.open directly would not cover the
+-- cursor handover or the teardown, which is most of what can go wrong.
+--
+-- Forward-declared near the PANEL table (further up); assigned once the cursor and
+-- teardown functions exist.
+function M.debug_set_open(open) return set_panel_open(open) end
 
 local function tick()
     M.frames = M.frames + 1
@@ -1018,7 +1152,10 @@ local function tick()
     end
 end
 local function summarize()
-    release_cursor()
+    -- Release everything owned: the cursor, and the gui. A gui left behind would be
+    -- rendered by the engine after the mod is gone.
+    pcall(release_cursor)
+    pcall(panel_clear)
     note(string.format('shutdown: frames=%d reads=%d bytes=%d errors=%d sent=%d',
         M.frames, M.reads, M.bytes, M.errors, M.sent or 0))
     write_status()
