@@ -34,6 +34,138 @@ class ScheduledTasksTest(unittest.TestCase):
         mod.debug_run_tasks(1005)
         self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'Alice A1 1')
 
+    def test_named_preset_roundtrips_behavior_and_role_task_definitions(self):
+        lua, _, mod = self.fresh()
+        automation = mod.debug_automation()
+        library = mod.debug_preset_library()
+        host = mod.add_task('Host reminder', 'repeat', '5', 'host fixture', 1000, 'host')
+        client = mod.add_task('Client reminder', 'once', '9', 'client fixture', 2000, 'client')
+        self.assertIsNotNone(host)
+        self.assertIsNotNone(client)
+        self.assertTrue(automation.set('ping', True, 'host')[0])
+        self.assertTrue(automation.set('welcome_message', 'host welcome fixture', 'host')[0])
+        self.assertTrue(automation.set('output', 'squad', 'host')[0])
+        self.assertTrue(automation.set('cooldown', 17, 'host')[0])
+        self.assertTrue(automation.set('quick_timer_enabled', True, 'host')[0])
+        self.assertTrue(automation.set('quick_timer_interval', 5, 'host')[0])
+        self.assertTrue(automation.set('quick_timer_message', 'host quick fixture', 'host')[0])
+        self.assertTrue(automation.set('quick_timer_enabled', False, 'client')[0])
+        self.assertTrue(automation.set('quick_timer_message', 'client quick fixture', 'client')[0])
+        self.assertTrue(automation.set_rule('stratagem', 4119049995, 'mark_message', 'host mark fixture', 'host')[0])
+        self.assertTrue(automation.set_rule('stratagem', 4119049995, 'call_message', 'host call fixture', 'host')[0])
+        self.assertTrue(automation.set_rule('stratagem', 4119049995, 'cooldown', 0, 'host')[0])
+        self.assertTrue(automation.set_rule('stratagem', 4119049995, 'enabled', False, 'host')[0])
+        saved = library.save('host full snapshot', 'host')
+        self.assertTrue(saved[0], saved[1])
+        preset_id = saved[2]
+
+        # Applying the preset replaces only host task definitions. It never
+        # restores the old due timestamp or reuses a mutable task object.
+        self.assertTrue(mod.remove_task(host.id))
+        replacement = mod.add_task('Temporary', 'once', '40', 'temporary', 3000, 'host')
+        self.assertIsNotNone(replacement)
+        self.assertTrue(automation.set('quick_timer_enabled', False, 'host')[0])
+        self.assertTrue(automation.set('quick_timer_interval', 55, 'host')[0])
+        self.assertTrue(automation.set('quick_timer_message', 'mutated', 'host')[0])
+        lua.execute('os.time=function() return 5000 end')
+        self.assertTrue(library.apply(preset_id, 'host'))
+        self.assertEqual(True, automation.profile('host').ping)
+        self.assertEqual('host welcome fixture', automation.profile('host').welcome_message)
+        self.assertEqual('squad', automation.profile('host').output)
+        self.assertEqual(17, automation.profile('host').cooldown)
+        self.assertTrue(automation.profile('host').quick_timer_enabled)
+        self.assertEqual(5, automation.profile('host').quick_timer_interval)
+        self.assertEqual('host quick fixture', automation.profile('host').quick_timer_message)
+        self.assertFalse(automation.profile('client').quick_timer_enabled)
+        self.assertEqual('client quick fixture', automation.profile('client').quick_timer_message)
+        self.assertFalse(automation.rule('stratagem', 4119049995, 'host').enabled)
+        self.assertEqual('host mark fixture', automation.rule('stratagem', 4119049995, 'host').mark_message)
+        self.assertEqual('host call fixture', automation.rule('stratagem', 4119049995, 'host').call_message)
+        self.assertEqual(0, automation.rule('stratagem', 4119049995, 'host').cooldown)
+        self.assertEqual(2, len(mod.tasks))
+        restored = next(mod.tasks[i] for i in range(1, len(mod.tasks) + 1)
+                        if mod.tasks[i].profile == 'host')
+        self.assertEqual(('Host reminder', 'repeat', '5', 'host fixture', 'host'),
+                         (restored.name, restored.mode, restored.time, restored.message, restored.profile))
+        self.assertEqual(5005, restored.due)
+        self.assertNotEqual(host.id, restored.id)
+        self.assertEqual('client fixture', next(mod.tasks[i].message for i in range(1, len(mod.tasks) + 1)
+                                                if mod.tasks[i].profile == 'client'))
+
+        restored.message = 'mutated after load'
+        self.assertTrue(library.apply(preset_id, 'host'))
+        restored_again = next(mod.tasks[i] for i in range(1, len(mod.tasks) + 1)
+                              if mod.tasks[i].profile == 'host')
+        self.assertEqual('host fixture', restored_again.message)
+        self.assertEqual(5005, restored_again.due)
+
+    def test_applied_daily_task_waits_until_next_day_when_time_has_passed(self):
+        lua, h, mod = self.fresh()
+        library = mod.debug_preset_library()
+        lua.execute("""
+            os.date = function(fmt, now)
+                if fmt == '*t' then
+                    return {year=2026, month=10, day=9, hour=21, min=45, sec=0}
+                end
+                return '2026-10-09'
+            end
+            os.time = function() return 5000 end
+        """)
+        mod.add_task('Daily snapshot', 'daily', '21:30', 'daily fixture', 1000, 'host')
+        saved = library.save('daily snapshot', 'host')
+        self.assertTrue(saved[0], saved[1])
+        self.assertTrue(mod.remove_task(mod.tasks[1].id))
+
+        self.assertTrue(library.apply(saved[2], 'host'))
+        restored = mod.tasks[1]
+        self.assertEqual('2026-10-09', restored.last_day)
+        mod.debug_run_tasks(5000)
+        self.assertEqual(0, h.call_count(), 'applying after the daily time must not catch up immediately')
+
+        lua.execute("os.date = function(fmt, now) if fmt == '*t' then return {year=2026,month=10,day=10,hour=21,min=30,sec=0} end return '2026-10-10' end")
+        mod.debug_run_tasks(6000)
+        self.assertEqual(1, h.call_count(), 'the same rule should run at the next day’s scheduled time')
+
+    def test_profile_write_failure_rolls_back_task_memory_and_file(self):
+        lua, h, mod = self.fresh()
+        library = mod.debug_preset_library()
+        existing = mod.add_task('Keep task', 'repeat', '30', 'keep', 1000, 'host')
+        before_memory = mod.debug_serialize_tasks()
+        path = 'C:/fake/CowboyBingus/Helldivers2/AutoChat/tasks.txt'
+        before_disk = h.virtual_files[path]
+        mod.add_task('Snapshot task', 'repeat', '5', 'from preset', 1100, 'host')
+        saved = library.save('snapshot', 'host')
+        self.assertTrue(saved[0], saved[1])
+        self.assertTrue(mod.remove_task(mod.tasks[2].id))
+        self.assertTrue(mod.debug_restore_tasks(before_memory))
+
+        h.deny_settings_write = True
+        result = library.apply(saved[2], 'host')
+
+        self.assertFalse(result[0])
+        self.assertIn('设置保存失败', result[1])
+        self.assertEqual(before_memory, mod.debug_serialize_tasks())
+        self.assertEqual(before_disk, h.virtual_files[path])
+        self.assertEqual(existing.id, mod.tasks[1].id)
+
+    def test_selected_preset_id_persists_independently_for_both_roles(self):
+        lua, h, mod = self.fresh()
+        panel = mod.debug_panel()
+        panel.preset_selected_by_role['host'] = 'P00000011'
+        panel.preset_selected_by_role['client'] = 'P00000012'
+        self.assertTrue(mod.debug_save_preset_selection())
+        path = 'C:/fake/CowboyBingus/Helldivers2/AutoChat/preset-selection.txt'
+        persisted = h.virtual_files[path]
+        self.assertEqual('host=P00000011\nclient=P00000012\n', persisted)
+
+        # A new VM reads the exact persisted bytes, modeling a full restart.
+        _, restarted_h = fresh_image()
+        restarted_h.virtual_files[path] = persisted
+        restarted = restarted_h.load(SOURCE)
+        selected = restarted.debug_panel().preset_selected_by_role
+        self.assertEqual('P00000011', selected['host'])
+        self.assertEqual('P00000012', selected['client'])
+
     def test_repeat_and_countdown_have_independent_deadlines(self):
         _, h, mod = self.fresh()
         repeat = mod.add_task("Repeat", "repeat", "30", "first", 1000)
@@ -179,7 +311,8 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertEqual("My event", task["name"])
         self.assertEqual("17", task["time"])
         self.assertEqual("你好", task["message"])
-        self.assertIn("AutoChatTasks1", h.log_text())
+        tasks_path = 'C:/fake/CowboyBingus/Helldivers2/AutoChat/tasks.txt'
+        self.assertIn("AutoChatTasks1", h.virtual_files[tasks_path])
         click("task:message")
         mod.debug_set_edit_buffer("discard me")
         h.user32.set_key(0x1B, True)
@@ -239,7 +372,7 @@ class ScheduledTasksTest(unittest.TestCase):
         restored.debug_run_tasks(2000)
         self.assertEqual(0, h.call_count())
 
-    def test_old_enabled_timer_becomes_visible_task(self):
+    def test_old_enabled_timer_migrates_to_host_quick_profile_without_a_duplicate_task(self):
         lua, h = fresh_image()
         lua.execute("""
             local old = io.open
@@ -252,10 +385,12 @@ class ScheduledTasksTest(unittest.TestCase):
             end
         """)
         mod = h.load(SOURCE)
-        self.assertEqual(1, len(mod.tasks), "old enabled timer must be visible in settings")
-        self.assertEqual("45", mod.tasks[1]["time"])
-        self.assertEqual("old message", mod.tasks[1]["message"])
-        self.assertFalse(mod.debug_cfg()["timer_on"], "no second hidden timer may keep firing")
+        self.assertEqual(0, len(mod.tasks), "quick timer remains a single profile setting")
+        profile=mod.debug_automation().profile('host')
+        self.assertTrue(profile.quick_timer_enabled)
+        self.assertEqual(45, profile.quick_timer_interval)
+        self.assertEqual("old message", profile.quick_timer_message)
+        self.assertTrue(mod.debug_automation().profile('client').quick_timer_enabled is False)
 
     def test_full_task_pages_have_no_overlap_at_common_resolutions(self):
         for rw, rh in ((1280, 720), (1920, 1080), (3840, 2160)):
@@ -315,7 +450,7 @@ class ScheduledTasksTest(unittest.TestCase):
                     return {read=function() return 'timer_on=yes\\ninterval=45\\nmessage=keep me\\n' end,
                             close=function() end}
                 end
-                if tostring(path):find('tasks.txt',1,true) then return nil end
+                if tostring(path):find('settings.txt',1,true) then return nil end
                 return old(path, mode)
             end
         """)

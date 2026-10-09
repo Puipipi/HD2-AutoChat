@@ -64,11 +64,10 @@ REFERENCE_PROTOTYPES = {
 # because nothing in it needs that and every extra primitive is a way to take the
 # process down.
 #
-# Chosen on purpose: `VirtualProtect` is excluded from the mod entirely, even
-# though the workspace's own patterns declare it, because writing to game memory
-# is not something this mod does.
+# VirtualProtect is allowed only for the exact freshly-allocated thunk RW->RX
+# transition checked below. Process/game memory writers remain prohibited.
 WRITE_SYMBOLS = frozenset({
-    "WriteProcessMemory", "VirtualProtect", "VirtualProtectEx", "VirtualAllocEx",
+    "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx",
     "CreateRemoteThread", "NtWriteVirtualMemory", "VirtualFreeEx",
 })
 
@@ -191,6 +190,22 @@ def check_no_memory_writes(source):
     clash = declared_symbols(source) & WRITE_SYMBOLS
     if clash:
         return ["declares a process-memory write primitive: %s" % ", ".join(sorted(clash))]
+    if "VirtualProtect" in declared_symbols(source):
+        calls = list(re.finditer(
+            r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.VirtualProtect\s*\(([^)]*)\)", source))
+        if len(calls) != 1:
+            return ["VirtualProtect is allowed only for one owned thunk RW->RX call"]
+        call = calls[0]
+        if call.group(1) != "kernel" or re.sub(r"\s+", "", call.group(2)) != "code,4096,0x20,old_protect":
+            return ["VirtualProtect is allowed only to change the owned thunk page from RW to RX"]
+        allocations = list(re.finditer(
+            r"local\s+code\s*=\s*kernel\.VirtualAlloc\(nil\s*,\s*4096\s*,\s*0x3000\s*,\s*0x04\s*\)",
+            source))
+        if len(allocations) != 1 or allocations[0].end() > call.start():
+            return ["VirtualProtect target must be the uniquely allocated owned thunk page"]
+        between = source[allocations[0].end():call.start()]
+        if re.search(r"\b(?:local\s+)?code\s*=(?!=)", between, re.M):
+            return ["VirtualProtect target variable is reassigned after allocation"]
     return []
 
 

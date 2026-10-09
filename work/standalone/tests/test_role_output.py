@@ -87,10 +87,60 @@ class RoleOutputTests(unittest.TestCase):
     def test_legacy_timer_also_respects_private_output(self):
         lua,h,mod=self.fresh()
         lua.execute("stingray.GameSession.game_session_host=function() return tostring(0x00112233445567) end")
-        cfg=mod.debug_cfg();cfg.timer_on=True;cfg.interval=5;cfg.message='legacy private'
+        automation=mod.debug_automation()
+        self.assertTrue(automation.set('quick_timer_enabled',True,'client')[0])
+        self.assertTrue(automation.set('quick_timer_interval',5,'client')[0])
+        self.assertTrue(automation.set('quick_timer_message','legacy private','client')[0])
+        self.assertTrue(automation.set('output','local','client')[0])
         mod.debug_timed_send(5)
         self.assertEqual(1,h.call_count())
         self.assertEqual(h.code_base+0x10979c0,h.last_call().address)
+
+    def test_active_host_quick_timer_ignores_client_profile_being_edited(self):
+        lua,h,mod=self.fresh()
+        automation=mod.debug_automation()
+        self.assertTrue(automation.set('quick_timer_enabled',True,'host')[0])
+        self.assertTrue(automation.set('quick_timer_interval',5,'host')[0])
+        self.assertTrue(automation.set('quick_timer_message','host quick', 'host')[0])
+        self.assertTrue(automation.set('quick_timer_enabled',True,'client')[0])
+        self.assertTrue(automation.set('quick_timer_interval',5,'client')[0])
+        self.assertTrue(automation.set('quick_timer_message','client quick', 'client')[0])
+        self.click(lua,h,mod,'profile:client')
+        self.assertEqual('client',mod.debug_panel().profile)
+        self.assertEqual('host',automation.state.active_role)
+        mod.debug_timed_send(5)
+        self.assertEqual('host quick\0',h.last_call().arg3_text)
+
+    def test_quick_timer_page_edits_the_selected_role_and_keeps_role_values_separate(self):
+        lua,h,mod=self.fresh()
+        automation=mod.debug_automation()
+        self.click(lua,h,mod,'profile:client')
+        self.click(lua,h,mod,'view:quick')
+        self.assertIn('opt:quick_timer_enabled',
+            {mod.debug_panel().regions[i].key for i in range(1,len(mod.debug_panel().regions)+1)})
+        self.click(lua,h,mod,'opt:quick_timer_enabled')
+        self.assertTrue(automation.profile('client').quick_timer_enabled)
+        self.assertFalse(automation.profile('host').quick_timer_enabled)
+        self.click(lua,h,mod,'option:quick_timer_message')
+        mod.debug_set_edit_buffer('客机定时')
+        h.user32.set_key(0x0D,True);lua.eval('update()');h.user32.set_key(0x0D,False);lua.eval('update()')
+        self.assertEqual('客机定时',automation.profile('client').quick_timer_message)
+        self.assertEqual('HELLO FROM AUTOCHAT',automation.profile('host').quick_timer_message)
+
+    def test_quick_timer_discards_partial_elapsed_time_when_active_role_changes(self):
+        lua,h,mod=self.fresh()
+        automation=mod.debug_automation()
+        for role,message in (('host','host interval'),('client','client interval')):
+            self.assertTrue(automation.set('quick_timer_enabled',True,role)[0])
+            self.assertTrue(automation.set('quick_timer_interval',5,role)[0])
+            self.assertTrue(automation.set('quick_timer_message',message,role)[0])
+        mod.debug_timed_send(4)
+        lua.execute("stingray.GameSession.game_session_host=function() return tostring(0x00112233445567) end")
+        automation.sync()
+        mod.debug_timed_send(1)
+        self.assertEqual(0,h.call_count(), 'host elapsed time cannot finish the client timer')
+        mod.debug_timed_send(4)
+        self.assertEqual('client interval\0',h.last_call().arg3_text)
 
     def test_client_task_form_creates_a_client_task_and_lists_only_that_role(self):
         lua,h,mod=self.fresh()

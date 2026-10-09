@@ -3,11 +3,12 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAGMENTS = [('panel_input', 'ARMORY INPUT'), ('chat_automation', 'CHAT AUTOMATION'),
+FRAGMENTS = [('text_input', 'UNICODE TEXT INPUT'), ('panel_input', 'ARMORY INPUT'), ('chat_automation', 'CHAT AUTOMATION'),
              ('preset_library', 'PRESET LIBRARY'),
              ('peer_identity', 'PEER IDENTITY'), ('plugin_registry', 'PLUGIN REGISTRY'),
              ('marker_localization', 'MARKER LOCALIZATION'), ('ping_events', 'NATIVE PING EVENTS'),
-             ('stratagem_events', 'STRATAGEM EVENTS'), ('stratagem_catalog', 'STRATAGEM CATALOG'),
+             ('stratagem_events', 'STRATAGEM EVENTS'), ('stratagem_names_zh', 'STRATAGEM NAMES ZH'),
+             ('stratagem_catalog', 'STRATAGEM CATALOG'),
              ('alert_panel', 'ALERT PANEL'), ('preset_panel', 'PRESET PANEL')]
 
 
@@ -32,7 +33,7 @@ def main():
         elif fragment == 'stratagem_catalog':
             anchor = '-- BEGIN NATIVE PING EVENTS'
             setup = '''
-local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at})
+            local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH})
 function M.debug_stratagem_catalog()return stratagem_catalog end
 local function enrich_stratagem_event(event,now)
     if event.category~='stratagem' then return end
@@ -40,10 +41,14 @@ local function enrich_stratagem_event(event,now)
     local row=stratagem_catalog.lookup(event.stratagem_id)
         or stratagem_catalog.resolve_resource(event.resource)
         or stratagem_catalog.resolve_name_key(event.localization_key)
-    if row then event.stratagem_id=row.id;event.stratagem_group=row.group end
+    if row then event.stratagem_id=row.id;event.stratagem_group=row.group;event.display_name=row.display_name end
 end
 '''
             source = source.replace(anchor, block + '\n' + setup + '\n' + anchor, 1)
+        elif fragment == 'text_input':
+            source = source.replace('-- BEGIN ARMORY INPUT', block + '\n-- BEGIN ARMORY INPUT', 1)
+        elif fragment == 'stratagem_names_zh':
+            source = source.replace('-- BEGIN STRATAGEM CATALOG', block + '\n-- BEGIN STRATAGEM CATALOG', 1)
         elif fragment == 'alert_panel':
             source = source.replace('local function draw_panel()', block + '\n\nlocal function draw_panel()', 1)
         elif fragment == 'preset_panel':
@@ -52,6 +57,15 @@ end
             source = source.replace('automation = build_chat_automation({', block + '\n\nautomation = build_chat_automation({', 1)
         else:
             raise AssertionError('Missing fragment marker: ' + marker)
+    source = source.replace(
+        'local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at})',
+        'local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH})')
+    event_line = 'event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group'
+    source = re.sub(re.escape(event_line) + r'(?:\n\s*event\.display_name=row\.display_name)+',
+                    event_line + '\n        event.display_name=row.display_name', source)
+    if event_line in source:
+        source = source.replace(event_line, event_line + '\n        event.display_name=row.display_name', 1) if not re.search(
+            re.escape(event_line) + r'\n\s*event\.display_name=row\.display_name', source) else source
     path.write_text(source, encoding='utf-8')
 
 

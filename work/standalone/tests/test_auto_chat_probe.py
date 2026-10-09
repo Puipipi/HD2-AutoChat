@@ -70,6 +70,7 @@ harness.log = {}
 -- Declared at chunk scope: `harness.log_text()` below reads it, and a `local`
 -- declared inside install() would not be in that function's scope at all.
 local written = {}
+local virtual_files = {}
 
 -- mem[address] = byte. Dense enough for the few hundred bytes under test.
 local mem = {}
@@ -342,7 +343,13 @@ function harness.install()
     end
     function kernel.CreateDirectoryA() return 1 end
     function kernel.QueryPerformanceCounter() return 1 end
-    function kernel.MoveFileExA() return 1 end
+    function kernel.MoveFileExA(from, to)
+        if type(from)=='string' and type(to)=='string' and from:find('AutoChat',1,true) then
+            virtual_files[to]=virtual_files[from]
+            virtual_files[from]=nil
+        end
+        return 1
+    end
     -- The mod requires this at boot (it compares the foreground window's pid to its
     -- own before honouring the hotkey), so the mock must provide it or the mod
     -- stops at "missing kernel32 symbol".
@@ -566,6 +573,7 @@ function harness.install()
     -- ---- fake host environment -------------------------------------------
     written = {}
     harness.records = written
+    harness.virtual_files = virtual_files
     _G.ffi = ffi
     -- LuaJIT ships a built-in `ffi` module, so `require('ffi')` (which is how the
     -- mods in this family obtain it) returns the REAL one from package.loaded and
@@ -583,8 +591,37 @@ function harness.install()
     -- io.open, or the fixture cannot even read its own file.
     local real_open = REAL_OPEN
     _G.io.open = function(path, mode)
+        if tostring(path):find('preset%-selection%.txt') then
+            if mode == nil or tostring(mode):find('r') then
+                local contents=virtual_files[path]
+                if contents==nil then return nil end
+                return {read=function(_,count) return contents:sub(1,count or #contents) end,
+                    close=function() return true end}
+            end
+            local contents=''
+            return {write=function(self,text)
+                    contents=contents..text;virtual_files[path]=contents
+                    written[#written+1]={path=path,text=text};return self
+                end,close=function() return true end}
+        end
+        if tostring(path):find('AutoChat/tasks%.txt') then
+            if mode == nil or tostring(mode):find('r') then
+                local contents=virtual_files[path]
+                if contents==nil then return nil end
+                return {read=function(_,count) return contents:sub(1,count or #contents) end,
+                    close=function() return true end}
+            end
+            local contents=''
+            return {write=function(self,text)
+                    contents=contents..text;return self
+                end,close=function()
+                    if tostring(path):find('%.tmp$') then virtual_files[path]=contents end
+                    return true
+                end}
+        end
         if mode == nil or tostring(mode):find('r') then return real_open(path, mode) end
         if tostring(path):find('AutoChat', 1, true) then
+            if harness.deny_settings_write and tostring(path):find('settings%.txt%.tmp') then return nil end
             return {
                 write = function(self, text) written[#written + 1] = {path = path, text = text} return self end,
                 close = function() return true end,
@@ -1340,9 +1377,11 @@ class AutoChatProbeTest(unittest.TestCase):
         lua, h = fresh_image(others=0)          # a session with nobody else in it
         mod = h.load(SOURCE)
         cfg = mod.debug_cfg()
-        cfg["timer_on"] = True
-        cfg["interval"] = 5
-        cfg["elapsed"] = 0
+        automation = mod.debug_automation()
+        automation.state.active_role = 'host'
+        automation.set('quick_timer_enabled', True, 'host')
+        automation.set('quick_timer_interval', 5, 'host')
+        cfg.elapsed = 0
         mod.debug_timed_send(6)                 # past the interval
         last = mod.debug_last_send()
         self.assertIsNotNone(last, "the attempt must be recorded")
@@ -1355,9 +1394,11 @@ class AutoChatProbeTest(unittest.TestCase):
         lua, h = fresh_image(others=2)
         mod = h.load(SOURCE)
         cfg = mod.debug_cfg()
-        cfg["timer_on"] = True
-        cfg["interval"] = 5
-        cfg["elapsed"] = 0
+        automation = mod.debug_automation()
+        automation.state.active_role = 'host'
+        automation.set('quick_timer_enabled', True, 'host')
+        automation.set('quick_timer_interval', 5, 'host')
+        cfg.elapsed = 0
         mod.debug_timed_send(6)
         last = mod.debug_last_send()
         self.assertIsNotNone(last, "the attempt must be recorded")
@@ -1369,7 +1410,9 @@ class AutoChatProbeTest(unittest.TestCase):
         lua, h = fresh_image(others=1)
         mod = h.load(SOURCE)
         cfg = mod.debug_cfg()
-        cfg["timer_on"] = False
+        automation = mod.debug_automation()
+        automation.state.active_role = 'host'
+        automation.set('quick_timer_enabled', False, 'host')
         before = h.call_count()
         mod.debug_timed_send(1000)
         self.assertEqual(before, h.call_count(),
@@ -1385,9 +1428,11 @@ class AutoChatProbeTest(unittest.TestCase):
         lua, h = fresh_image(others=0)
         mod = h.load(SOURCE)
         cfg = mod.debug_cfg()
-        cfg["timer_on"] = True
-        cfg["interval"] = 10
-        cfg["elapsed"] = 0
+        automation = mod.debug_automation()
+        automation.state.active_role = 'host'
+        automation.set('quick_timer_enabled', True, 'host')
+        automation.set('quick_timer_interval', 10, 'host')
+        cfg.elapsed = 0
         before = h.call_count()
         mod.debug_timed_send(11)            # past the interval
         self.assertEqual(before, h.call_count(),
@@ -1400,9 +1445,11 @@ class AutoChatProbeTest(unittest.TestCase):
         lua, h = fresh_image(others=1)
         mod = h.load(SOURCE)
         cfg = mod.debug_cfg()
-        cfg["timer_on"] = True
-        cfg["interval"] = 10
-        cfg["elapsed"] = 0
+        automation = mod.debug_automation()
+        automation.state.active_role = 'host'
+        automation.set('quick_timer_enabled', True, 'host')
+        automation.set('quick_timer_interval', 10, 'host')
+        cfg.elapsed = 0
         before = h.call_count()
         mod.debug_timed_send(11)
         self.assertEqual(before + 1, h.call_count(),
@@ -1412,9 +1459,11 @@ class AutoChatProbeTest(unittest.TestCase):
         lua, h = fresh_image(others=1)
         mod = h.load(SOURCE)
         cfg = mod.debug_cfg()
-        cfg["timer_on"] = True
-        cfg["interval"] = 10
-        cfg["elapsed"] = 0
+        automation = mod.debug_automation()
+        automation.state.active_role = 'host'
+        automation.set('quick_timer_enabled', True, 'host')
+        automation.set('quick_timer_interval', 10, 'host')
+        cfg.elapsed = 0
         mod.debug_timed_send(4)
         self.assertAlmostEqual(4, cfg["elapsed"], places=3,
                                msg="elapsed must accumulate below the interval")
@@ -1547,7 +1596,94 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertEqual(original, mod.debug_cfg()["message"],
                          "the stored message must be untouched until Enter")
 
+    def test_unicode_window_events_edit_text_and_overflow_resets(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer("")
+        lua.execute("""
+            EDIT_EVENTS = {
+                {message=0x0102, wparam=0x4F60, lparam=1},
+                {message=0x0102, wparam=0x597D, lparam=1},
+            }
+        """)
+        value, what = mod.debug_edit_text(0, lua.globals().EDIT_EVENTS, False)
+        self.assertEqual(("你好", "typing"), (value, what))
+
+        original = mod.debug_cfg()["message"]
+        value, what = mod.debug_edit_text(1, lua.table(), True)
+        self.assertIsNone(value)
+        self.assertEqual("reset", what)
+        self.assertEqual(original, mod.debug_cfg()["message"])
+
+    def test_unicode_copy_and_cut_obey_clipboard_ownership_and_failure(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute("""
+            local h = ...
+            local ffi = require('ffi')
+            local kernel, user = ffi.load('kernel32'), ffi.load('user32')
+            h.fake_memory, h.free_count, h.clip_set_ok = {text=''}, 0, true
+            kernel.GlobalAlloc = function(flags, size)
+                h.alloc_flags, h.alloc_size = flags, size
+                return h.fake_memory
+            end
+            kernel.GlobalLock = function(memory) return memory end
+            kernel.GlobalUnlock = function() h.unlock_count=(h.unlock_count or 0)+1 return 1 end
+            kernel.GlobalFree = function() h.free_count=h.free_count+1 return nil end
+            user.OpenClipboard = function(owner) h.clipboard_owner=owner; h.open_count=(h.open_count or 0)+1; return owner and 1 or 0 end
+            user.EmptyClipboard = function() return 1 end
+            user.SetClipboardData = function(format, memory)
+                h.clipboard_format, h.clipboard_utf16 = format, memory.text
+                return h.clip_set_ok and memory or nil
+            end
+            user.CloseClipboard = function() h.close_count=(h.close_count or 0)+1 return 1 end
+        """, h)
+        original = mod.debug_cfg()["message"]
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer("你好")
+
+        lua.execute("EDIT_CLIP = {{message=0x0102,wparam=0x01,lparam=1},{message=0x0102,wparam=0x03,lparam=1}}")
+        value, what = mod.debug_edit_text(0, lua.globals().EDIT_CLIP, False)
+        self.assertEqual(("你好", "typing"), (value, what))
+        self.assertEqual(13, h.clipboard_format)
+        self.assertEqual('WINDOW', h.clipboard_owner,
+                         'clipboard must be opened by the focused game window, never NULL')
+        self.assertEqual(b"\x60\x4f\x7d\x59\x00\x00", h.clipboard_utf16.encode("latin1"))
+        self.assertEqual(0, h.free_count, "successful SetClipboardData transfers ownership to Windows")
+
+        lua.execute("local h=...; h.clip_set_ok=false; EDIT_CUT={{message=0x0102,wparam=0x01,lparam=1},{message=0x0102,wparam=0x18,lparam=1}}", h)
+        value, what = mod.debug_edit_text(1, lua.globals().EDIT_CUT, False)
+        self.assertEqual(("你好", "typing"), (value, what), "failed copy must leave cut text intact")
+        self.assertEqual(1, h.free_count, "failed transfer frees our movable block")
+        self.assertGreaterEqual(h.close_count, 2, "clipboard is closed after success and failure")
+        self.assertEqual(original, mod.debug_cfg()["message"], "clipboard actions must not mutate stored settings")
+
+        lua.execute("local h=...; h.clip_set_ok=true; EDIT_CUT_OK=EDIT_CUT", h)
+        value, what = mod.debug_edit_text(2, lua.globals().EDIT_CUT_OK, False)
+        self.assertEqual(("", "typing"), (value, what))
+        self.assertEqual(1, h.free_count, "successful transfer leaves block ownership with Windows")
+
     # ------------------------------------------------------------ font / drawing
+    def test_ime_context_not_ready_is_visible_to_the_editor(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 601)
+        mod.debug_set_open(True)
+        p = mod.debug_panel()
+        p.editing, p.edit_field, p.edit_text = True, 'task:name', ''
+        p.input_edit_field = 'task:name'
+        panel_input = mod.debug_panel_input()
+        lua.execute("""local input = ...
+            input.drain=function() return {},false end
+            input.status=function()
+                return {broken=false,editing=true,ime_ready=false,ime_pending=false,
+                        state='held',window='WINDOW'}
+            end""", panel_input)
+        lua.eval('update()')
+        self.assertIn('IME', str(p.hint).upper(),
+                      'a posted but unavailable IME context must be shown instead of silently dropping input')
+
     def test_panel_draws_even_when_the_font_cannot_be_resolved(self):
         """A missing font must degrade the LOOK, not blank the panel.
 
@@ -1840,8 +1976,8 @@ class AutoChatProbeTest(unittest.TestCase):
                                 "the panel must still lay out on the fallback path")
 
     def test_source_declares_no_write_symbol(self):
-        for symbol in ("writeprocessmemory", "virtualprotect", "virtualallocex",
-                       "createremotethread"):
+        for symbol in ("writeprocessmemory", "virtualallocex",
+                       "createremotethread", "virtualprotectex"):
             self.assertNotIn(symbol, self.source.lower(),
                              "this is a read-only probe; %s must not appear" % symbol)
 

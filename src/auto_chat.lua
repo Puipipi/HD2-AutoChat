@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.8.1', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.8.2', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -34,6 +34,7 @@ rawset(_G, KEY, M)
 -- its reader is not in scope there and the name silently becomes a global read.
 local game, game_base, send_fn = nil, nil, nil
 local automation, preset_library, peer_identity, REGISTRY
+local apply_preset_snapshot
 local chat_buffer = nil
 local verified, verify_reason = false, 'not run'
 local sr, Gui, Vector3, Vector2, Color = nil, nil, nil, nil, nil
@@ -68,6 +69,8 @@ local cdef_ok, cdef_err = pcall(ffi.cdef, [[
     int QueryPerformanceCounter(int64_t *counter);
     void *GlobalLock(void *mem);
     int GlobalUnlock(void *mem);
+    void *GlobalAlloc(uint32_t flags, size_t bytes);
+    void *GlobalFree(void *mem);
     size_t GlobalSize(void *mem);
     int MoveFileExA(const char *existing, const char *replacement, uint32_t flags);
 ]])if not cdef_ok then
@@ -116,6 +119,8 @@ local USER32_DECLS = {
     'int OpenClipboard(void *owner);',
     'int CloseClipboard(void);',
     'void *GetClipboardData(uint32_t format);',
+    'int EmptyClipboard(void);',
+    'void *SetClipboardData(uint32_t format, void *memory);',
 }
 local function already_declared(name)
     -- ffi.C is the process-global namespace: a symbol there means some mod already
@@ -751,27 +756,46 @@ local function config_save()
         handle:close()
     end)
 end
+M.quick_timer_shadow={role=nil}
+function M.quick_timer_shadow.sync(role)
+    local profile=automation and automation.profile(role)
+    if not profile then return false end
+    cfg.timer_on=profile.quick_timer_enabled==true
+    cfg.interval=profile.quick_timer_interval or 30
+    cfg.message=profile.quick_timer_message or 'HELLO FROM AUTOCHAT'
+    if M.quick_timer_shadow.role~=role then cfg.elapsed=0;M.quick_timer_shadow.role=role end
+    return true
+end
+function M.quick_timer_shadow.set(role,key,value)
+    local ok,why=automation.set(key,value,role)
+    if ok then M.quick_timer_shadow.sync(role);config_save() end
+    return ok,why
+end
 
 -- BEGIN CHAT AUTOMATION
 -- Automatic chat policy, inlined by the addon builder; no native offsets or writes.
 -- Session API provenance: P2P-Ping 0.1.34 scope() / update_peer_labels().
 local function build_chat_automation(env)
-    local options = {enabled = true, scope = 'all', allow_solo = true,
+    local options = {enabled = true, allow_solo = true,
         welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
         ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
-        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad'}
-    local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
+        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad',
+        quick_timer_enabled = false, quick_timer_interval = 30,
+        quick_timer_message = 'HELLO FROM AUTOCHAT'}
+    local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
-    local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output',
+        'quick_timer_enabled', 'quick_timer_interval', 'quick_timer_message'}
+    local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true, quick_timer_enabled=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
         ping_giant_enemy=true, ping_small_enemy=true, ping_flying_enemy=true, ping_summon=true}
-    local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil, status = '等待会话'}
+    local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil,
+        status = '等待会话', legacy_quick_timer_missing = false}
     local api = {options = options, state = state}
 
     local function attempt(fn, ...)
@@ -786,18 +810,18 @@ local function build_chat_automation(env)
     local function validate(key, value)
         if booleans[key] then
             if type(value) ~= 'boolean' then return false, '开关只能设为开启或关闭' end
-        elseif key == 'scope' then
-            if value ~= 'all' and value ~= 'host' then return false, '发送范围只能选仅主机或主机和客机' end
         elseif key == 'output' then
             if value ~= 'squad' and value ~= 'local' then return false, '请选择小队公屏或仅自己可见' end
-        elseif key == 'cooldown' or key == 'welcome_delay' then
-            local limit = key == 'cooldown' and 3600 or 60
-            if type(value) ~= 'number' or value ~= value or value < 0 or value > limit
+        elseif key == 'cooldown' or key == 'welcome_delay' or key == 'quick_timer_interval' then
+            local minimum = key == 'quick_timer_interval' and 5 or 0
+            local limit = (key == 'cooldown' or key == 'quick_timer_interval') and 3600 or 60
+            if type(value) ~= 'number' or value ~= value or value < minimum or value > limit
                 or value ~= math.floor(value) then
-                return false, '请输入 0 到 ' .. limit .. ' 之间的整数秒数'
+                return false, '请输入 ' .. minimum .. ' 到 ' .. limit .. ' 之间的整数秒数'
             end
-        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' or key == 'task_stratagem_message' then
-            if type(value) ~= 'string' or #value == 0 or #value > 512
+        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' or key == 'task_stratagem_message' or key == 'quick_timer_message' then
+            local maximum = key == 'quick_timer_message' and 200 or 512
+            if type(value) ~= 'string' or #value == 0 or #value > maximum
                 or value:find('%z') or not value:find('%S') then
                 return false, '消息须为非空文本，最多 512 字节'
             end
@@ -866,7 +890,7 @@ local function build_chat_automation(env)
     end
     local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v4'}
+        local lines = {'# AutoChat automation settings v5'}
         for _, role in ipairs({'host','client'}) do
             for _, key in ipairs(keys) do
                 lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
@@ -908,7 +932,7 @@ local function build_chat_automation(env)
                     if value == 'true' then value = true
                     elseif value == 'false' then value = false
                     else value = nil end
-                elseif key == 'cooldown' or key == 'welcome_delay' then
+                elseif key == 'cooldown' or key == 'welcome_delay' or key == 'quick_timer_interval' then
                     value = value and tonumber(value) or nil
                 end
                 if (key == 'ping_small_items' or key == 'ping_mission') and (value == 'true' or value == 'false') then
@@ -926,11 +950,17 @@ local function build_chat_automation(env)
     -- Upgrade only our old stock template, which hid every resolved target name.
     -- Deliberately custom category-only templates remain exactly as entered.
     local saved_version = type(saved)=='string' and tonumber(saved:match('^# AutoChat automation settings v(%d+)[\r\n]')) or 1
+    state.legacy_quick_timer_missing = (saved_version or 1)<5
+    for _, role in ipairs({'host','client'}) do
+        for _, key in ipairs({'quick_timer_enabled','quick_timer_interval','quick_timer_message'}) do
+            if role_values[role][key] == nil then state.legacy_quick_timer_missing = true end
+        end
+    end
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
         options.ping_message = '标记了{目标}（{类别}）'
     end
     profiles = {host=copy(options), client=copy(options)}
-    profiles.client.welcome, profiles.client.output, profiles.client.scope = false, 'local', 'all'
+    profiles.client.welcome, profiles.client.output = false, 'local'
     for _, role in ipairs({'host','client'}) do
         for key,value in pairs(role_values[role]) do profiles[role][key] = value end
         profiles[role].rules=saved_rules[role]
@@ -946,18 +976,49 @@ local function build_chat_automation(env)
     for _,key in ipairs(keys) do options[key] = profiles.host[key] end
     state.active_role = 'host'
     function api.profile(role) return profiles[role or state.active_role] end
+    function api.migrate_legacy_quick_timer(enabled, interval, message)
+        if not state.legacy_quick_timer_missing then return true, '快捷定时配置已存在' end
+        local valid, why=validate('quick_timer_interval',interval)
+        if not valid then return false,why end
+        valid,why=validate('quick_timer_message',message)
+        if not valid then return false,why end
+        if type(enabled)~='boolean' then return false,'旧快捷定时开关无效' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        candidate.host.quick_timer_enabled=enabled
+        candidate.host.quick_timer_interval=interval
+        candidate.host.quick_timer_message=message
+        candidate.client.quick_timer_enabled=false
+        if attempt(env.write_file,serialize(candidate))~=true then return false,'快捷定时配置迁移失败' end
+        profiles=candidate
+        state.legacy_quick_timer_missing=false
+        if state.active_role=='host' then for _,key in ipairs(keys) do options[key]=profiles.host[key] end end
+        return true,'快捷定时配置已迁移到主机预设'
+    end
 
     -- Portable named-profile format is deliberately data-only and parsed strictly.
-    function api.export_profile(role)
+    function api.export_profile(role, tasks)
         local source=profiles[role]
         if not source then return nil,'未知预设' end
-        local lines={'# AutoChat profile v1'}
+        local lines={'# AutoChat profile v3'}
         for _,key in ipairs(keys) do lines[#lines+1]=key..'='..escape(tostring(source[key])) end
         local ids={};for id in pairs(source.rules or {}) do ids[#ids+1]=id end;table.sort(ids)
         for _,id in ipairs(ids) do
             for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
                 local value=source.rules[id][field]
                 if value~=nil then lines[#lines+1]='rule_'..id..'.'..field..'='..escape(tostring(value)) end
+            end
+        end
+        tasks=type(tasks)=='table' and tasks or {}
+        if #tasks>32 then return nil,'预设最多包含32个定时任务' end
+        lines[#lines+1]='task_count='..tostring(#tasks)
+        for i,task in ipairs(tasks) do
+            if type(task)~='table' then return nil,'定时任务无效' end
+            local fields={name=task.name,mode=task.mode,time=task.time,message=task.message,
+                enabled=tostring(task.enabled==true and task.done~=true)}
+            for _,field in ipairs({'name','mode','time','message','enabled'}) do
+                local value=fields[field]
+                if type(value)~='string' then return nil,'定时任务字段无效' end
+                lines[#lines+1]='task_'..i..'.'..field..'='..escape(value)
             end
         end
         local payload=table.concat(lines,'\n')..'\n'
@@ -968,8 +1029,10 @@ local function build_chat_automation(env)
         if type(payload)~='string' or #payload>1048576 then return false,'预设格式无效或超过 1 MiB' end
         if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
         local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
-        if lines[1]~='# AutoChat profile v1' then return false,'预设版本无效' end
-        local values,rules,seen={}, {}, {}
+        local version=tonumber(lines[1]:match('^# AutoChat profile v(%d+)$'))
+        if version~=1 and version~=2 and version~=3 then return false,'预设版本无效' end
+        local values,rules,seen,tasks_by_id={}, {}, {}, {}
+        local task_count
         local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
         for i=2,#lines do
             local key,raw=lines[i]:match('^([%w_%.]+)=(.*)$')
@@ -978,10 +1041,28 @@ local function build_chat_automation(env)
             local value=unescape(raw)
             if value==nil or escape(value)~=raw then return false,'预设转义无效' end
             if not valid_utf8(value) then return false,'预设包含无效 UTF-8' end
-            if scalar_set[key] then
+            local task_index,task_field=key:match('^task_(%d+)%.([%a_]+)$')
+            if key=='task_count' then
+                if version<2 or not value:match('^%d+$') then return false,'定时任务数量无效' end
+                task_count=tonumber(value)
+                if task_count>32 then return false,'预设最多包含32个定时任务' end
+            elseif task_index then
+                local fields={name=true,mode=true,time=true,message=true,enabled=true}
+                if version<2 or not fields[task_field] then return false,'定时任务字段无效' end
+                local index=tonumber(task_index)
+                if not index or index<1 or index>32 or index%1~=0 then return false,'定时任务编号无效' end
+                if task_field=='enabled' then
+                    if value=='true' then value=true elseif value=='false' then value=false else return false,'定时任务开关无效' end
+                end
+                tasks_by_id[index]=tasks_by_id[index] or {}
+                tasks_by_id[index][task_field]=value
+            elseif key=='scope' then
+                if version~=1 then return false,'预设版本无效' end
+                if value~='all' and value~='host' then return false,'旧版预设发送范围无效' end
+            elseif scalar_set[key] then
                 if booleans[key] then
                     if value=='true' then value=true elseif value=='false' then value=false else return false,'开关值无效' end
-                elseif key=='cooldown' or key=='welcome_delay' then
+                elseif key=='cooldown' or key=='welcome_delay' or key=='quick_timer_interval' then
                     if not value:match('^%d+$') then return false,'冷却值无效' end
                     value=tonumber(value)
                 end
@@ -1009,17 +1090,56 @@ local function build_chat_automation(env)
                 rules[stable]=rules[stable] or {};rules[stable][field]=converted
             end
         end
-        for _,key in ipairs(keys) do if values[key]==nil then return false,'缺少设置：'..key end end
+        for _,key in ipairs(keys) do
+            if values[key]==nil then
+                if version<3 and key=='quick_timer_enabled' then values[key]=false
+                elseif version<3 and key=='quick_timer_interval' then values[key]=30
+                elseif version<3 and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
+                else return false,'缺少设置：'..key end
+            end
+        end
+        local task_list
+        if version>=2 then
+            if task_count==nil then return false,'缺少定时任务数量' end
+            task_list={}
+            for i=1,task_count do
+                local t=tasks_by_id[i]
+                if not t or t.name==nil or t.mode==nil or t.time==nil or t.message==nil or t.enabled==nil then
+                    return false,'定时任务字段不完整'
+                end
+                if t.name=='' or #t.name>96 or t.name:find('[%c]') or not t.name:find('%S')
+                    or t.message=='' or #t.message>200 or t.message:find('[%c]') or not t.message:find('%S') then
+                    return false,'定时任务名称或消息无效'
+                end
+                if t.mode=='repeat' or t.mode=='once' then
+                    local seconds=t.time:match('^%d+$') and tonumber(t.time)
+                    if not seconds or seconds<5 or seconds>86400 then return false,'定时任务间隔无效' end
+                    t.time=tostring(seconds)
+                elseif t.mode=='daily' then
+                    local hour,minute=t.time:match('^(%d%d?):(%d%d)$');hour,minute=tonumber(hour),tonumber(minute)
+                    if not hour or hour>23 or minute>59 then return false,'定时任务时间无效' end
+                    t.time=string.format('%02d:%02d',hour,minute)
+                else return false,'定时任务类型无效' end
+                task_list[i]={name=t.name,mode=t.mode,time=t.time,message=t.message,enabled=t.enabled}
+            end
+            for i in pairs(tasks_by_id) do if i>task_count then return false,'定时任务数量不匹配' end end
+        end
         local count=0;for _ in pairs(rules) do count=count+1 end
         if count>512 then return false,'规则数量超过 512' end
-        return true,{values=values,rules=rules}
+        return true,{values=values,rules=rules,tasks=task_list,version=version}
     end
     function api.import_profile(payload,role)
         if role~='host' and role~='client' then return false,'未知预设' end
         local valid,parsed=api.validate_profile(payload)
         if not valid then return false,parsed end
         local candidate={host=copy(profiles.host),client=copy(profiles.client)}
-        for _,key in ipairs(keys) do candidate[role][key]=parsed.values[key] end
+        for _,key in ipairs(keys) do
+            if parsed.version < 3 and key:match('^quick_timer_') then
+                -- Older portable profiles did not own this setting; loading one
+                -- must not silently change the destination role's timer.
+                candidate[role][key]=profiles[role][key]
+            else candidate[role][key]=parsed.values[key] end
+        end
         candidate[role].rules=parsed.rules
         if attempt(env.write_file,serialize(candidate))~=true then return false,'设置保存失败，已保留原设置' end
         profiles[role]=candidate[role]
@@ -1216,10 +1336,6 @@ local function build_chat_automation(env)
     local function policy(now, others, snapshot, peer, rule_id, cooldown)
         limits(snapshot)
         if not options.enabled then return false, '自动发送已关闭' end
-        if options.scope == 'host' then
-            if not snapshot or snapshot.is_host == nil then return false, '等待：主机身份尚未确认' end
-            if snapshot.is_host == false then return false, '等待：仅主机可自动发送' end
-        end
         if not options.allow_solo and (type(others) ~= 'number' or others < 1) then
             return false, '等待：小队中没有其他玩家'
         end
@@ -1264,8 +1380,8 @@ local function build_chat_automation(env)
         profiles[role][key] = value
         if role ~= state.active_role then state.status='设置已保存';return true,state.status end
         options[key] = value
-        if key == 'enabled' or key == 'welcome' or key == 'scope' then reset() end
-        if key == 'enabled' or key == 'scope' or key == 'ping' or key == 'output' then state.pings = {} end
+        if key == 'enabled' or key == 'welcome' then reset() end
+        if key == 'enabled' or key == 'ping' or key == 'output' then state.pings = {} end
         if key == 'output' then reset() end
         state.status = '设置已保存'
         return true, state.status
@@ -1316,6 +1432,18 @@ local function build_chat_automation(env)
             or rule_key('enemy',event.category))
         return key,key and profiles[state.active_role].rules[key] or {}
     end
+    local function event_diagnostic(event,rule_id,result)
+        if type(env.diagnostic)~='function' then return end
+        local category=type(event)=='table' and categories[event.category] and event.category or 'unknown'
+        local action=type(event)=='table' and (event.action=='summon' or event.action=='use' or event.action=='mark')
+            and event.action or 'unknown'
+        local stable_id='-'
+        if type(rule_id)=='string' and (rule_id:match('^stratagem_%d+$') or rule_id:match('^enemy_[%a_]+$')) then
+            stable_id=rule_id
+        end
+        local output=profiles[state.active_role] and profiles[state.active_role].output or 'unknown'
+        pcall(env.diagnostic,category,action,stable_id,result,output)
+    end
     local function same_session(a, b)
         return a and b and a.session == b.session and a.context == b.context
             and a.mine == b.mine and a.host == b.host
@@ -1327,10 +1455,6 @@ local function build_chat_automation(env)
         end
         local snapshot, why = api.snapshot()
         if not snapshot then reset(); state.status = why; return false, why end
-        if options.scope == 'host' and snapshot.is_host ~= true then
-            reset(); state.status = snapshot.is_host == false and '等待：仅主机可自动发送' or '等待：主机身份尚未确认'
-            return false, state.status
-        end
         if type(now) ~= 'number' or now ~= now or now == math.huge or now == -math.huge then
             reset(); state.status = '等待：计时尚未就绪'; return false, state.status
         end
@@ -1378,27 +1502,29 @@ local function build_chat_automation(env)
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
-        api.sync()
+        if not api.sync() then state.status='等待：主机身份尚未确认';event_diagnostic(event,nil,'role-unknown');return false end
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
-            or now == math.huge or now == -math.huge then return false end
-        if not options.enabled or not options.ping or not ping_enabled(event.category,event.action) then return false end
+            or now == math.huge or now == -math.huge then event_diagnostic(event,nil,'invalid-event');return false end
         local rule_id,rule=event_rule(event)
-        if rule.enabled==false then return false end
+        if not options.enabled then event_diagnostic(event,rule_id,'master-disabled');return false end
+        if not options.ping then event_diagnostic(event,rule_id,'ping-disabled');return false end
+        if not ping_enabled(event.category,event.action) then event_diagnostic(event,rule_id,'category-disabled');return false end
+        if rule.enabled==false then event_diagnostic(event,rule_id,'rule-disabled');return false end
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
-        if state.ping_seen[event.key] then return false end
+        if state.ping_seen[event.key] then event_diagnostic(event,rule_id,'duplicate-event');return false end
         local snapshot = api.snapshot()
-        if options.scope == 'host' and (not snapshot or snapshot.is_host ~= true) then return false end
-        if not creator_present(event.creator_id, snapshot) then return false end
+        if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false end
         if #state.pings>=16 then
-            if rule.cooldown~=0 then return false end
+            if rule.cooldown~=0 then event_diagnostic(event,rule_id,'queue-full');return false end
             local evict
             for i,pending in ipairs(state.pings) do if pending.cooldown~=0 then evict=i;break end end
-            if not evict then return false end
+            if not evict then event_diagnostic(event,rule_id,'queue-full-no-eviction');return false end
             table.remove(state.pings,evict)
         end
         local label = categories[event.category]
-        local target = type(event.target) == 'string' and plain(event.target,200) or label
+        local raw_target=type(event.display_name)=='string' and event.display_name or event.target
+        local target = type(raw_target) == 'string' and plain(raw_target,200) or label
         local identity = identity_for(event.creator_id)
         local short = identity and plain(identity.short, 16) or '队友'
         if short == '' then short = '队友' end
@@ -1428,19 +1554,28 @@ local function build_chat_automation(env)
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
         state.ping_seen[event.key] = now + 30
+        event_diagnostic(event,rule_id,'queued')
         return true
     end
     local function poll_ping(now, urgent_only)
-        if not options.enabled or not options.ping then state.pings = {}; return false end
+        if not options.enabled or not options.ping then
+            local reason=options.enabled and 'ping-disabled' or 'master-disabled'
+            for _,pending in ipairs(state.pings) do event_diagnostic(pending,pending.rule_id,reason) end
+            state.pings = {}; return false
+        end
         if type(now) ~= 'number' or now ~= now then return false end
         local snapshot = api.snapshot()
         local context = attempt(env.context)
         for i=#state.pings,1,-1 do
             local p = state.pings[i]
-            if now > p.expires or not creator_present(p.creator_id, snapshot)
-                or not ping_enabled(p.category,p.action)
-                or p.context ~= context or p.session ~= (snapshot and snapshot.session)
-                or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then
+            local reason
+            if now > p.expires then reason='queue-expired'
+            elseif not creator_present(p.creator_id, snapshot) then reason='creator-not-in-roster'
+            elseif not ping_enabled(p.category,p.action) then reason='category-disabled'
+            elseif p.context ~= context or p.session ~= (snapshot and snapshot.session)
+                or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then reason='session-changed' end
+            if reason then
+                event_diagnostic(p,p.rule_id,reason)
                 table.remove(state.pings,i)
             end
         end
@@ -1449,7 +1584,11 @@ local function build_chat_automation(env)
             if now>=p.retry and (not urgent_only or p.cooldown==0) then
                 local allowed,why=policy(now,snapshot and #snapshot.remote or nil,snapshot,p.creator_id,p.rule_id,p.cooldown)
                 if allowed then pending,index=p,i;break end
-                state.status=why
+                local reason=why=='等待：小队中没有其他玩家' and 'solo-disabled'
+                    or why=='等待：计时尚未就绪' and 'clock-unavailable'
+                    or why=='等待：该玩家的自动消息间隔中' and 'cooldown-active'
+                    or why=='自动发送已关闭' and 'master-disabled' or 'policy-blocked'
+                state.status=why;event_diagnostic(p,p.rule_id,reason)
             end
         end
         if not pending then return false end
@@ -1460,10 +1599,10 @@ local function build_chat_automation(env)
                 limits(snapshot);local key=bucket(pending.creator_id,snapshot)
                 state.last_by_rule[key]=state.last_by_rule[key] or {};state.last_by_rule[key][pending.rule_id]=now
             else api.record(now,pending.creator_id) end
-            state.status='已发送玩家标记提示'; return true, state.status
+            state.status='已发送玩家标记提示';event_diagnostic(pending,pending.rule_id,'sent');return true, state.status
         end
         pending.retry=now+5
-        state.status='等待：标记提示暂未发送（5秒后重试）'
+        state.status='等待：标记提示暂未发送（5秒后重试）';event_diagnostic(pending,pending.rule_id,'send-refused')
         return false, state.status
     end
     function api.poll(now)
@@ -1498,8 +1637,10 @@ end
 -- Data-only preset storage. All game/config semantics are supplied by env.
 local function build_preset_library(env)
     local MAX_PRESETS, MAX_NAME, MAX_PAYLOAD, MAX_SERIAL = 32, 96, 1024 * 1024, 99999999
+    local MAX_LIBRARY_PRESETS = MAX_PRESETS * 2
     local MAX_LIBRARY = 16 * 1024 * 1024
-    local LIB_MAGIC = "# AutoChat preset library v1\n"
+    local LIB_MAGIC_V1 = "# AutoChat preset library v1\n"
+    local LIB_MAGIC = "# AutoChat preset library v2\n"
     local FILE_MAGIC = "# AutoChat preset v1\n"
     local state = {error = nil, revision = 0}
     local entries, serial = {}, 0
@@ -1549,15 +1690,18 @@ local function build_preset_library(env)
     local function find(id)
         for i = 1, #entries do if entries[i].id == id then return i, entries[i] end end
     end
-    local function duplicate_name(name, except)
-        for i = 1, #entries do if i ~= except and entries[i].name == name then return true end end
+    local function valid_role(role) return role == "host" or role == "client" end
+    local function duplicate_name(name, role, except)
+        for i = 1, #entries do
+            if i ~= except and entries[i].role == role and entries[i].name == name then return true end
+        end
         return false
     end
     local function encode_library(items, next_serial)
         local out = {LIB_MAGIC, tostring(next_serial), "\n", tostring(#items), "\n"}
         for i = 1, #items do
             local e = items[i]
-            out[#out + 1] = e.id .. "\n" .. tostring(#e.name) .. "\n" .. tostring(#e.payload) .. "\n"
+            out[#out + 1] = e.id .. "\n" .. e.role .. "\n" .. tostring(#e.name) .. "\n" .. tostring(#e.payload) .. "\n"
             out[#out + 1] = e.name; out[#out + 1] = e.payload
         end
         return table.concat(out)
@@ -1572,13 +1716,16 @@ local function build_preset_library(env)
         return value, e + 1
     end
     local function parse_library(data)
-        if type(data) ~= "string" or #data > MAX_LIBRARY or data:sub(1, #LIB_MAGIC) ~= LIB_MAGIC then return nil, nil, "预设库格式损坏" end
-        local pos = #LIB_MAGIC + 1
+        if type(data) ~= "string" or #data > MAX_LIBRARY then return nil, nil, "预设库格式损坏" end
+        local legacy = data:sub(1, #LIB_MAGIC_V1) == LIB_MAGIC_V1
+        local magic = legacy and LIB_MAGIC_V1 or LIB_MAGIC
+        if data:sub(1, #magic) ~= magic then return nil, nil, "预设库格式损坏" end
+        local pos = #magic + 1
         local saved_serial; saved_serial, pos = parse_uint_line(data, pos, MAX_SERIAL)
         if not saved_serial then return nil, nil, "预设库序号无效" end
-        local count; count, pos = parse_uint_line(data, pos, MAX_PRESETS)
+        local count; count, pos = parse_uint_line(data, pos, legacy and MAX_PRESETS or MAX_LIBRARY_PRESETS)
         if count == nil then return nil, nil, "预设库数量无效" end
-        local result, ids, names, highest = {}, {}, {}, 0
+        local result, ids, names, highest, role_counts = {}, {}, {}, 0, {host=0,client=0}
         for _ = 1, count do
             local id_end = data:find("\n", pos, true)
             if not id_end or id_end - pos ~= 9 then return nil, nil, "预设编号无效" end
@@ -1588,22 +1735,46 @@ local function build_preset_library(env)
             if not number or number < 1 or number > MAX_SERIAL or ids[id] then return nil, nil, "预设编号重复或无效" end
             ids[id] = true; if number > highest then highest = number end
             pos = id_end + 1
+            local role = "host"
+            if not legacy then
+                local role_end=data:find("\n",pos,true)
+                if not role_end then return nil,nil,"预设角色无效" end
+                role=data:sub(pos,role_end-1);pos=role_end+1
+                if not valid_role(role) then return nil,nil,"预设角色无效" end
+            end
             local nl; nl, pos = parse_uint_line(data, pos, MAX_NAME)
             if not nl then return nil, nil, "预设名称长度无效" end
             local pl; pl, pos = parse_uint_line(data, pos, MAX_PAYLOAD)
             if nl == 0 or not pl or pl == 0 or pos + nl + pl - 1 > #data then return nil, nil, "预设长度无效" end
             local name = data:sub(pos, pos + nl - 1); pos = pos + nl
             local payload = data:sub(pos, pos + pl - 1); pos = pos + pl
-            if not valid_name(name) or names[name] then return nil, nil, "预设名称重复或无效" end
-            names[name] = true
+            local name_key=role.."\0"..name
+            if not valid_name(name) or names[name_key] or legacy and names[name] then return nil, nil, "预设名称重复或无效" end
+            names[name_key], names[name] = true, true
             local valid = validate_payload(payload)
             if not valid then return nil, nil, "库内预设数据无效" end
-            result[#result + 1] = {id = id, name = name, payload = payload}
+            role_counts[role]=role_counts[role]+1
+            if role_counts[role]>MAX_PRESETS then return nil,nil,"单角色预设数量超过32" end
+            result[#result + 1] = {id = id, role=role, name = name, payload = payload}
         end
         if pos ~= #data + 1 or highest > saved_serial then return nil, nil, "预设库含有多余数据或无效序号" end
-        return result, saved_serial
+        if legacy then
+            local legacy_entries={};for i,item in ipairs(result) do legacy_entries[i]=item end
+            for _,item in ipairs(legacy_entries) do
+                if #result>=MAX_LIBRARY_PRESETS or saved_serial>=MAX_SERIAL then return nil,nil,"旧版预设无法安全复制到客机预设池" end
+                saved_serial=saved_serial+1
+                result[#result+1]={id=string.format("P%08d",saved_serial),role="client",name=item.name,payload=item.payload}
+            end
+        end
+        return result, saved_serial, nil, legacy
     end
     local function persist(next_entries, next_serial)
+        local counts={host=0,client=0}
+        for _,item in ipairs(next_entries) do
+            if not valid_role(item.role) then return false,"预设角色无效" end
+            counts[item.role]=counts[item.role]+1
+            if counts[item.role]>MAX_PRESETS then return false,"每个角色最多保存32个预设" end
+        end
         local bytes = encode_library(next_entries, next_serial)
         if #bytes > MAX_LIBRARY then return false, "预设库超过大小限制" end
         local ok, wrote, why = call(env.write_file, bytes)
@@ -1618,22 +1789,37 @@ local function build_preset_library(env)
         elseif data == nil then
             if why ~= nil then state.error = why end
         else
-            local loaded, loaded_serial, err = parse_library(data)
-            if not loaded then state.error = err else entries, serial = loaded, loaded_serial end
+            local loaded, loaded_serial, err, migrated = parse_library(data)
+            if not loaded then state.error = err
+            elseif migrated then
+                local migrated_bytes=encode_library(loaded,loaded_serial)
+                if #migrated_bytes>MAX_LIBRARY then
+                    state.error="旧版预设复制后会超过大小限制；原文件已保留"
+                else
+                    local ok,wrote,why=call(env.write_file,migrated_bytes)
+                    if not ok or wrote~=true then state.error="旧版预设迁移未能写入；原文件已保留"..(why and ("："..tostring(why)) or "")
+                    else entries,serial=loaded,loaded_serial;state.revision=1 end
+                end
+            else entries, serial = loaded, loaded_serial end
         end
     end
     local api = {state = state}
-    function api.list()
+    function api.list(role)
         local result = {}
-        for i = 1, #entries do result[i] = {id = entries[i].id, name = entries[i].name, payload = entries[i].payload} end
+        for i = 1, #entries do
+            if role==nil or entries[i].role==role then
+                result[#result+1] = {id = entries[i].id, role=entries[i].role, name = entries[i].name, payload = entries[i].payload}
+            end
+        end
         return result
     end
     local function ready() if state.error then return false, "预设库不可用：" .. tostring(state.error) end; return true end
     function api.save(name, role)
         local r, reason = ready(); if not r then return false, reason end
+        if not valid_role(role) then return fail("请选择主机或客机预设池") end
         if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
-        if duplicate_name(name) then return fail("预设名称已存在，请先重命名现有预设") end
-        if #entries >= MAX_PRESETS then return fail("最多保存32个预设") end
+        if duplicate_name(name,role) then return fail("此角色的预设名称已存在，请先重命名现有预设") end
+        if #api.list(role) >= MAX_PRESETS then return fail("每个角色最多保存32个预设") end
         local ok, payload, why = call(env.capture, role)
         if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
@@ -1641,7 +1827,7 @@ local function build_preset_library(env)
         local next_serial = serial + 1
         local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
         local id = string.format("P%08d", next_serial)
-        next_entries[#next_entries + 1] = {id = id, name = name, payload = payload}
+        next_entries[#next_entries + 1] = {id = id, role=role, name = name, payload = payload}
         local saved, savewhy = persist(next_entries, next_serial)
         if not saved then return fail(savewhy) end
         return true, nil, id
@@ -1649,10 +1835,11 @@ local function build_preset_library(env)
     function api.replace(id, role)
         local r, reason = ready(); if not r then return false, reason end
         local index, old = find(id); if not index then return fail("找不到该预设") end
+        if not valid_role(role) or role~=old.role then return fail("所选预设不属于当前角色") end
         local ok, payload, why = call(env.capture, role)
         if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
-        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, name = old.name, payload = payload} or entries[i] end
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, role=old.role, name = old.name, payload = payload} or entries[i] end
         local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
         return true
     end
@@ -1667,8 +1854,8 @@ local function build_preset_library(env)
         local r, reason = ready(); if not r then return false, reason end
         local index, old = find(id); if not index then return fail("找不到该预设") end
         if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
-        if duplicate_name(name, index) then return fail("预设名称已存在") end
-        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, name = name, payload = old.payload} or entries[i] end
+        if duplicate_name(name, old.role, index) then return fail("此角色的预设名称已存在") end
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, role=old.role, name = name, payload = old.payload} or entries[i] end
         local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
         return true
     end
@@ -1690,8 +1877,10 @@ local function build_preset_library(env)
         if not ok or wrote ~= true then return fail(detail or "导出预设失败") end
         return true, nil, path or detail
     end
-    function api.import(path)
+    function api.import(path, role)
         local r, reason = ready(); if not r then return false, reason end
+        role=role or "host"
+        if not valid_role(role) then return fail("请选择主机或客机预设池") end
         local ok, data, why = call(env.import_file, path)
         if not ok or type(data) ~= "string" then return fail(why or "读取预设文件失败") end
         if #data > MAX_PAYLOAD + MAX_NAME + 64 or data:sub(1, #FILE_MAGIC) ~= FILE_MAGIC then return fail("预设文件格式无效或过大") end
@@ -1703,14 +1892,14 @@ local function build_preset_library(env)
         local name = data:sub(pos, pos + nl - 1); pos = pos + nl
         local payload = data:sub(pos, pos + pl - 1)
         if not valid_name(name) then return fail("预设名称无效") end
-        if duplicate_name(name) then return fail("预设名称已存在，请先重命名现有预设") end
+        if duplicate_name(name,role) then return fail("此角色的预设名称已存在，请先重命名现有预设") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
-        if #entries >= MAX_PRESETS then return fail("最多保存32个预设") end
+        if #api.list(role) >= MAX_PRESETS then return fail("每个角色最多保存32个预设") end
         if serial >= MAX_SERIAL then return fail("预设编号已用尽") end
         local next_serial = serial + 1
         local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
         local id = string.format("P%08d", next_serial)
-        next_entries[#next_entries + 1] = {id = id, name = name, payload = payload}
+        next_entries[#next_entries + 1] = {id = id, role=role, name = name, payload = payload}
         local saved, savewhy = persist(next_entries, next_serial); if not saved then return fail(savewhy) end
         return true, nil, id
     end
@@ -1783,9 +1972,13 @@ preset_library = build_preset_library({
         return preset_read(PRESET_LIBRARY_PATH, 16 * 1024 * 1024 + 1, true)
     end,
     write_file = function(data) return preset_atomic_write(PRESET_LIBRARY_PATH, data) end,
-    capture = function(role) return automation.export_profile(role) end,
+    capture = function(role) return automation.export_profile(role, M.profile_tasks(role)) end,
     validate = function(payload) return automation.validate_profile(payload) end,
-    apply = function(payload, role) return automation.import_profile(payload, role) end,
+    apply = function(payload, role) return apply_preset_snapshot(payload, role) end,
+    diagnostic = function(category, action, stable_id, result, output)
+        note('event flow category='..tostring(category)..' action='..tostring(action)
+            ..' rule='..tostring(stable_id)..' result='..tostring(result)..' output='..tostring(output))
+    end,
     export_file = function(filename, data)
         if type(filename) ~= 'string' or not filename:match('^preset%-P%d%d%d%d%d%d%d%d%.autochat$')
             or filename:find('[/\\:]') or filename:find('%z') then
@@ -2054,12 +2247,169 @@ local marker_localization = build_marker_localization({
 })
 function M.debug_localization() return marker_localization end
 
+-- BEGIN STRATAGEM NAMES ZH
+-- Curated Simplified Chinese display names keyed by stable StratagemInfo ID.
+-- The catalog uses these labels only for display; native identities remain English and unchanged.
+local STRATAGEM_NAMES_ZH = {
+    [5185868] = "AX/TX-13 腐息",
+    [12688472] = "MD-6 反步兵雷区",
+    [14345846] = "M-105 盟友",
+    [45875024] = "B-100 便携式地狱火炸弹",
+    [65564476] = "提取燃料",
+    [73468749] = "LIFT-860 悬浮背包",
+    [101457192] = "装填高爆弹",
+    [115737856] = "撤离信标",
+    [153819019] = "战术榴弹发射器",
+    [255298804] = "医疗补给包",
+    [272480476] = "SH-51 定向护盾",
+    [295629711] = "战斗机甲",
+    [336693041] = "S-11 矛枪",
+    [458198946] = "MG-43 机枪",
+    [460870572] = "TD-110 风暴漩涡",
+    [474724029] = "A/FLAM-40 火焰喷射哨戒炮",
+    [485866824] = "AX/AR-23 护卫犬",
+    [509712523] = "紧急撤离信标",
+    [512147393] = "GL-28 弹链式榴弹发射器",
+    [533318241] = "MG-206 重机枪",
+    [563851843] = "破门型战斗机甲",
+    [599201298] = "超级地球旗帜",
+    [623391597] = "A/G-16 加特林哨戒炮",
+    [644090457] = "MD-8 毒气地雷",
+    [650447969] = "地震探测器",
+    [681028671] = "数据接口",
+    [685210453] = "勘探钻机",
+    [705279885] = "移动通信中继站",
+    [716088572] = "紧急撤离信标",
+    [716273285] = "钻孔炸药",
+    [717707279] = "A/MLS-4X 火箭哨戒炮",
+    [762584056] = "E/AT-12 反坦克炮台",
+    [774795224] = "鲨鱼能量武器",
+    [854563507] = "A/AC-8 自动哨戒炮",
+    [863373678] = "训练：增援信标",
+    [867876502] = "重新补给",
+    [871315230] = "撤离信标",
+    [875551083] = "AC-8 机炮",
+    [890972990] = "StA-X3 W.A.S.P.发射器",
+    [905054095] = "地毯式轰炸",
+    [913592461] = "毒素钻机",
+    [929878807] = "额外扫射攻击（未使用）",
+    [951988742] = "AX/LAS-5 漫游车",
+    [960389145] = "A/LAS-98 激光哨戒炮",
+    [970450596] = "轨道激光炮",
+    [992079466] = "ARC-3 电弧发射器",
+    [1005987791] = "信号干扰器",
+    [1042447730] = "暗流体背包",
+    [1053576110] = "B-100 便携式地狱火炸弹",
+    [1063322614] = "轨道120MM高爆弹火力网",
+    [1091253198] = "医疗补给包",
+    [1125307795] = "AX/FLAM-75 热狗",
+    [1232978203] = "遥控炸药",
+    [1238358532] = "“飞鹰”空袭",
+    [1280711447] = "轨道电磁冲击波攻击",
+    [1290499887] = "黑曜石型战斗机甲",
+    [1295431756] = "重新补给",
+    [1298599997] = "GR-8 无后坐力炮",
+    [1337271929] = "MS-11 单兵导弹发射井",
+    [1426041086] = "TCS 03 震击器",
+    [1432571981] = "FLAM-40 火焰喷射器",
+    [1449420233] = "超级地球武装部队小队",
+    [1503060624] = "虫洞封堵装置",
+    [1560416221] = "轨道空爆攻击",
+    [1567517764] = "MG-43 机枪",
+    [1582497738] = "A/M-12 迫击哨戒炮",
+    [1606251952] = "货运集装箱",
+    [1685231450] = "“飞鹰”烟雾攻击",
+    [1692135420] = "AX/ARC-3 K-9 电弧护卫犬",
+    [1695682779] = "轨道照明弹",
+    [1753436707] = "LIFT-850 喷射背包",
+    [1813634375] = "EAT-700 消耗性凝固汽油弹",
+    [1824787072] = "TX-41 灭菌器",
+    [1907808218] = "B-1 补给背包",
+    [1979913877] = "“飞鹰”110MM火箭巢",
+    [2002187052] = "TD-220 堡垒MK XVI",
+    [2007887745] = "RL-77 空爆火箭弹发射器",
+    [2040137691] = "“飞鹰”凝固汽油弹空袭",
+    [2084654169] = "轨道加特林火力网",
+    [2185045091] = "LIFT-182 传送背包",
+    [2186648412] = "战术摄像机",
+    [2207713849] = "APW-1 反器材步枪",
+    [2229216190] = "医疗补给包",
+    [2230051894] = "训练：撤离",
+    [2232989803] = "MLS-4X 突击兵",
+    [2239174926] = "MD-17 反坦克地雷",
+    [2265180087] = "近战旗帜",
+    [2266266587] = "增援信标",
+    [2271469939] = "重型火焰喷射器",
+    [2281932031] = "FX-12 防护罩生成中继器",
+    [2319566343] = "运送超级固态硬盘",
+    [2402590523] = "A/ARC-3 特斯拉塔",
+    [2480128092] = "E/GL-21 掷弹兵防卫墙",
+    [2587901119] = "战斗机甲",
+    [2625074523] = "激光脉冲炮",
+    [2636699686] = "M-103 补给型快速侦察载具",
+    [2663642538] = "核弹",
+    [2670122272] = "货运集装箱",
+    [2720892179] = "虫族震动装置",
+    [2742141597] = "MD-I4 燃烧地雷",
+    [2744472229] = "轨道炮攻击",
+    [2808191861] = "“飞鹰”空袭支援",
+    [2822568285] = "LAS-98 激光大炮",
+    [2846457047] = "M-104 炽灼型快速侦察载具",
+    [2902516083] = "轨道凝固汽油弹火力网",
+    [2919842659] = "E/MG-101 重机枪部署支架",
+    [2934950455] = "EAT-411 荡平者",
+    [2985177386] = "超级地球武装部队大炮",
+    [3001049275] = "空对空导弹（未使用）",
+    [3078242205] = "RS-422 磁轨炮",
+    [3085503322] = "A/M-23 电磁冲击波迫击哨戒炮",
+    [3086305673] = "伐木者型战斗机甲",
+    [3108516875] = "轨道380MM高爆弹火力网",
+    [3183339606] = "A/GM-17 瓦斯迫击哨戒炮",
+    [3193297673] = "轨道毒气攻击",
+    [3193487269] = "S.O.S.求救信标",
+    [3275255096] = "A/MLS-4X 火箭哨戒炮",
+    [3279813377] = "轨道游走火力网",
+    [3288352984] = "M-1000 重装机枪",
+    [3300666223] = "上传数据",
+    [3316399568] = "LIFT-850 喷射背包",
+    [3330450692] = "CQC-20 破门锤",
+    [3343676429] = "GL-21 榴弹发射器",
+    [3353508219] = "SH-20 防弹护盾背包",
+    [3413606544] = "EAT-17 消耗性反坦克武器",
+    [3455841218] = "迷你机枪",
+    [3523620028] = "轨道精准攻击",
+    [3572024208] = "链锯巨剑",
+    [3656370131] = "“飞鹰”集束炸弹",
+    [3702563421] = "装填反坦克弹",
+    [3713568312] = "轨道烟雾攻击",
+    [3722314010] = "超级地球旗帜",
+    [3748434442] = "B/MD C4背包",
+    [3753216434] = "EAT-17 消耗性反坦克武器",
+    [3796132384] = "轨道烟雾游走火力网",
+    [3837064536] = "重新武装“飞鹰”",
+    [3843705076] = "SH-32 防护罩生成包",
+    [3868299561] = "干扰陷阱",
+    [3923676543] = "FAF-14 飞矛",
+    [3928947721] = "运送超级固态硬盘",
+    [3935317067] = "M-102 炮手快速侦察载具",
+    [3989310204] = "地狱火炸弹",
+    [4119049995] = "“飞鹰”500KG炸弹",
+    [4152191751] = "化学武器",
+    [4177070437] = "呼叫超级驱逐舰",
+    [4196275240] = "“飞鹰”毒气空袭",
+    [4239785897] = "A/MG-43 哨戒机枪",
+    [4261593827] = "PLAS-45 纪元",
+    [4264661046] = "装填霰弹",
+}
+-- Inline this fragment before build_stratagem_catalog and pass STRATAGEM_NAMES_ZH as env.names_zh.
+-- END STRATAGEM NAMES ZH
 -- BEGIN STRATAGEM CATALOG
 -- Read-only StratagemInfo discovery for Steam build 25480438.
 -- env.base() must enforce the supported game.dll fingerprint. Extra pins prove
 -- the row/name/icon consumers. Layout facts and provenance: docs/STRATAGEM-REFERENCE-0.8.0.md.
 -- No game calls, writes, asset loading, or static native-type identity mapping.
 local function build_stratagem_catalog(env)
+    local names_zh=type(env.names_zh)=='table' and env.names_zh or {}
     -- Current native payload -> HellpodRack.payloads.item -> EntityComponentMap
     -- identity graph. Provenance/collisions: docs/stratagem-resource-aliases.json.
     -- Shared variants are absent from this exact-ID index and handled separately
@@ -2182,7 +2532,10 @@ local function build_stratagem_catalog(env)
                     -- Use the already validated native debug string. Resolving every
                     -- localization key here calls into a game function during the
                     -- first update; discovery and rule identity do not need it.
+                    local display_name=names_zh[id]
+                    if type(display_name)~='string' or display_name=='' then display_name=debug_name end
                     local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
+                        display_name=display_name,
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
                         cooldown=cd,payload_count=payload_count,resource_aliases={}}
@@ -2296,7 +2649,7 @@ local function build_stratagem_catalog(env)
 end
 -- END STRATAGEM CATALOG
 
-local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at})
+local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH})
 local catalog_scan_phase = 0
 function M.debug_stratagem_catalog()return stratagem_catalog end
 local function enrich_stratagem_event(event,now)
@@ -2307,6 +2660,7 @@ local function enrich_stratagem_event(event,now)
         or stratagem_catalog.resolve_name_key(event.localization_key)
     if row then
         event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group
+        event.display_name=row.display_name
     else
         local rule=stratagem_catalog.resolve_rule_resource(event.resource)
             or stratagem_catalog.resolve_rule_name_key(event.localization_key)
@@ -3529,6 +3883,61 @@ local function save_tasks()
     if not ok then pcall(function() handle:close() end) note('task save failed: ' .. tostring(result)) end
     return ok
 end
+apply_preset_snapshot = function(payload, role)
+    local valid, parsed = automation.validate_profile(payload)
+    if not valid then return false, parsed end
+    local old_tasks, old_serial, old_revision
+    if parsed.tasks ~= nil then
+        if role ~= 'host' and role ~= 'client' then return false, '未知预设' end
+        local candidate, count = {}, 0
+        for _, task in ipairs(M.tasks) do
+            if (task.profile or 'host') ~= role then
+                count = count + 1; candidate[count] = task
+            end
+        end
+        if count + #parsed.tasks > MAX_TASKS then return false, '应用后任务总数超过32' end
+        old_tasks, old_serial, old_revision = {}, task_serial, task_revision
+        for i, task in ipairs(M.tasks) do old_tasks[i] = task end
+        local now = os.time()
+        local next_serial = task_serial
+        for _, definition in ipairs(parsed.tasks) do
+            local task, why = task_validate(definition.name, definition.mode, definition.time, definition.message)
+            if not task then return false, why end
+            if next_serial >= 1000000000 then return false, '任务编号已用尽' end
+            next_serial = next_serial + 1
+            task.id, task.profile = next_serial, role
+            task.enabled = definition.enabled == true
+            task.done = false
+            task.due = now + (task.seconds or 0)
+            if task.mode=='daily' then
+                local c=os.date('*t',now)
+                if type(c)=='table' and c.hour*60+c.min>=task.minute then
+                    task.last_day=string.format('%04d-%02d-%02d',c.year,c.month,c.day)
+                end
+            end
+            count = count + 1; candidate[count] = task
+        end
+        for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
+        for i, task in ipairs(candidate) do M.tasks[i] = task end
+        task_serial = next_serial
+        if not save_tasks() then
+            for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
+            for i, task in ipairs(old_tasks) do M.tasks[i] = task end
+            task_serial = old_serial
+            return false, '保存定时任务失败；原任务已恢复'
+        end
+        task_revision = old_revision + 1
+    end
+    local applied, why = automation.import_profile(payload, role)
+    if applied then return true, why end
+    if old_tasks then
+        for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
+        for i, task in ipairs(old_tasks) do M.tasks[i] = task end
+        task_serial, task_revision = old_serial, old_revision
+        if not save_tasks() then note('preset task rollback failed after settings write failure') end
+    end
+    return false, why
+end
 local function load_tasks()
     local handle = io.open(TASK_FILE, 'r')
     if not handle then return end
@@ -3662,12 +4071,184 @@ function M.debug_run_tasks(now) run_tasks(now) end
 function M.debug_serialize_tasks() return serialize_tasks() end
 function M.debug_restore_tasks(data) return restore_tasks(data) end
 
+-- BEGIN UNICODE TEXT INPUT
+-- Convert the native window-procedure event queue into ordered editor actions.
+-- No Win32 callbacks live here; callers pass only records copied by the thunk.
+local function build_text_input(capacity)
+    capacity = math.max(1, math.floor(tonumber(capacity) or 128))
+    local MAX_CHAR_REPEAT = 32
+    local state = { composing = false, pending_high = nil, overflow = false, pressed = {},
+                    bytes = 0 }
+    local self = {}
+
+    local function utf8(codepoint)
+        if codepoint < 0x80 then
+            return string.char(codepoint)
+        elseif codepoint < 0x800 then
+            return string.char(0xC0 + math.floor(codepoint / 64), 0x80 + codepoint % 64)
+        elseif codepoint < 0x10000 then
+            return string.char(0xE0 + math.floor(codepoint / 4096),
+                               0x80 + math.floor(codepoint / 64) % 64,
+                               0x80 + codepoint % 64)
+        end
+        return string.char(0xF0 + math.floor(codepoint / 262144),
+                           0x80 + math.floor(codepoint / 4096) % 64,
+                           0x80 + math.floor(codepoint / 64) % 64,
+                           0x80 + codepoint % 64)
+    end
+
+    local function append(out, codepoint)
+        if codepoint < 0x20 or codepoint == 0x7F or codepoint > 0x10FFFF
+                or (codepoint >= 0xD800 and codepoint <= 0xDFFF) then return end
+        local value = utf8(codepoint)
+        state.bytes = state.bytes + #value
+        out[#out + 1] = { kind = 'text', value = value }
+    end
+
+    local function char_unit(out, unit)
+        if unit >= 0xD800 and unit <= 0xDBFF then
+            state.pending_high = unit
+            return
+        end
+        if unit >= 0xDC00 and unit <= 0xDFFF then
+            if state.pending_high then
+                append(out, 0x10000 + (state.pending_high - 0xD800) * 0x400 + unit - 0xDC00)
+            end
+            state.pending_high = nil
+            return
+        end
+        state.pending_high = nil
+        append(out, unit)
+    end
+
+    local function action(out, kind)
+        out[#out + 1] = { kind = kind }
+    end
+
+    function self.consume(events, overflow)
+        local out = {}
+        local has_overflow = overflow or (events and #events > capacity)
+        if has_overflow then
+            state.pending_high, state.composing = nil, false
+            state.pressed, state.bytes, state.overflow = {}, 0, true
+            out[1] = { kind = 'reset' }
+            return out
+        end
+        state.overflow = false
+        for i = 1, #(events or {}) do
+            local event = events[i]
+            local message = tonumber(event.message)
+            local wp, lp = tonumber(event.wparam) or 0, tonumber(event.lparam) or 0
+            if message == 0x010D then
+                state.composing = true
+                action(out, 'ime_start')
+            elseif message == 0x010E then
+                state.composing = false
+                action(out, 'ime_end')
+            elseif message == 0x0102 then
+                local repeats = lp % 0x10000
+                if repeats == 0 then repeats = 1 end
+                repeats = math.min(repeats, MAX_CHAR_REPEAT)
+                for _ = 1, repeats do
+                    if wp == 0x08 then
+                        if not state.composing then
+                            state.pending_high = nil
+                            action(out, 'backspace')
+                        end
+                    elseif wp == 0x0D or wp == 0x1B then
+                        -- Enter and Escape are handled on keydown only.
+                    elseif wp == 0x16 then
+                        action(out, 'paste')
+                    elseif wp == 0x01 then
+                        action(out, 'select_all')
+                    elseif wp == 0x18 then
+                        action(out, 'cut')
+                    elseif wp == 0x03 then
+                        action(out, 'copy')
+                    elseif wp ~= 0x09 and wp ~= 0x0A then
+                        char_unit(out, wp)
+                    end
+                end
+            elseif message == 0x0109 then
+                state.pending_high = nil
+                if wp ~= 0xFFFF then append(out, wp) end -- UNICODE_NOCHAR is a probe.
+            elseif message == 0x0100 or message == 0x0104 then
+                local repeated = math.floor(lp / 0x40000000) % 2 == 1
+                if not repeated and not state.pressed[wp] then
+                    state.pressed[wp] = true
+                    if wp == 0x0D and not state.composing then action(out, 'submit') end
+                    if wp == 0x1B and not state.composing then action(out, 'cancel') end
+                end
+            elseif message == 0x0101 or message == 0x0105 then
+                state.pressed[wp] = nil
+            end
+        end
+        return out
+    end
+
+    function self.reset()
+        state.composing, state.pending_high, state.bytes, state.overflow = false, nil, 0, false
+        state.pressed = {}
+    end
+
+    function self.status()
+        return { composing = state.composing, pending_high = state.pending_high,
+                 overflow = state.overflow, bytes = state.bytes }
+    end
+
+    return self
+end
+-- END UNICODE TEXT INPUT
 -- BEGIN ARMORY INPUT
 -- Source fragment: inline in auto_chat.lua; no separate runtime require.
 -- Armory Forge's x64 window procedure runs entirely in native code. Its pages
 -- deliberately live until process exit: another mod may still chain through one.
 local function build_panel_input(ffi, user, kernel, note)
     note = note or function() end
+    local EVENT_CAPACITY, EVENT_BASE, CONTROL_MESSAGE = 64, 256, 0x84A2
+    local BRIDGE_HEX = [[
+4883EC7848894C242048895424284C894424304C894C24384C8954244048C74424480000000081FAA284000075104C39
+5424380F8500070000E95502000081FA820000000F843E0200004183BA80000000000F84E106000081FA020100000F84
+8500000081FA09010000747D81FA000100000F84F900000081FA010100000F84ED00000081FA040100000F84E1000000
+81FA050100000F84D500000081FA0D0100000F845701000081FA0E0100000F844B01000081FA0D0100000F8279060000
+81FA0F0100000F869701000081FA810200000F826106000081FA910200000F867F010000E950060000817C2428090100
+00750B48817C2430FFFF000074694C8B5424404183BA84000000007553418B82880000008D480183E13F413B8A8C0000
+0074324C8D1C4049C1E3034F8D9C1A000100008B542428418913488B54243049895308488B5424384989531041898A88
+000000EB0B41C782840000000100000031C0E9E0050000B801000000E9D60500004C8B5424404183BA84000000007553
+418B82880000008D480183E13F413B8A8C00000074324C8D1C4049C1E3034F8D9C1A000100008B542428418913488B54
+243049895308488B5424384989531041898A88000000EB0B41C78284000000010000008B54242881FA00010000740C81
+FA040100000F854E050000488B44243083F80D746E83F81B7469E93A0500004C8B5424404183BA84000000007553418B
+82880000008D480183E13F413B8A8C00000074324C8D1C4049C1E3034F8D9C1A000100008B542428418913488B542430
+49895308488B5424384989531041898A88000000EB0B41C7828400000001000000EB00488B4C2420488B5424284C8B44
+24304C8B4C24384C8B54244041FF92A8000000E9BF04000048C744244801000000EB0A48837C2430007402EB154C8B54
+244041C7828000000000000000E93C0300004C8B5424404183BA80000000000F85E90000004183BA94000000000F85DB
+00000041C782800000000000000041C782900000000000000041C782940000000000000049C782980000000000000049
+C782A000000000000000488B4C242041FF92B00000004C8B542440498982980000004885C0740F488B4C24204889C241
+FF92B80000004C8B542440488B4C242031D241B81000000041FF92C000000085C00F84F60000004C8B54244041C78294
+00000001000000488B4C242041FF92B00000004885C0743D4C8B542440488B4C24204889C241FF92B80000004C8B5424
+4041C782900000000100000041C782800000000100000031C0E99903000031C0E9920300004C8B542440488B4C242049
+8B929800000041FF92C800000048894424584C8B542440488B4C242041FF92B00000004C8B542440493B829800000075
+264885C0740F488B4C24204889C241FF92B80000004C8B54244041C7829400000000000000EB364885C0740F488B4C24
+204889C241FF92B80000004C8B54244041C782800000000000000041C782900000000000000031C0E9FA0200004C8B54
+2440488B4C242041FF92D00000004885C00F84650100004C8B542440498982A000000041C7829400000002000000488B
+4C24204889C241FF92C80000004C8B542440488B4C242041FF92B00000004C8B542440493B82A00000007531488B4C24
+204889C241FF92B80000004C8B54244041C782900000000100000041C782800000000100000031C0E96A0200004885C0
+740F488B4C24204889C241FF92B80000004C8B542440488B4C2420498B929800000041FF92C800000048894424584C8B
+542440488B4C242041FF92B00000004C8B542440493B829800000074164885C0743A488B4C24204889C241FF92B80000
+00EB294885C07411488B4C24204889C241FF92B8000000EB354C8B542440488B442458493B82A000000074224C8B5424
+4041C782800000000000000041C782900000000000000031C0E9B90100004C8B542440498B8AA00000004885C9742D41
+FF92D80000004C8B54244049C782A00000000000000049C782980000000000000041C78294000000000000004C8B5424
+4041C782900000000000000041C782800000000100000031C0E9590100004C8B542440418B829400000085C00F84EF00
+0000488B4C2420498B929800000041FF92C80000004C8B54244048894424584183BA9400000002751A4983BA98000000
+007522488B442458493B82A0000000757EEB124983BA9800000000750848837C245800746A488B4C242041FF92B00000
+004C8B542440493B829800000075164885C07427488B4C24204889C241FF92B8000000EB164885C07435488B4C242048
+89C241FF92B8000000EB244C8B5424404183BA94000000027547498B8AA00000004885C9743B41FF92D8000000EB324C
+8B54244041C782800000000000000041C782900000000000000048837C244800750431C0EB6148C744244800000000EB
+484C8B54244041C782940000000000000041C782900000000000000049C782980000000000000049C782A00000000000
+000048837C244800750431C0EB1948C744244800000000EB004C8B5424404883C478E9B9F7FFFF4883C478C3
+]]  local BRIDGE_CODE = {}
+    local bridge_hex = BRIDGE_HEX:gsub('%s+', '')
+    for i = 1, #bridge_hex, 2 do BRIDGE_CODE[#BRIDGE_CODE + 1] = tonumber(bridge_hex:sub(i, i + 1), 16) end
     local FILTER_TABLE = { 0x10, 0x20, 0x10, 0x11, 0x21, 0x11, 0x12, 0x22, 0x12, 0x00, 0x13, 0x23, 0x13 }
     local FILTER_CODE = {
         0x8D, 0x82, 0xFF, 0xFD, 0xFF, 0xFF, 0x83, 0xF8, 0x0C, 0x77, 0x54, 0x45, 0x0F, 0xB6, 0x5C, 0x02,
@@ -3692,9 +4273,13 @@ local function build_panel_input(ffi, user, kernel, note)
         'void *GetProcAddress(void *module, const char *name);',
         'void *VirtualAlloc(void *address, size_t size, uint32_t type, uint32_t protect);',
         'int FlushInstructionCache(void *process, const void *address, size_t size);',
+        'int VirtualProtect(void *address, size_t size, uint32_t protect, uint32_t *old_protect);',
+        'int VirtualFree(void *address, size_t size, uint32_t type);',
+        'void *LoadLibraryA(const char *name);',
         'void *GetCurrentProcess(void);',
         'intptr_t GetWindowLongPtrW(void *window, int index);',
         'intptr_t SetWindowLongPtrW(void *window, int index, intptr_t value);',
+        'int PostMessageW(void *window, uint32_t message, uintptr_t wparam, intptr_t lparam);',
     }
     for _, declaration in ipairs(declarations) do
         local name = declaration:match('([A-Za-z_][%w_]*)%s*%(')
@@ -3709,6 +4294,7 @@ local function build_panel_input(ffi, user, kernel, note)
     local raw_ok, RAWDEV = pcall(ffi.sizeof, 'AUTOCHAT_RAWDEV')
     local self, input = {}, {}
     local G = { state = 'not yet', saved = nil, next_check = 0 }
+    local imm32_module
     if not raw_ok or not user or not kernel then
         G.state, G.broken = 'input APIs unavailable', true
     end
@@ -3742,32 +4328,80 @@ local function build_panel_input(ffi, user, kernel, note)
     -- the window filter (tools/window_filter.py): one per install, never removed (another
     -- mod may have chained its own procedure after it); all share the flag
     local filters = {}
+    local function null_pointer(value)
+        if value == nil then return true end
+        local ok, address = pcall(function() return ffi.cast('uintptr_t', value) end)
+        return not ok or address == 0
+    end
     function input.filter_install(window)
         if window == nil then return nil, 'no game window' end
-        local current = user.GetWindowLongPtrW(window, -4)              -- GWLP_WNDPROC
         for _, f in ipairs(filters) do
-            if f.window == window and current == f.entry then return f end
+            if f.window == window then return f end
         end
-        local call = kernel.GetProcAddress(kernel.GetModuleHandleA('user32.dll'), 'CallWindowProcW')
-        local block = kernel.VirtualAlloc(nil, 4096, 0x3000, 0x40)      -- commit + reserve, read / write / execute
-        if call == nil or block == nil or current == 0 then return nil, 'no memory for it' end
+        local current = user.GetWindowLongPtrW(window, -4)              -- GWLP_WNDPROC
+        local user32 = kernel.GetModuleHandleA('user32.dll')
+        local call = kernel.GetProcAddress(user32, 'CallWindowProcW')
+        local defproc = kernel.GetProcAddress(user32, 'DefWindowProcW')
+        -- Keep imm32 loaded while the permanent native thunk can call it.
+        local imm32 = imm32_module
+        if null_pointer(imm32) then
+            imm32 = kernel.LoadLibraryA('imm32.dll')
+            if not null_pointer(imm32) then imm32_module = imm32 end
+        end
+        local imm = {}
+        if not null_pointer(imm32) then
+            for i, name in ipairs({ 'ImmGetContext', 'ImmReleaseContext', 'ImmAssociateContextEx',
+                                    'ImmAssociateContext', 'ImmCreateContext', 'ImmDestroyContext' }) do
+                imm[i] = kernel.GetProcAddress(imm32, name)
+            end
+        end
+        if current == 0 or null_pointer(call) or null_pointer(defproc) or null_pointer(imm32) then
+            return nil, 'window or IME APIs unavailable'
+        end
+        for i = 1, 6 do
+            if null_pointer(imm[i]) then return nil, 'IME APIs unavailable' end
+        end
+        local block = kernel.VirtualAlloc(nil, 4096, 0x3000, 0x04)    -- RW state and event ring
+        local code = kernel.VirtualAlloc(nil, 4096, 0x3000, 0x04)     -- filled RW, then RX
+        local function discard()
+            if code ~= nil then kernel.VirtualFree(code, 0, 0x8000) end
+            if block ~= nil then kernel.VirtualFree(block, 0, 0x8000) end
+        end
+        if block == nil or code == nil then discard(); return nil, 'no memory for it' end
         local b, q, u = ffi.cast('uint8_t *', block), ffi.cast('uint64_t *', block), ffi.cast('uint32_t *', block)
+        local c = ffi.cast('uint8_t *', code)
         q[2], q[3] = ffi.cast('uint64_t', current), ffi.cast('uint64_t', ffi.cast('uintptr_t', call))
+        q[21], q[22], q[23], q[24], q[25], q[26] =
+            ffi.cast('uint64_t', ffi.cast('uintptr_t', defproc)),
+            ffi.cast('uint64_t', ffi.cast('uintptr_t', imm[1])), ffi.cast('uint64_t', ffi.cast('uintptr_t', imm[2])),
+            ffi.cast('uint64_t', ffi.cast('uintptr_t', imm[3])), ffi.cast('uint64_t', ffi.cast('uintptr_t', imm[4])),
+            ffi.cast('uint64_t', ffi.cast('uintptr_t', imm[5]))
+        q[27] = ffi.cast('uint64_t', ffi.cast('uintptr_t', imm[6]))
         for k, v in ipairs(FILTER_TABLE) do b[47 + k] = v end
         local held = 0                                                  -- buttons down now: the game saw them pressed
         for n, vk in ipairs({ 0x01, 0x02, 0x04, 0x05 }) do
             if user.GetAsyncKeyState(vk) < 0 or (vk == 0x05 and user.GetAsyncKeyState(0x06) < 0) then held = held + 2 ^ (n - 1) end
         end
         u[8] = held
-        b[64], b[65] = 0x49, 0xBA                                       -- mov r10, <block>
-        ffi.cast('uint64_t *', b + 66)[0] = ffi.cast('uint64_t', ffi.cast('uintptr_t', block))
-        for k, v in ipairs(FILTER_CODE) do b[73 + k] = v end
-        kernel.FlushInstructionCache(kernel.GetCurrentProcess(), b + 64, 10 + #FILTER_CODE)
-        local entry = ffi.cast('intptr_t', b + 64)
+        -- Entry loads the RW state pointer, then enters the IME router.
+        c[64], c[65] = 0x49, 0xBA
+        ffi.cast('uint64_t *', c + 66)[0] = ffi.cast('uint64_t', ffi.cast('uintptr_t', block))
+        c[74] = 0xE9
+        ffi.cast('int32_t *', c + 75)[0] = 512 - 79
+        for k, v in ipairs(FILTER_CODE) do c[255 + k] = v end
+        for k, v in ipairs(BRIDGE_CODE) do c[511 + k] = v end
+        if kernel.FlushInstructionCache(kernel.GetCurrentProcess(), c, 4096) == 0 then
+            discard(); return nil, 'could not flush the window procedure instruction cache'
+        end
+        local old_protect = ffi.new('uint32_t[1]', 0)
+        if kernel.VirtualProtect(code, 4096, 0x20, old_protect) == 0 then
+            discard(); return nil, 'could not make the window procedure executable'
+        end
+        local entry = ffi.cast('intptr_t', c + 64)
         local previous = user.SetWindowLongPtrW(window, -4, entry)
-        if previous == 0 then return nil, 'Windows refused it' end
+        if previous == 0 then discard(); return nil, 'Windows refused it' end
         if previous ~= current then q[2] = ffi.cast('uint64_t', previous) end
-        local f = { window = window, entry = entry, u = u }
+        local f = { window = window, entry = entry, u = u, data = b, code = c, imm_module = imm32 }
         filters[#filters + 1] = f
         return f
     end
@@ -3781,6 +4415,10 @@ local function build_panel_input(ffi, user, kernel, note)
     end
     function self.release()
         -- Disable every installed page, including entries below later subclasses.
+        if G.window and self.editing then pcall(self.editing, false, G.window) end
+        -- The owner-thread control is asynchronous; queued WM_CHAR messages may
+        -- still arrive before it is handled. Preserve the SPSC ring for the editor
+        -- to flush before ending a field/session, and clear only at explicit reset.
         input.filter_set(false)
         G.filtering, G.filter, G.window, G.next_check = false, nil, nil, 0
         if not G.saved then return end
@@ -3852,11 +4490,90 @@ local function build_panel_input(ffi, user, kernel, note)
             pcall(note, 'panel input blocking disabled: ' .. tostring(why))
         end
     end
-    function self.status() return G end
+    local function event_filter()
+        for i = #filters, 1, -1 do
+            if not G.window or filters[i].window == G.window then return filters[i] end
+        end
+        return filters[#filters]
+    end
+    function self.editing(enabled, window)
+        local f
+        for _, candidate in ipairs(filters) do
+            if candidate.window == window then f = candidate; break end
+        end
+        if not f or not user.PostMessageW then return false, 'window hook unavailable' end
+        local requested = enabled and true or false
+        local u = ffi.cast('uint32_t *', f.data)
+        if f.ime_requested == requested and (requested or (u[32] == 0 and u[37] == 0)) then
+            return true
+        end
+        local ok, posted = pcall(user.PostMessageW, window, CONTROL_MESSAGE, enabled and 1 or 0,
+                                 ffi.cast('intptr_t', ffi.cast('uintptr_t', f.data)))
+        if not ok or not posted or posted == 0 then
+            return false, 'could not queue IME state on the game window thread'
+        end
+        f.ime_requested = requested
+        return true
+    end
+    function self.clear()
+        for _, f in ipairs(filters) do
+            local u = ffi.cast('uint32_t *', f.data)
+            u[35] = u[34]
+            u[33] = 0
+            f.overflow = false
+        end
+    end
+    function self.drain()
+        local f = event_filter()
+        if not f then return {}, false end
+        local u = ffi.cast('uint32_t *', f.data)
+        if u[33] ~= 0 then
+            u[35], u[33] = u[34], 0
+            f.overflow = true
+            return {}, true
+        end
+        f.overflow = false
+        local out, tail, head = {}, tonumber(u[35]), tonumber(u[34])
+        while tail ~= head do
+            local index = tail % EVENT_CAPACITY
+            local record = ffi.cast('uint8_t *', f.data) + EVENT_BASE + index * 24
+            out[#out + 1] = {
+                message = tonumber(ffi.cast('uint32_t *', record)[0]),
+                wparam = tonumber(ffi.cast('uint64_t *', record + 8)[0]),
+                lparam = tonumber(ffi.cast('uint64_t *', record + 16)[0]),
+            }
+            tail = (tail + 1) % EVENT_CAPACITY
+        end
+        u[35] = head
+        if u[33] ~= 0 then
+            u[35], u[33] = u[34], 0
+            f.overflow = true
+            return {}, true
+        end
+        return out, false
+    end
+    function self.status()
+        local state = {}
+        for key, value in pairs(G) do state[key] = value end
+        local f = event_filter()
+        if f then
+            local u = ffi.cast('uint32_t *', f.data)
+            state.editing = u[32] ~= 0
+            state.ime_ready = u[36] ~= 0
+            state.ime_pending = (f.ime_requested or false) ~= (u[32] ~= 0)
+            state.ime_restore_pending = u[37] ~= 0 and u[32] == 0
+            state.event_overflow = f.overflow or u[33] ~= 0
+        else
+            state.editing, state.ime_ready, state.ime_pending, state.ime_restore_pending, state.event_overflow =
+                false, false, false, false, false
+        end
+        return state
+    end
     return self
 end
 -- END ARMORY INPUT
 local panel_input = build_panel_input(ffi, user, kernel, note)
+local text_input = build_text_input(64)
 
 -- ---------------------------------------------------------------- 11. panel
 -- Staged construction: create_screen_gui must not run before the ship world
@@ -3865,6 +4582,46 @@ local panel_input = build_panel_input(ffi, user, kernel, note)
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
                lfail = 0, version = 0,
                rw = 0, rh = 0}
+local function stop_text_input()
+    local status = panel_input.status()
+    local window = status.window
+    if not window and user then pcall(function() window = user.GetForegroundWindow() end) end
+    if PANEL.input_edit_field and window then pcall(panel_input.editing, false, window) end
+    pcall(panel_input.clear)
+    text_input.reset()
+    PANEL.input_edit_field, PANEL.edit_select_all = nil, nil
+end
+PANEL.preset_selected_by_role = PANEL.preset_selected_by_role or {}
+PANEL.preset_page_by_role = PANEL.preset_page_by_role or {}
+local PRESET_SELECTION_FILE = HOME .. 'AutoChat/preset-selection.txt'
+local function load_preset_selection()
+    local file=io.open(PRESET_SELECTION_FILE,'rb')
+    if not file then return end
+    local content=file:read(256);file:close()
+    if type(content)~='string' then return end
+    for role,id in content:gmatch('([%a]+)=(P%d+)') do
+        if (role=='host' or role=='client') and id:match('^P%d%d%d%d%d%d%d%d$') then
+            PANEL.preset_selected_by_role[role]=id
+        end
+    end
+end
+local function save_preset_selection()
+    local temporary=PRESET_SELECTION_FILE..'.tmp'
+    local file=io.open(temporary,'wb')
+    if not file then note('preset selection save failed: cannot create file');return false end
+    local data='host='..tostring(PANEL.preset_selected_by_role.host or '')..'\nclient='
+        ..tostring(PANEL.preset_selected_by_role.client or '')..'\n'
+    local ok,written=pcall(function()
+        local result=file:write(data)
+        if not result then file:close();return false end
+        if not file:close() then return false end
+        return kernel.MoveFileExA(temporary,PRESET_SELECTION_FILE,9)~=0
+    end)
+    if not ok then pcall(file.close,file) end
+    if not ok or written~=true then note('preset selection save failed: atomic replace refused');return false end
+    return true
+end
+load_preset_selection()
 local draft = {name = '', mode = 'repeat', time = '30', message = ''}
 PANEL.task_page = 1
 local POSITION_FILE = HOME .. 'AutoChat/panel-position.txt'
@@ -4155,13 +4912,135 @@ local function clipboard_text()
     return worked and value or nil
 end
 
+local function utf8_to_clipboard_utf16(text)
+    local out, i = {}, 1
+    while i <= #text do
+        local a, cp, width = text:byte(i), nil, nil
+        if a < 0x80 then cp, width = a, 1
+        elseif a >= 0xC2 and a <= 0xDF then
+            local b=text:byte(i+1);if not b or b<0x80 or b>0xBF then return nil end
+            cp,width=(a-0xC0)*64+b-0x80,2
+        elseif a >= 0xE0 and a <= 0xEF then
+            local b,c=text:byte(i+1),text:byte(i+2)
+            if not b or not c or b<0x80 or b>0xBF or c<0x80 or c>0xBF
+                or (a==0xE0 and b<0xA0) or (a==0xED and b>=0xA0) then return nil end
+            cp,width=(a-0xE0)*4096+(b-0x80)*64+c-0x80,3
+        elseif a >= 0xF0 and a <= 0xF4 then
+            local b,c,d=text:byte(i+1),text:byte(i+2),text:byte(i+3)
+            if not b or not c or not d or b<0x80 or b>0xBF or c<0x80 or c>0xBF or d<0x80 or d>0xBF
+                or (a==0xF0 and b<0x90) or (a==0xF4 and b>0x8F) then return nil end
+            cp,width=(a-0xF0)*262144+(b-0x80)*4096+(c-0x80)*64+d-0x80,4
+        else return nil end
+        if cp < 0x10000 then
+            out[#out+1]=string.char(cp%256,math.floor(cp/256))
+        else
+            cp=cp-0x10000
+            local high=0xD800+math.floor(cp/1024)
+            local low=0xDC00+cp%1024
+            out[#out+1]=string.char(high%256,math.floor(high/256),low%256,math.floor(low/256))
+        end
+        i=i+width
+    end
+    out[#out+1]='\0\0'
+    return table.concat(out)
+end
+
+-- Clipboard ownership transfers to Windows only after SetClipboardData succeeds.
+-- Every earlier failure unlocks/frees our allocation and still closes the clipboard.
+local function clipboard_set_text(text)
+    if not user or not kernel then return false end
+    local bytes=utf8_to_clipboard_utf16(text)
+    if not bytes then return false end
+    local memory,locked,transferred
+    local allocated,alloc_result=pcall(function()
+        memory=kernel.GlobalAlloc(0x0002,#bytes) -- GMEM_MOVEABLE
+        if memory==nil or memory==ffi.NULL then return false end
+        locked=kernel.GlobalLock(memory)
+        if locked==nil or locked==ffi.NULL then return false end
+        ffi.copy(locked,bytes,#bytes)
+        kernel.GlobalUnlock(memory)
+        locked=nil
+        return true
+    end)
+    if not allocated or alloc_result~=true then
+        if locked and memory then pcall(function() kernel.GlobalUnlock(memory) end) end
+        if memory and memory~=ffi.NULL then pcall(function() kernel.GlobalFree(memory) end) end
+        return false
+    end
+    local status=panel_input and panel_input.status() or {}
+    local owner=status.window
+    if not owner or owner==ffi.NULL then owner=user.GetForegroundWindow() end
+    if not owner or owner==ffi.NULL then pcall(function() kernel.GlobalFree(memory) end);return false end
+    local owner_pid=ffi.new('uint32_t[1]')
+    local owner_ok,owner_thread=pcall(function() return user.GetWindowThreadProcessId(owner,ffi.cast('void *',owner_pid)) end)
+    if not owner_ok or not owner_thread or owner_thread==0
+        or tonumber(owner_pid[0])~=tonumber(kernel.GetCurrentProcessId()) then
+        pcall(function() kernel.GlobalFree(memory) end);return false
+    end
+    local ok_open,opened=pcall(function() return user.OpenClipboard(owner) end)
+    if not ok_open or not opened or opened==0 then
+        pcall(function() kernel.GlobalFree(memory) end)
+        return false
+    end
+    local ok,result=pcall(function()
+        if user.EmptyClipboard()==0 then return false end
+        local accepted=user.SetClipboardData(13,memory) -- CF_UNICODETEXT
+        if accepted==nil or accepted==ffi.NULL then return false end
+        transferred=true
+        return true
+    end)
+    if locked and memory then pcall(function() kernel.GlobalUnlock(memory) end) end
+    if memory and not transferred then pcall(function() kernel.GlobalFree(memory) end) end
+    pcall(function() user.CloseClipboard() end)
+    return ok and result==true
+end
+
 -- Returns the edited text, or nil to keep the current one. Pure enough to test offline:
 -- it takes `now` and reads keys through key_down, which the harness controls.
-local function edit_text(now)
+local function edit_text(now, raw_events, overflow)
     local text = PANEL.edit_text
     if text == nil then text = PANEL.edit_field and draft[PANEL.edit_field] or cfg.message or '' end
     local limit = PANEL.edit_field == 'preset:name' and 96
         or PANEL.edit_field == 'preset:path' and 1024 or MAX_MESSAGE
+
+    if raw_events ~= nil then
+        for _, event in ipairs(text_input.consume(raw_events, overflow)) do
+            if event.kind == 'reset' then
+                PANEL.edit_text, PANEL.edit_select_all = nil, nil
+                return nil, 'reset'
+            elseif event.kind == 'submit' then
+                PANEL.edit_text = nil
+                return text, 'commit'
+            elseif event.kind == 'cancel' then
+                PANEL.edit_text, PANEL.edit_select_all = nil, nil
+                return nil, 'cancel'
+            elseif event.kind == 'select_all' then
+                PANEL.edit_select_all = true
+            elseif event.kind == 'text' then
+                if PANEL.edit_select_all then text, PANEL.edit_select_all = '', nil end
+                text = text .. cut_utf8(event.value or '', math.max(0, limit - #text))
+            elseif event.kind == 'backspace' then
+                if PANEL.edit_select_all then text, PANEL.edit_select_all = '', nil
+                else
+                    local trimmed = text:gsub('[\194-\244][\128-\191]*$', '')
+                    if #trimmed == #text then trimmed = text:sub(1, -2) end
+                    text = trimmed
+                end
+            elseif event.kind == 'copy' then
+                if PANEL.edit_select_all then clipboard_set_text(text) end
+            elseif event.kind == 'cut' then
+                if PANEL.edit_select_all and clipboard_set_text(text) then text, PANEL.edit_select_all = '', nil end
+            elseif event.kind == 'paste' then
+                local pasted = clipboard_text()
+                if pasted then
+                    if PANEL.edit_select_all then text, PANEL.edit_select_all = '', nil end
+                    text = text .. cut_utf8(pasted, math.max(0, limit - #text))
+                end
+            end
+        end
+        PANEL.edit_text = text
+        return text, 'typing'
+    end
 
     if pressed('Enter', VK.ENTER, now) then
         PANEL.edit_text = nil
@@ -4199,7 +5078,7 @@ end
 
 -- Exposed for the offline tests: the editing logic is pure bookkeeping around key
 -- state, so it can be driven without the engine.
-function M.debug_edit_text(now) return edit_text(now or 0) end
+function M.debug_edit_text(now, events, overflow) return edit_text(now or 0, events, overflow) end
 function M.debug_set_editing(on)
     PANEL.editing = on and true or false
     PANEL.edit_text = nil
@@ -4580,12 +5459,13 @@ local function panel_signature()
         tostring(PANEL.settings_view), opts and tostring(opts.enabled) or '-',
         tostring(PANEL.rule_view),tostring(PANEL.rule_selected),tostring(PANEL.rule_page),
         tostring(PANEL.rule_filter),tostring(PANEL.rule_search),tostring(automation.state.rule_revision),
-        tostring(PANEL.preset_view), tostring(PANEL.preset_selected), tostring(PANEL.preset_page),
+        tostring(PANEL.preset_view), tostring(PANEL.preset_selected_by_role and PANEL.preset_selected_by_role[PANEL.profile or 'host']),
+        tostring(PANEL.preset_page_by_role and PANEL.preset_page_by_role[PANEL.profile or 'host']),
         tostring(PANEL.preset_name), tostring(PANEL.preset_path),
         tostring(preset_library.state.revision), tostring(preset_library.state.error),
         tostring(stratagem_catalog.state.generation),tostring(stratagem_catalog.state.status),
         tostring(opts.ping_small_enemy),tostring(opts.ping_flying_enemy),
-        opts and tostring(opts.allow_solo) or '-', opts and opts.scope or '-',
+        opts and tostring(opts.allow_solo) or '-',
         opts and tostring(opts.welcome) or '-', opts and opts.welcome_message or '-',
         opts and opts.cooldown or '-', opts and opts.welcome_delay or '-',
         opts and tostring(opts.ping) or '-', opts and opts.ping_message or '-',
@@ -4643,9 +5523,16 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'}}
         for i,v in ipairs(groups) do
             local y=237+(i-1)*38
-            text(say(v[2],v[3]),22,y+9,14,C.TEXT,94)
-            button('rules:bulk:'..v[1]..':on',say('全部开','ALL ON'),130,y,100,false)
-            button('rules:bulk:'..v[1]..':off',say('全部关','ALL OFF'),238,y,100,false)
+            local total,enabled_count=0,0
+            for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
+                if row.group==v[1] then
+                    total=total+1
+                    if a.rule('stratagem',row.id,role).enabled~=false then enabled_count=enabled_count+1 end
+                end
+            end
+            text(say(v[2],v[3])..' '..enabled_count..'/'..total,22,y+9,14,C.TEXT,104)
+            button('rules:bulk:'..v[1]..':on',say('全部启用','ENABLE ALL'),130,y,128,false)
+            button('rules:bulk:'..v[1]..':off',say('全部关闭','DISABLE ALL'),266,y,112,false)
         end
         local x=22
         for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},{'green','绿','GREEN'},{'other','任务等','OTHER'}}) do
@@ -4658,8 +5545,9 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         local query=(p.rule_search or ''):lower()
         for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
             if ((p.rule_filter or 'all')=='all' or row.group==p.rule_filter)
-                and (query=='' or row.name:lower():find(query,1,true) or tostring(row.id):find(query,1,true)
-                    or row.debug_name:lower():find(query,1,true)) then rows[#rows+1]=row end
+                and (query=='' or (row.display_name or row.name or row.debug_name):lower():find(query,1,true)
+                    or tostring(row.id):find(query,1,true)
+                    or (row.debug_name or row.name or ''):lower():find(query,1,true)) then rows[#rows+1]=row end
         end
         text(catalog.state.status,22,349,12,C.MUTED,424)
     end
@@ -4678,7 +5566,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         canvas.rect(22,y,424,36,row==selected and C.ROW_HI or C.PANEL,951)
         canvas.border(22,y,424,36,row==selected and C.YELLOW or C.LINE,952)
         if not enemy and canvas.icon then canvas.icon(row.icon,27,y+4,28) end
-        text(row.name,enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
+        text(row.display_name or row.name or row.debug_name,enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
         text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
         canvas.region(key,22,y,424,36)
     end
@@ -4694,7 +5582,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         return
     end
     local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
-    text(selected.name,486,262,20,C.TEXT,474)
+    text(selected.display_name or selected.name or selected.debug_name,486,262,20,C.TEXT,474)
     if not enemy then
         text(say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s',486,296,12,C.MUTED,474)
         if selected.variant_ids and #selected.variant_ids>1 then
@@ -4755,43 +5643,52 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok)
     rect(22,158,342,H-210,C.PANEL,950);border(22,158,342,H-210,C.LINE,951)
     rect(378,158,W-400,H-210,C.PANEL,950);border(378,158,W-400,H-210,C.LINE,951)
     text(say('命名自动消息预设','NAMED AUTOMATION PRESETS'),40,178,20,C.TEXT,306)
-    local entries=preset_library.list()
+    PANEL.preset_selected_by_role=PANEL.preset_selected_by_role or {}
+    PANEL.preset_page_by_role=PANEL.preset_page_by_role or {}
+    local selected_id=PANEL.preset_selected_by_role[role]
+    local entries=preset_library.list(role)
+    if selected_id then
+        local found=false
+        for _,entry in ipairs(entries) do if entry.id==selected_id then found=true;break end end
+        if not found then selected_id=nil;PANEL.preset_selected_by_role[role]=nil end
+    end
     text(#entries..' / 32',346,184,12,C.MUTED,nil,'right')
     if preset_library.state.error then
         text(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,218,12,C.BAD,300)
         text(preset_library.state.error,40,240,11,C.BAD,300)
     elseif #entries==0 then text(say('暂无已保存预设','NO SAVED PRESETS'),40,224,14,C.DIM,300) end
     local pages=math.max(1,math.ceil(#entries/16))
-    PANEL.preset_page=math.max(1,math.min(pages,PANEL.preset_page or 1))
-    local first=(PANEL.preset_page-1)*16+1
+    local page=PANEL.preset_page_by_role[role] or 1
+    page=math.max(1,math.min(pages,page));PANEL.preset_page_by_role[role]=page
+    local first=(page-1)*16+1
     for i=first,math.min(#entries,first+15) do
         local entry=entries[i];local y=266+(i-first)*36
-        local chosen=entry.id==PANEL.preset_selected
+        local chosen=entry.id==selected_id
         rect(38,y,308,30,chosen and C.ROW_HI or C.ROW,951)
         border(38,y,308,30,chosen and C.YELLOW or C.LINE2,952)
         text(entry.name,48,y+8,13,chosen and C.YELLOW or C.TEXT,244)
         region('preset:select:'..entry.id,38,y,308,30)
     end
-    button('preset:prev','<',38,H-132,40,26,PANEL.preset_page>1)
-    text(PANEL.preset_page..' / '..pages,94,H-126,12,C.MUTED)
-    button('preset:next','>',142,H-132,40,26,PANEL.preset_page<pages)
+    button('preset:prev','<',38,H-132,40,26,page>1)
+    text(page..' / '..pages,94,H-126,12,C.MUTED)
+    button('preset:next','>',142,H-132,40,26,page<pages)
     button('preset:save',say('保存当前配置','SAVE CURRENT'),38,H-94,146,32,false)
     button('preset:replace',say('替换所选','REPLACE'),194,H-94,152,32,false)
 
     text(say('编辑目标：','EDITING:')..say(role=='host' and '主机' or '客机',role:upper()),390,178,13,C.YELLOW,270)
     text(say('当前：','ACTIVE: ')..(automation.state.active_role=='host' and say('主机','HOST') or automation.state.active_role=='client' and say('客机','CLIENT') or say('等待','WAITING')),682,178,12,C.MUTED,130)
     button('preset:back',say('返回设置','BACK TO SETTINGS'),822,168,136,30,false)
-    text(say('当前配置输出：','CURRENT OUTPUT: ')..(options.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT'))..' / '..(options.scope=='all' and say('主机和客机','HOST + CLIENT') or say('仅主机','HOST ONLY')),390,201,12,C.MUTED,568)
+    text(say('当前配置输出：','CURRENT OUTPUT: ')..(options.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),390,201,12,C.MUTED,568)
     field('preset:name',say('预设名称','PRESET NAME'),PANEL.preset_name or '',230)
     local selected
-    for _,entry in ipairs(entries) do if entry.id==PANEL.preset_selected then selected=entry;break end end
+    for _,entry in ipairs(entries) do if entry.id==selected_id then selected=entry;break end end
     text(selected and (say('已选：','SELECTED: ')..selected.name) or say('请选择预设','SELECT A PRESET'),390,348,13,selected and C.TEXT or C.DIM,420)
     button('preset:rename',say('改名','RENAME'),822,340,136,30,false)
     local valid,parsed
     if selected then valid,parsed=automation.validate_profile(selected.payload) end
     local saved=valid and parsed and parsed.values
     if saved then
-        text(say('将载入：','WILL LOAD: ')..(saved.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT'))..' / '..(saved.scope=='all' and say('主机和客机','HOST + CLIENT') or say('仅主机','HOST ONLY')),390,376,12,C.YELLOW,568)
+        text(say('将载入：','WILL LOAD: ')..(saved.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),390,376,12,C.YELLOW,568)
         text(say('自动消息：','AUTO SEND: ')..(saved.enabled and 'ON' or 'OFF')..'    '..say('标记：','PING: ')..(saved.ping and 'ON' or 'OFF'),390,394,12,C.MUTED,568)
     else text(say('无法预览所选预设内容','SELECTED PRESET CANNOT BE PREVIEWED'),390,376,12,C.BAD,568) end
     if selected then
@@ -5190,15 +6087,27 @@ local function draw_panel()
         or PANEL.settings_view == 'pings' and caption('玩家标记消息', 'PLAYER PING MESSAGES')
         or caption('添加定时任务', 'ADD SCHEDULED TASK'))
     y = y + 55
-    local navw = (IW - 12) / 3
+    local navw = (IW - 18) / 4
     button('view:tasks', caption('定时任务', 'TASKS'), IX, y, navw, 30, true,
            PANEL.settings_view ~= 'automation' and PANEL.settings_view ~= 'pings')
     button('view:automation', caption('自动消息', 'AUTO SEND'), IX + navw + 6,
            y, navw, 30, true, PANEL.settings_view == 'automation')
     button('view:pings', caption('标记消息', 'PING'), IX + 2 * (navw + 6),
            y, navw, 30, true, PANEL.settings_view == 'pings')
+    button('view:quick', caption('快捷定时', 'QUICK TIMER'), IX + 3 * (navw + 6),
+           y, navw, 30, true, PANEL.settings_view == 'quick')
     y = y + 44
-    if PANEL.settings_view == 'pings' and M.options then
+    if PANEL.settings_view == 'quick' and M.options then
+        local role=PANEL.profile or 'host'
+        local quick=automation.profile(role)
+        button('opt:quick_timer_enabled',caption('快捷间隔发送','QUICK TIMER')..(quick.quick_timer_enabled and ' [ON]' or ' [OFF]'),
+            IX,y,IW,32,true,quick.quick_timer_enabled);y=y+48
+        field('option:quick_timer_interval',caption('发送间隔（5–3600秒）','INTERVAL (5–3600 SECONDS)'),tostring(quick.quick_timer_interval),y);y=y+64
+        field('option:quick_timer_message',caption('快捷定时消息','QUICK TIMER MESSAGE'),quick.quick_timer_message,y);y=y+64
+        text(caption('仅当前检测到的主机或客机配置运行；保留“小队/仅自己”与冷却规则。',
+            'RUNS ONLY FOR THE DETECTED ROLE; SHARES OUTPUT AND COOLDOWN POLICY.'),IX,y,12,C.MUTED,IW)
+        if PANEL.hint then text(PANEL.hint,IX,y+34,11,C.YELLOW,IW) end
+    elseif PANEL.settings_view == 'pings' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
@@ -5233,12 +6142,6 @@ local function draw_panel()
             y = y + 40
         end
         toggle('enabled', '自动发送总开关', 'ENABLE AUTO SEND')
-        label(caption('发送角色范围', 'WHO SENDS'), IX, y)
-        y = y + 18
-        button('scope:host', caption('仅主机', 'HOST ONLY'), IX, y, (IW - 8) / 2, 30, true, opts.scope == 'host')
-        button('scope:all', caption('主机和客机', 'HOST + CLIENT'), IX + (IW + 8) / 2, y,
-               (IW - 8) / 2, 30, true, opts.scope == 'all')
-        y = y + 42
         label(caption('消息输出方式', 'MESSAGE OUTPUT'), IX, y)
         y = y + 18
         button('output:squad', caption('小队公屏', 'SQUAD CHAT'), IX, y, (IW - 8)/2, 30, true, opts.output == 'squad')
@@ -5281,8 +6184,10 @@ local function draw_panel()
     y = y + 43
     text(PANEL.hint or caption('点击输入框填写；Enter 确认，Esc 取消', 'CLICK TO TYPE. ENTER CONFIRMS / ESC CANCELS'),
          IX, y, 12, PANEL.hint and C.YELLOW or C.DIM, IW)
-    text(caption('重复 / 倒计时：5–86400 秒', 'REPEAT / COUNTDOWN: 5-86400 S'), IX, y + 32, 12, C.MUTED, IW)
-    text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 52, 12, C.MUTED, IW)
+        text(caption('填写完成后点击“添加任务”，任务才会保存并进入预设',
+                     'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 32, 11, C.MUTED, IW)
+        text(caption('重复 / 倒计时：5–86400 秒', 'REPEAT / COUNTDOWN: 5-86400 S'), IX, y + 52, 12, C.MUTED, IW)
+        text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 72, 12, C.MUTED, IW)
     end
     -- The right column uses the same row controls as the settings form.
     IX, IW = RX, RIW
@@ -5344,6 +6249,7 @@ set_panel_open = function(open)
         PANEL.armed, mouse_was_down = nil, nil
         take_cursor()
     else
+        stop_text_input()
         panel_input.release()
         if PANEL.drag then PANEL.drag = nil; pcall(save_position) end
         PANEL.armed, mouse_was_down = nil, nil
@@ -5383,6 +6289,22 @@ local function panel_frame()
     end
 
     local is_focused = focused()
+    local queued_edit_action
+    if PANEL.editing and PANEL.input_edit_field then
+        local pending, overflow = panel_input.drain()
+        if panel_input.status().broken then pending = nil end
+        local value, action = edit_text((M.frames or 0) / 120, pending, overflow)
+        if action == 'typing' then PANEL.edit_text = value
+        elseif action == 'commit' then PANEL.edit_text, queued_edit_action = value, 'commit'
+        elseif action == 'cancel' or action == 'reset' then queued_edit_action = action end
+    end
+    if is_focused and PANEL.pending_edit_action then
+        queued_edit_action = PANEL.pending_edit_action
+        PANEL.pending_edit_action = nil
+    elseif not is_focused and queued_edit_action then
+        PANEL.pending_edit_action = queued_edit_action
+        queued_edit_action = nil
+    end
     panel_input.hold(os.clock(), is_focused and user.GetForegroundWindow() or nil, key_down(0x4B))
     M.input_state = panel_input.status().state
     keep_cursor()
@@ -5456,6 +6378,14 @@ local function panel_frame()
         end
     end
     local function finish_edit(commit)
+        if PANEL.editing and PANEL.input_edit_field then
+            local pending, overflow = panel_input.drain()
+            if panel_input.status().broken then pending = nil end
+            local value, action = edit_text((M.frames or 0) / 120, pending, overflow)
+            if action == 'typing' then PANEL.edit_text = value
+            elseif action == 'commit' then PANEL.edit_text, commit = value, true
+            elseif action == 'cancel' or action == 'reset' then commit = false end
+        end
         if commit and PANEL.edit_field then
             local option = PANEL.edit_field:match('^option:(.+)$')
             local kind,id,rule_field=PANEL.edit_field:match('^rule:([^:]+):([^:]+):([^:]+)$')
@@ -5468,9 +6398,10 @@ local function panel_frame()
                 PANEL.rule_search=PANEL.edit_text or '';PANEL.rule_page=1
             elseif option then
                 local value = PANEL.edit_text
-                if option == 'cooldown' or option == 'welcome_delay' then value = tonumber(value) end
+                if option == 'cooldown' or option == 'welcome_delay' or option == 'quick_timer_interval' then value = tonumber(value) end
                 local ok, why = automation.set(option, value, PANEL.profile or 'host')
                 if not ok then PANEL.hint = why; return false end
+                if option:match('^quick_timer_') then M.quick_timer_shadow.sync(PANEL.profile or 'host') end
             elseif PANEL.edit_field == 'preset:name' then
                 PANEL.preset_name = PANEL.edit_text or ''
             elseif PANEL.edit_field == 'preset:path' then
@@ -5479,10 +6410,21 @@ local function panel_frame()
                 draft[PANEL.edit_field] = PANEL.edit_text or draft[PANEL.edit_field]
             end
         end
+        stop_text_input()
         PANEL.editing, PANEL.edit_field, PANEL.edit_text = nil, nil, nil
         M.key_held = key_held
         for k in pairs(key_held) do key_held[k] = nil end
         return true
+    end
+    if queued_edit_action and PANEL.editing then
+        if queued_edit_action == 'commit' then
+            if finish_edit(true) then PANEL.hint = '输入已确认；点击对应按钮执行操作' end
+        else
+            finish_edit(false)
+            PANEL.hint = queued_edit_action == 'cancel' and '已取消本次输入'
+                or '输入队列溢出，已取消并保留原值'
+        end
+        clicked = false
     end
     if clicked and hovered then
         local field = hovered:match('^task:(name)$') or hovered:match('^task:(time)$')
@@ -5490,7 +6432,6 @@ local function panel_frame()
         local option = hovered:match('^option:(.+)$')
         local preset_field = hovered == 'preset:name' or hovered == 'preset:path'
         local opt_toggle = hovered:match('^opt:(.+)$')
-        local scope = hovered:match('^scope:(.+)$')
         local mode = hovered:match('^mode:(%a+)$')
         local toggle_id = hovered:match('^toggle:(%d+)$')
         local delete_id = hovered:match('^delete:(%d+)$')
@@ -5533,61 +6474,73 @@ local function panel_frame()
             PANEL.preset_view, PANEL.hint = nil, nil
             PANEL.settings_view = 'automation'
         elseif hovered:match('^preset:select:') then
-            PANEL.preset_selected = hovered:match('^preset:select:(.+)$')
+            local role=PANEL.profile or 'host'
+            PANEL.preset_selected_by_role[role] = hovered:match('^preset:select:(.+)$')
+            save_preset_selection()
             PANEL.hint = nil
         elseif hovered == 'preset:prev' or hovered == 'preset:next' then
-            local pages = math.max(1, math.ceil(#preset_library.list()/16))
-            PANEL.preset_page = math.max(1, math.min(pages, (PANEL.preset_page or 1)
+            local role=PANEL.profile or 'host'
+            local pages = math.max(1, math.ceil(#preset_library.list(role)/16))
+            PANEL.preset_page_by_role[role] = math.max(1, math.min(pages, (PANEL.preset_page_by_role[role] or 1)
                 + (hovered == 'preset:next' and 1 or -1)))
         elseif preset_field then
             local key = hovered == 'preset:name' and 'preset_name' or 'preset_path'
             PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, hovered, PANEL[key] or ''
             PANEL.hint = 'Enter 确认输入 / Esc 取消'
         elseif hovered == 'preset:save' then
-            local ok, why, id = preset_library.save(PANEL.preset_name or '', PANEL.profile or 'host')
+            local role=PANEL.profile or 'host'
+            local ok, why, id = preset_library.save(PANEL.preset_name or '', role)
             PANEL.hint = ok and '已保存当前自动消息配置' or why
             if ok then
-                PANEL.preset_selected = id
-                PANEL.preset_page = math.ceil(#preset_library.list()/16)
+                PANEL.preset_selected_by_role[role] = id
+                PANEL.preset_page_by_role[role] = math.ceil(#preset_library.list(role)/16)
+                save_preset_selection()
             end
         elseif hovered == 'preset:replace' then
-            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            local role=PANEL.profile or 'host';local selected=PANEL.preset_selected_by_role[role]
+            if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.replace(PANEL.preset_selected, PANEL.profile or 'host')
+                local ok, why = preset_library.replace(selected, role)
                 PANEL.hint = ok and '已替换所选预设内容' or why
             end
         elseif hovered == 'preset:rename' then
-            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
+            if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.rename(PANEL.preset_selected, PANEL.preset_name or '')
+                local ok, why = preset_library.rename(selected, PANEL.preset_name or '')
                 PANEL.hint = ok and '预设名称已更新' or why
             end
         elseif hovered == 'preset:apply' then
-            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
+            if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.apply(PANEL.preset_selected, PANEL.profile or 'host')
+                local ok, why = preset_library.apply(selected, PANEL.profile or 'host')
                 PANEL.hint = ok and '已加载到所选角色' or why
             end
         elseif hovered == 'preset:export' then
-            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
+            if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why, path = preset_library.export(PANEL.preset_selected)
+                local ok, why, path = preset_library.export(selected)
                 PANEL.hint = ok and '预设已导出' or why
                 PANEL.preset_export_path = ok and path or nil
             end
         elseif hovered == 'preset:delete' then
-            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            local role=PANEL.profile or 'host';local selected=PANEL.preset_selected_by_role[role]
+            if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.remove(PANEL.preset_selected)
+                local ok, why = preset_library.remove(selected)
                 PANEL.hint = ok and '预设已删除' or why
-                if ok then PANEL.preset_selected = nil; PANEL.preset_export_path = nil end
+                if ok then PANEL.preset_selected_by_role[role] = nil; PANEL.preset_export_path = nil;save_preset_selection() end
             end
         elseif hovered == 'preset:import' then
-            local ok, why, id = preset_library.import(PANEL.preset_path or '')
+            local role=PANEL.profile or 'host'
+            local ok, why, id = preset_library.import(PANEL.preset_path or '',role)
             PANEL.hint = ok and '预设已导入，请选择后加载' or why
             if ok then
-                PANEL.preset_selected = id
-                PANEL.preset_page = math.ceil(#preset_library.list()/16)
+                PANEL.preset_selected_by_role[role] = id
+                PANEL.preset_page_by_role[role] = math.ceil(#preset_library.list(role)/16)
+                save_preset_selection()
             end
         elseif option then
             PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, hovered, tostring(automation.profile(PANEL.profile or 'host')[option])
@@ -5595,11 +6548,10 @@ local function panel_frame()
         elseif opt_toggle then
             local ok, why = automation.set(opt_toggle, not automation.profile(PANEL.profile or 'host')[opt_toggle], PANEL.profile or 'host')
             PANEL.hint = ok and '设置已保存' or why
-        elseif scope then
-            local ok, why = automation.set('scope', scope, PANEL.profile or 'host')
-            PANEL.hint = ok and '设置已保存' or why
+            if ok and opt_toggle:match('^quick_timer_') then M.quick_timer_shadow.sync(PANEL.profile or 'host') end
         elseif hovered:match('^profile:') then
             PANEL.profile = hovered:match('^profile:(.+)$')
+            M.quick_timer_shadow.sync(PANEL.profile)
             PANEL.task_page = 1
             PANEL.hint = '正在编辑' .. (PANEL.profile == 'host' and '主机' or '客机') .. '预设；根据身份自动启用'
         elseif hovered:match('^output:') then
@@ -5613,7 +6565,7 @@ local function panel_frame()
             end
         elseif hovered == 'tabs:prev' or hovered == 'tabs:next' then
             PANEL.tab_page = math.max(1, (PANEL.tab_page or 1) + (hovered == 'tabs:next' and 1 or -1))
-        elseif hovered == 'view:tasks'  or hovered == 'view:automation' or hovered == 'view:pings' then
+        elseif hovered == 'view:tasks'  or hovered == 'view:automation' or hovered == 'view:pings' or hovered == 'view:quick' then
             PANEL.settings_view = hovered:match('^view:(.+)$')
             PANEL.preset_view = nil
             PANEL.hint = nil
@@ -5644,7 +6596,9 @@ local function panel_frame()
             PANEL.task_page = math.max(1, math.min(math.max(1, math.ceil(#M.profile_tasks(PANEL.profile or 'host') / 7)),
                 PANEL.task_page + (hovered == 'page:next' and 1 or -1)))
         elseif hovered == 'close' then
-            set_panel_open(false)
+            if PANEL.editing and not finish_edit(true) then
+                clicked=false -- validation failed; preserve the field and leave the panel open
+            else set_panel_open(false) end
         elseif keys and keys[hovered] ~= nil or (keys and hovered == 'tab:default') then
             finish_edit(true)
             -- Resolved through the map the tab strip built while drawing, so a click can
@@ -5654,22 +6608,29 @@ local function panel_frame()
             PANEL.version = (PANEL.version or 0) + 1
             note('panel: tab -> ' .. tostring(PANEL.active_plugin or 'default'))
         elseif hovered == 'timer' then
-            cfg.timer_on = not cfg.timer_on
+            local role=PANEL.profile or 'host'
+            local next_value=not automation.profile(role).quick_timer_enabled
+            local ok,why=automation.set('quick_timer_enabled',next_value,role)
+            if ok then M.quick_timer_shadow.sync(role);config_save() else PANEL.hint=why end
             cfg.elapsed = 0
-            config_save()
-            note('panel: timed send ' .. (cfg.timer_on and 'ON' or 'OFF'))
+            note('panel: timed send ' .. (next_value and 'ON' or 'OFF') .. ' / ' .. role)
         elseif hovered == 'minus' then
-            cfg.interval = math.max(5, cfg.interval - 5)
-            config_save()
+            local role=PANEL.profile or 'host';local value=math.max(5,automation.profile(role).quick_timer_interval-5)
+            local ok,why=automation.set('quick_timer_interval',value,role)
+            if ok then M.quick_timer_shadow.sync(role);config_save() else PANEL.hint=why end
         elseif hovered == 'plus' then
-            cfg.interval = math.min(3600, cfg.interval + 5)
-            config_save()
+            local role=PANEL.profile or 'host';local value=math.min(3600,automation.profile(role).quick_timer_interval+5)
+            local ok,why=automation.set('quick_timer_interval',value,role)
+            if ok then M.quick_timer_shadow.sync(role);config_save() else PANEL.hint=why end
         elseif hovered == 'message' then
-            PANEL.editing = not PANEL.editing
+            local role=PANEL.profile or 'host';M.quick_timer_shadow.sync(role)
+            PANEL.quick_timer_edit_role=role
+            PANEL.editing, PANEL.edit_field = true, 'option:quick_timer_message'
+            PANEL.edit_text=automation.profile(role).quick_timer_message
             PANEL.hint = PANEL.editing
                         and 'TYPE THE MESSAGE   ENTER SAVES   ESC CANCELS'
                         or nil
-            PANEL.edit_backup = cfg.message
+            PANEL.edit_backup = automation.profile(role).quick_timer_message
             note('panel: message editing ' .. (PANEL.editing and 'ON' or 'OFF'))
         end
         PANEL.version = (PANEL.version or 0) + 1
@@ -5681,7 +6642,37 @@ local function panel_frame()
     -- K hotkey cannot fire mid-word.
     if PANEL.editing then
         local now = (M.frames or 0) / 120
-        local value, what = edit_text(now)
+        local input_field = PANEL.edit_field or '__message__'
+        if PANEL.input_edit_field ~= input_field then
+            if PANEL.input_edit_field then stop_text_input() end
+            text_input.reset(); panel_input.clear()
+            PANEL.input_edit_field = input_field
+        end
+        if is_focused then
+            local window = user.GetForegroundWindow()
+            local status = panel_input.status()
+            if window and status.editing and not status.ime_ready and not status.ime_pending then
+                local why='game window IME context is unavailable'
+                if M.input_ime_error ~= why then M.input_ime_error=why;note('panel text input unavailable: '..why) end
+                PANEL.hint='中文输入不可用：窗口 IME 上下文未就绪'
+            elseif status.ime_ready and M.input_ime_error=='game window IME context is unavailable' then
+                M.input_ime_error=nil
+                if PANEL.hint=='中文输入不可用：窗口 IME 上下文未就绪' then PANEL.hint=nil end
+            end
+            if window and not status.editing and not status.ime_pending then
+                local ok, why = panel_input.editing(true, window)
+                if not ok and M.input_ime_error ~= why then
+                    M.input_ime_error = why
+                    note('panel text input unavailable: ' .. tostring(why))
+                elseif ok then M.input_ime_error = nil end
+            end
+        end
+        local events, overflow = panel_input.drain()
+        -- Keep the existing ASCII key path as a degraded fallback when the
+        -- native Unicode bridge could not initialize. A live bridge always
+        -- owns text input through its ordered Win32 event queue.
+        if panel_input.status().broken then events = nil end
+        local value, what = edit_text(now, events, overflow)
         if PANEL.edit_field then
             if what == 'commit' then
                 PANEL.edit_text = value
@@ -5696,18 +6687,29 @@ local function panel_frame()
             elseif what == 'cancel' then
                 finish_edit(false)
                 PANEL.hint = '已取消本次输入'
+            elseif what == 'reset' then
+                finish_edit(false)
+                PANEL.hint = '输入队列溢出，已取消并保留原值'
             end
         elseif what == 'commit' then
             cfg.message = value or cfg.message
             config_save()
             PANEL.editing = nil
+            stop_text_input()
             PANEL.hint = 'MESSAGE SAVED'
             note('panel: message set to: ' .. tostring(cfg.message))
         elseif what == 'cancel' then
             cfg.message = PANEL.edit_backup or cfg.message
             PANEL.editing = nil
+            stop_text_input()
             PANEL.hint = 'EDIT CANCELLED'
             note('panel: message edit cancelled')
+        elseif what == 'reset' then
+            cfg.message = PANEL.edit_backup or cfg.message
+            PANEL.editing = nil
+            stop_text_input()
+            PANEL.hint = '输入队列溢出，已取消并保留原值'
+            note('panel text input overflow; edit cancelled')
         else
             cfg.message = value or cfg.message
             PANEL.hint = 'ENTER SAVES   ESC CANCELS'
@@ -5836,19 +6838,23 @@ local function handle_config_command(body)
     local action, rest = body:match('^timed%s+(%a+)%s*(.*)$')
     if not action then return false end
     action = action:lower()
-    if action == 'on' then cfg.timer_on, cfg.elapsed = true, 0
-    elseif action == 'off' then cfg.timer_on, cfg.elapsed = false, 0
+    local role=(PANEL.open and PANEL.profile) or automation.state.active_role
+    if role~='host' and role~='client' then note('timed: role unknown; no profile changed');return true end
+    local profile=automation.profile(role)
+    local ok,why
+    if action == 'on' then ok,why=M.quick_timer_shadow.set(role,'quick_timer_enabled',true);cfg.elapsed=0
+    elseif action == 'off' then ok,why=M.quick_timer_shadow.set(role,'quick_timer_enabled',false);cfg.elapsed=0
     elseif action == 'interval' then
-        cfg.interval = math.max(5, math.min(3600, tonumber(rest) or cfg.interval))
+        ok,why=M.quick_timer_shadow.set(role,'quick_timer_interval',math.max(5,math.min(3600,tonumber(rest) or profile.quick_timer_interval)))
     elseif action == 'message' and #rest > 0 then
-        cfg.message = rest
+        ok,why=M.quick_timer_shadow.set(role,'quick_timer_message',cut_utf8(single_line(rest),200))
     else
         note('timed: unknown action ' .. action)
         return true
     end
-    config_save()
+    if not ok then note('timed: setting refused - '..tostring(why));return true end
     note(string.format('timed: timer_on=%s interval=%d message=%s',
-        tostring(cfg.timer_on), cfg.interval, cfg.message))
+        tostring(profile.quick_timer_enabled), profile.quick_timer_interval, profile.quick_timer_message))
     return true
 end
 local function poll_trigger()
@@ -5870,6 +6876,8 @@ local function poll_trigger()
         return
     end
     if request == 'config' then
+        local role=automation.state.active_role
+        if role=='host' or role=='client' then M.quick_timer_shadow.sync(role) end
         note(string.format('config: timer_on=%s interval=%d message=%s',
             tostring(cfg.timer_on), cfg.interval, cfg.message))
         return
@@ -5893,15 +6901,19 @@ end
 -- Uses the NORMAL send path with every guard intact: no session, chat off, or
 -- nobody else present => refused, and the reason is named in the log.
 local function timed_send(dt)
-    if not cfg.timer_on then cfg.elapsed = 0 return end
+    local role=automation.state.active_role
+    if role~='host' and role~='client' then cfg.elapsed=0;return end
+    local profile=automation.profile(role)
+    if M.quick_timer_shadow.role~=role then cfg.elapsed=0;M.quick_timer_shadow.role=role end
+    if not profile or not profile.quick_timer_enabled then cfg.elapsed = 0 return end
     cfg.elapsed = cfg.elapsed + dt
-    if cfg.elapsed < cfg.interval then return end
+    if cfg.elapsed < profile.quick_timer_interval then return end
     cfg.elapsed = 0
     local chat, others = send_context(false)
     local allowed, why = automation.check(os.time(), others)
     local ok = false
     if chat and allowed then
-        ok, why = automation.send(automation.format(cfg.message), automation.state.active_role)
+        ok, why = automation.send(automation.format(profile.quick_timer_message), role)
         if ok then automation.record(os.time()) end
     elseif not chat then why = others end
     -- Recorded on the MOD, not only in the log. A refusal whose only trace is a file the
@@ -5926,6 +6938,8 @@ function M.debug_cursor_state()
             was_shown = cursor.was_shown}
 end
 ;function M.debug_panel() return PANEL end
+function M.debug_panel_input() return panel_input end
+function M.debug_save_preset_selection() return save_preset_selection() end
 function M.debug_font() return {resolved = FONT.resolved, ok = FONT.ok, why = FONT.why, kind = FONT.kind} end
 function M.debug_panel_signature() return panel_signature() end
 function M.debug_cfg() return cfg end
@@ -6044,21 +7058,27 @@ note('user32 declarations: added[' .. tostring(M.user32_added)
      .. '] reused[' .. tostring(M.user32_reused) .. ']')
 config_load()
 load_tasks()
--- Convert the old enabled timer once; an invisible second scheduler must not survive
--- the new settings UI. Old panel.txt remains available to legacy tool commands.
-if cfg.timer_on then
-    local migration_saved = #M.tasks > 0
-    if #M.tasks == 0 then
-        local migrated, why = M.add_task('旧版定时发送', 'repeat', tostring(cfg.interval),
-                                        cut_utf8(cfg.message, 200), nil, 'host')
-        migration_saved = migrated ~= nil
-        if not migrated then
-            note('legacy timer migration failed: ' .. tostring(why))
-            PANEL.hint = '旧版任务迁移失败；已暂时停用，下次启动重试'
-        end
+-- The old panel.txt timer is migrated into the host profile only when the saved
+-- automation settings have no role-specific quick-timer fields yet. If 0.8.1
+-- already converted it to a scheduled task, that task is authoritative and the
+-- quick timer stays off; this prevents two sends for one legacy interval.
+local has_legacy_timer_task=false
+for _,task in ipairs(M.tasks) do
+    if task.profile=='host' and task.name=='旧版定时发送' then has_legacy_timer_task=true;break end
+end
+if automation.state.legacy_quick_timer_missing then
+    local ok,why=automation.migrate_legacy_quick_timer(cfg.timer_on and not has_legacy_timer_task,
+        cfg.interval,cut_utf8(cfg.message,200))
+    if ok then
+        M.quick_timer_shadow.sync('host')
+        if has_legacy_timer_task and cfg.timer_on then cfg.timer_on=false;config_save() end
+        note('legacy quick timer migration: '..tostring(why))
+    else
+        M.quick_timer_shadow.sync('host')
+        note('legacy quick timer migration failed: '..tostring(why))
     end
-    cfg.timer_on = false
-    if migration_saved then config_save() end
+else
+    M.quick_timer_shadow.sync('host')
 end
 -- Rescue the pointer FIRST, before anything else can fail. If a previous session died
 -- with the panel open, the cursor is still visible and this is the only place that can
@@ -6122,7 +7142,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.8.1 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.8.2 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -6139,12 +7159,12 @@ Before anything is sent, five machine-code signatures are checked against the
 running game.dll. If any does not match, the mod goes dormant and says which one
 changed: an unverified address is an arbitrary address.
 
-Custom alert rules (0.8.0; startup scan safeguard in 0.8.1)
+Custom alert rules and Unicode input (0.8.2)
 Settings > Ping > Stratagem rules / Enemy rules opens the dedicated editors.
 Each stratagem has an enable switch, separate mark/call templates and cooldown.
 Blank messages inherit defaults; blank cooldown uses the global player timer.
 Explicit rule cooldown is independent per trigger player + rule; 0 bypasses
-global cooldown and prioritizes new events, while master/scope/dedup still apply.
+global cooldown and prioritizes new events, while master/dedup still apply.
 First upgrade seeds 500kg and Orbital Napalm Barrage with 0s; fully editable.
 Native names/icon materials/stable IDs follow the workspace StratagemCooldown
 reader. Search/filter and red/blue/green bulk enable/disable are available.
@@ -6157,24 +7177,26 @@ Small defaults off. Flight wins over size. Reviewed current catalog covers 142
 spottable hostile resources (12 flying), not a guarantee for future game builds.
 Native new stratagem rows auto-appear on a supported layout; unknown groups use
 Other. New enemy facts and changed binaries require verification/update.
-The catalog editor displays validated internal English debug names to avoid bulk
-native localization calls during its first scan. Event messages still try live
-localization first and use the debug name if that lookup is unavailable. Game
-startup remains unverified for this candidate.
+The catalog editor displays validated Simplified Chinese names for the current
+149 stratagem rows and falls back to internal English debug names for unknown IDs.
+Scanning never calls native localization in bulk. Event messages prefer the
+event-time localized name, then the mapped display name. In-game IME input is
+handled through queued window-thread messages; physical in-game entry still needs
+verification for this candidate.
 中文：设置→标记消息→战备细分设置 / 敌人体型与飞行提醒。
 空消息沿用默认；冷却留空使用全局，独立秒数按触发者+规则计时，0绕过全局。
 500千克炸弹和轨道凝固汽油弹幕首次升级预设0秒；可编辑或恢复默认。
 战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
 图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
-0.8.1 候选版的战备目录编辑器显示内部英文调试名；事件消息先尝试实时本地化，失败时用调试名。实际游戏启动仍待验收。
+0.8.2 候选版战备目录为当前149条记录提供简体中文名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。游戏内IME输入已加入队列式窗口消息处理，但本版实机输入仍待验收。
 不能确定具体变体时不冒认ID；连同名规则也无法确定时使用默认提醒。
 飞行优先于体型；小型默认关闭；当前142条可标记敌对资源，12条飞行。
 新增战备在兼容布局下自动发现；新敌人及游戏二进制更新仍需校验。
 
-Role presets and private output (0.7.9)
+Role presets, quick timer and private output (0.8.2)
 ---------------------------------------
 HOST PRESET / CLIENT PRESET select what you EDIT. The current session role selects
-what RUNS. Welcome, ping categories, templates, cooldown, output and tasks are separate.
+what RUNS. Welcome, ping categories, templates, cooldown, quick timer, output and tasks are separate.
 Old settings/tasks remain with host. Client copies old ping preferences, disables
 welcome and defaults to ONLY ME. Host keeps its saved welcome choice (off on a fresh install).
 AUTO MESSAGES > SQUAD CHAT / ONLY ME selects output for all automatic messages and
@@ -6183,6 +7205,10 @@ other players do not receive it. It retains normal chat name formatting.
 An unknown role waits; local signature failure never falls back to public chat.
 Role changes clear old welcome/ping queues and cooldown. Deadlines continue while
 another role is active. There are 32 task slots total across both presets.
+The quick timer enable, interval and message are role-scoped and included in named
+preset v3 files. Older v1/v2 presets preserve the destination role's current quick
+timer. Old panel settings migrate the timer to host once; an 0.8.1 timer already
+converted to a task is not duplicated.
 Manual console send/force remain explicit squad sends. New native local display
 requires an in-game check; offline tests do not establish multiplayer visibility.
 
@@ -6199,18 +7225,23 @@ The panel (hotkey K)
   - buttons activate on release inside the same control, as in Armory
   - SETTINGS: event name, schedule mode, custom time and message fields
   - repeat every N seconds / countdown once / daily HH:MM (local system clock)
-  - click fields to type; ENTER confirms, ESC cancels, CTRL+V pastes Unicode
+  - click fields to type, including Windows IME; ENTER confirms, ESC cancels,
+    CTRL+V pastes Unicode. The 0.8.2 IME path has offline native tests; in-game
+    physical input remains unverified.
   - click ADD TASK to save; up to 32 tasks, with pause / enable / restart / delete
 
 Timed send
 ----------
-Tasks run while the game is running, using real elapsed time independent of FPS.
+Tasks and the role-specific quick timer run while the game is running, using real
+elapsed time independent of FPS. The quick timer keeps the selected local/squad
+output and normal send cooldown.
 Repeat/countdown accept 5-86400 seconds. Daily tasks run at most once per local day.
 Countdown deadlines persist across restarts; overdue tasks attempt once on launch.
-Unavailable chat, role restrictions and cooldown leave tasks pending with a reason.
-An enabled legacy timer is migrated to a visible task. Oldest deadlines get priority
+Unavailable chat, unknown role and cooldown leave tasks pending with a reason.
+An enabled pre-profile timer migrates once into the host quick timer. An 0.8.1
+timer already converted to a task remains that task. Oldest deadlines get priority
 so short repeat tasks cannot starve countdowns. The AUTO MESSAGES section has a master
-switch, host-only / host+client scope, allow-solo switch, per-player cooldown, newcomer
+switch, separate host/client profiles selected from session identity, allow-solo switch, per-player cooldown, newcomer
 welcome switch, custom welcome text and welcome delay. Defaults: enabled, all roles,
 solo allowed, 5s cooldown, welcomes off, 2s welcome delay. Existing peers are not
 welcomed when enabling the feature or entering another lobby.
@@ -6272,13 +7303,14 @@ Files / 文件位置
   - 拖动顶部条移动窗口；Ctrl +/- 缩放，Ctrl+0 复位；按钮松开时激活
   - 设置 → 添加定时任务：事件名称、定时类型、时间、发送消息均可自定义
   - 支持重复间隔、一次倒计时（5–86400 秒）和每天时刻（HH:MM，本机时间）
-  - 中文可 Ctrl+V 粘贴；Enter 确认，Esc 取消，再点“添加定时任务”保存
+  - 中文可在字段内使用系统输入法直输，也可 Ctrl+V 粘贴；Enter 确认，Esc 取消
+  - 填写完成后还须点击“添加任务”，任务才会保存并进入命名预设
   - 最多 32 个独立任务，可暂停、启用、删除、重启
 
-任务按真实时间计时，仅在游戏运行时执行。倒计时保存截止时刻；重启后到期任务尝试一次。
-聊天未就绪、角色条件不满足或冷却中时，任务保持等待，不会直接消耗一次倒计时。
+任务和主客机独立的快捷定时按真实时间计时，仅在游戏运行时执行。倒计时保存截止时刻；重启后到期任务尝试一次。
+聊天未就绪、身份未知或冷却中时，任务保持等待，不会直接消耗一次倒计时。
 最早到期的任务优先，避免短周期任务一直占用发送机会。
-自动消息：总开关、仅主机/主机和客机、无人房间允许发送、自动消息最短间隔、新人欢迎及自定义欢迎语/延迟。
+自动消息：总开关、主机/客机独立配置并按当前会话身份启用、无人房间允许发送、自动消息最短间隔、新人欢迎及自定义欢迎语/延迟。快捷定时开关、间隔和消息也保存于各自角色；输出仍可选小队公屏或仅自己可见。
 默认允许主客机及单人发送，冷却5秒，新人欢迎关闭，欢迎延迟2秒；启用时不欢迎已有队友。
 标记消息：任务建筑、战备提示、中型/大型/巨型敌人、地图标记分别开关；不再提示普通弹药、针剂、手雷、样本。
 静态资源包含 TCS、LAS-98激光大炮、堡垒坦克、重新补给和M-103补给车；特殊标记优先读取游戏本地化名称（需校验当前DLL）。

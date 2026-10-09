@@ -9,7 +9,7 @@ SOURCE = Path(__file__).resolve().parents[3] / "src" / "chat_automation.lua"
 HARNESS = r'''
 local h = { session = 'session-a', mine = '76561198000000001',
     host = '76561198000000001', peers = {'76561198000000001'},
-    context = 'context-a', sent = {}, writes = {}, write_ok = true, send_ok = true, identities = {} }
+    context = 'context-a', sent = {}, writes = {}, diagnostics = {}, write_ok = true, send_ok = true, identities = {} }
 local sr = {
     Network = {game_session = function() return h.session end,
                peer_id = function() return h.mine end},
@@ -24,6 +24,9 @@ function h.new(content)
         identity = function(peer) return h.identities[peer] end,
         colorize = function(prefix, argb) return '<c=' .. argb .. '>' .. prefix .. '<c=FFFFFFFF>' end,
         read_file = function() return content end,
+        diagnostic = function(category,action,stable_id,result,output)
+            h.diagnostics[#h.diagnostics+1]={category,action,stable_id,result,output}
+        end,
         write_file = function(value)
             h.writes[#h.writes + 1] = value
             if h.throw_write then error('disk unavailable') end
@@ -62,6 +65,47 @@ class AutomationTests(unittest.TestCase):
             local c=h.new(h.writes[#h.writes])
             assert(c.profile('client').ping_message=='客机消息')
             assert(c.profile('host').welcome)
+        ''')
+
+    def test_legacy_host_scope_is_ignored_for_a_client_profile(self):
+        self.run_lua('''
+            h.host='76561198000000002';h.peers={h.mine,h.host}
+            local b=h.new('# AutoChat automation settings v4\\nhost.scope=host\\nclient.scope=host\\n')
+            assert(b.sync()=='client')
+            assert(b.check(1000,1,h.mine))
+            assert(b.profile('client').scope==nil)
+            assert(b.set('scope','host','client')==false)
+        ''')
+
+    def test_stratagem_event_diagnostic_covers_rule_gate_queue_and_send(self):
+        self.run_lua('''
+            a.set('ping',true)
+            a.set('ping_sender_prefix',false)
+            a.set_rule('stratagem',4119049995,'enabled',false)
+            local disabled={key='event-disabled',category='stratagem',action='summon',
+                stratagem_id=4119049995,creator_id=h.mine}
+            assert(not a.push_ping(disabled,100))
+            assert(#a.state.pings==0)
+            local gate=h.diagnostics[#h.diagnostics]
+            assert(gate[1]=='stratagem' and gate[2]=='summon' and gate[3]=='stratagem_4119049995')
+            assert(gate[4]=='rule-disabled' and gate[5]=='squad')
+
+            a.set_rule('stratagem',4119049995,'enabled',true)
+            a.set_rule('stratagem',4119049995,'cooldown',0)
+            local enabled={key='event-enabled',category='stratagem',action='summon',
+                stratagem_id=4119049995,creator_id=h.mine,target='fixture target'}
+            assert(a.push_ping(enabled,101))
+            assert(#a.state.pings==1)
+            assert(a.poll(101))
+            local queued,sent
+            for _,item in ipairs(h.diagnostics) do
+                if item[3]=='stratagem_4119049995' and item[1]=='stratagem' then
+                    if item[4]=='queued' then queued=item end
+                    if item[4]=='sent' then sent=item end
+                end
+            end
+            assert(queued and queued[5]=='squad' and sent and sent[5]=='squad')
+            assert(h.sent[#h.sent]=='队友召唤了fixture target')
         ''')
 
     def test_client_output_never_falls_back_to_public_chat(self):
@@ -154,6 +198,15 @@ class AutomationTests(unittest.TestCase):
             assert(d.options.ping_message=='队友标记了{类别}，请注意！','explicitly saved v2 template must round trip')
         ''')
 
+    def test_stratagem_display_label_precedes_debug_target_in_message(self):
+        self.run_lua(r'''
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.set('ping_message','{目标}'))
+            assert(a.push_ping({key='zh-name',category='stratagem',target='ORBITAL.NAPALM',
+                display_name='轨道凝固汽油弹幕'},1000))
+            assert(a.state.pings[1].text=='轨道凝固汽油弹幕')
+        ''')
+
     def test_summons_use_a_named_separate_template_and_do_not_relabel_manual_pings(self):
         self.run_lua('''
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
@@ -192,13 +245,14 @@ class AutomationTests(unittest.TestCase):
     def test_defaults_and_unknown_host_policy(self):
         self.run_lua("""
             assert(a.options.enabled and a.options.allow_solo and not a.options.welcome)
-            assert(a.options.scope == 'all' and a.options.cooldown == 5)
+            assert(a.options.scope == nil and a.options.cooldown == 5)
             assert(a.options.welcome_delay == 2)
             h.sr = nil
             assert(a.check(0, 1))
-            assert(a.set('scope', 'host'))
+            assert(a.set('scope', 'host') == false)
             local ok, why = a.check(0, 1)
-            assert(ok == false and why:find('主机'))
+            assert(ok == true)
+            assert(a.push_ping({key='unknown-role',category='stratagem'},0)==false)
         """)
 
     def test_buildings_and_stratagems_replace_pickups_and_migrate_existing_preferences(self):
@@ -219,7 +273,7 @@ class AutomationTests(unittest.TestCase):
     def test_own_ping_sends_without_profile_and_shares_local_timer_cooldown(self):
         self.run_lua('''
             h.mine='76561197960265745'; h.host=h.mine; h.peers={h.mine}
-            assert(a.set('ping',true)); assert(a.set('scope','host'))
+            assert(a.set('ping',true))
             assert(a.set('ping_sender_prefix',false)); assert(a.set('ping_message','{目标}'))
             assert(a.push_ping({key='own1',category='stratagem',creator_id='0110000100000011',
                 target='LAS-98 激光大炮'},1000))
@@ -371,15 +425,14 @@ class AutomationTests(unittest.TestCase):
 
     def test_host_and_client_are_distinct_boolean_states(self):
         self.run_lua("""
-            assert(a.set('scope', 'host'))
-            assert(a.set('scope', 'host','client'))
             assert(a.snapshot().is_host == true and a.check(0, 0))
             h.host = '76561198000000002'; h.peers[2] = h.host
             assert(a.snapshot().is_host == false)
-            local ok, why = a.check(0, 1)
-            assert(ok == false and why:find('主机'))
+            local ok = a.check(0, 1)
+            assert(ok == true)
             h.host = 'not-present'
-            assert(a.snapshot().is_host == nil and a.check(0, 1) == false)
+            assert(a.snapshot().is_host == nil)
+            assert(a.push_ping({key='unconfirmed-role',category='stratagem'},1)==false)
         """)
 
     def test_ids_preserve_all_64_bits_and_remove_zero_duplicates(self):
@@ -470,12 +523,15 @@ class AutomationTests(unittest.TestCase):
             assert(#h.sent == 0)
         """)
 
-    def test_host_scope_does_not_queue_joins_observed_as_client(self):
+    def test_legacy_host_scope_does_not_block_role_specific_client_welcome(self):
         self.run_lua("""
             h.host = 'host'; h.peers[2] = 'host'
-            assert(a.set('scope', 'host')); assert(a.set('welcome', true)); a.poll(0)
-            h.peers[3] = 'friend'; a.poll(1); a.poll(10); assert(#h.sent == 0)
-            h.host = h.mine; a.poll(11); a.poll(20); assert(#h.sent == 0)
+            local b=h.new('client.scope=host\\n')
+            assert(b.set('welcome',true,'client'))
+            assert(b.sync()=='client')
+            b.poll(0)
+            h.peers[3] = 'friend'; b.poll(1); assert(#h.sent == 0)
+            b.poll(3); assert(h.local_sent and #h.local_sent == 1)
         """)
 
     def test_master_solo_and_shared_cooldown_policy(self):
@@ -595,7 +651,7 @@ class AutomationTests(unittest.TestCase):
             local b = h.new(saved); assert(b.options.welcome_message == text)
             local c = h.new("enabled=false\\nscope=host\\ncooldown=17\\nwelcome=true\\n" ..
                 "welcome_delay=4\\nallow_solo=false\\nunknown=os.execute('bad')\\n")
-            assert(not c.options.enabled and c.options.scope == 'host' and c.options.cooldown == 17)
+            assert(not c.options.enabled and c.options.scope == nil and c.options.cooldown == 17)
             assert(c.options.welcome_delay == 4 and c.options.welcome and not c.options.allow_solo)
             assert(h.new('cooldown=bad\\nscope=bad\\nenabled=maybe\\n').options.cooldown == 5)
         """)

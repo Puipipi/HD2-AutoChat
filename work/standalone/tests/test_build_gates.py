@@ -293,6 +293,33 @@ class GateCanFailTest(unittest.TestCase):
         self.assertTrue(failures, "a write symbol must be rejected")
         self.assertIn("WriteProcessMemory", " ".join(failures))
 
+
+    def test_virtualprotect_only_allows_exact_owned_thunk_rw_to_rx(self):
+        self.assertEqual([], gates.check_no_memory_writes(self.source),
+                         "the one protected page must be the newly allocated thunk")
+        mutated = self.source.replace(
+            "kernel.VirtualProtect(code, 4096, 0x20, old_protect)",
+            "kernel.VirtualProtect(game_base, 4096, 0x20, old_protect)")
+        failures = gates.check_no_memory_writes(mutated)
+        self.assertTrue(failures, "protecting the game image must stay prohibited")
+        self.assertIn("owned thunk page", " ".join(failures))
+        appended = self.source + "\nkernel.VirtualProtect(game_base, 4096, 0x20, old_protect)\n"
+        self.assertTrue(gates.check_no_memory_writes(appended),
+                        "a legal thunk transition must not whitelist later calls")
+        rebound = self.source.replace(
+            "local c = ffi.cast('uint8_t *', code)",
+            "code = game_base\n        local c = ffi.cast('uint8_t *', code)")
+        self.assertTrue(gates.check_no_memory_writes(rebound),
+                        "the allocated target must not be rebound before protection")
+        inline_rebound = self.source.replace(
+            "local c = ffi.cast('uint8_t *', code)",
+            "if true then code = game_base end\n        local c = ffi.cast('uint8_t *', code)")
+        self.assertTrue(gates.check_no_memory_writes(inline_rebound),
+                        "an inline block must not rebind the protected allocation")
+        alternate_namespace = self.source + "\nffi.C.VirtualProtect(game_base, 4096, 0x20, old_protect)\n"
+        self.assertTrue(gates.check_no_memory_writes(alternate_namespace),
+                        "a second namespace cannot bypass the unique approved call")
+
     # ------------------------------------------------------- vacuous success
     def test_a_source_the_patterns_cannot_parse_is_rejected(self):
         """The bug that hid both pattern errors: 'found nothing' == 'all clear'."""

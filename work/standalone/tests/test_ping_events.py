@@ -707,6 +707,62 @@ class PingEventsTests(unittest.TestCase):
                 self.assertTrue(automation.poll(1)[0]); self.assertEqual(sent, [label])
                 self.poll(2); automation.poll(2); self.assertEqual(sent, [label])
 
+    def test_resupply_mark_and_call_in_pass_rule_gate_queue_and_zero_cooldown_send(self):
+        chat_source = SOURCE.with_name('chat_automation.lua').read_text(encoding='utf-8')
+        for resource, kind, duration, flags, action, expected, category, rule_id in (
+                ('5052EC6A928CCF1A', 10, 8, 0x600, 'mark', '标记了重新补给（战备提示）', 'stratagem', 867876502),
+                ('16F397CA5F51F271', 20, 9999, 0x2200, 'summon', '队友召唤了重新补给', 'stratagem', 867876502),
+                ('10081ACEF6163EF6', 10, 8, 0x600, 'mark', '标记了酸液武斗虫（中型敌人）', 'medium_enemy', None)):
+            for enabled in ((False, True) if rule_id else (True,)):
+                with self.subTest(action=action, enabled=enabled):
+                    self.setUp(); self.target(resource); self.localized[1263463686] = '重新补给'
+                    sent, diagnostics = [], []
+                    automation = self.lua.execute(chat_source + '''
+                        local send,diagnostic=...;local peer='76561197960265745'
+                        local sr={Network={game_session=function() return 'solo' end,peer_id=function() return peer end},
+                            GameSession={peers=function() return {peer} end,game_session_host=function() return peer end}}
+                        return build_chat_automation({engine=function() return sr end,context=function() return 123 end,
+                            write_file=function() return true end,send=function(text) return send(text) end,
+                            diagnostic=function(...) diagnostic(...) end})
+                    ''', lambda text: sent.append(text) or True,
+                         lambda *row: diagnostics.append(row))
+                    automation.set('ping', True); automation.set('ping_sender_prefix', False)
+                    if rule_id:
+                        automation.set_rule('stratagem', rule_id, 'enabled', enabled)
+                        automation.set_rule('stratagem', rule_id, 'cooldown', 0)
+                    else:
+                        automation.set_rule('enemy', category, 'cooldown', 0)
+                    # A normal global cooldown is already active. A zero rule cooldown
+                    # must still reach the urgent queue and send immediately.
+                    automation.record(0, '76561197960265745')
+                    constructor = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_ping_events')
+                    def emit(event, now):
+                        if category == 'stratagem' and event['category'] == category and event['resource'] == resource:
+                            event['stratagem_id'] = 867876502
+                        return automation.push_ping(event, now)
+                    self.adapter = constructor(self.lua.table_from({
+                        'base': lambda: self.base, 'read': self.read,
+                        'session': lambda: self.session, 'localize': lambda key: self.localized.get(int(key)),
+                        'emit': emit}))
+                    self.poll(0)
+                    self.mark(creator=1001,kind=kind,duration=duration,flags=flags,
+                              localization_key=1263463686 if category=='stratagem' else 0)
+                    self.header(0, 1)
+                    observed, _ = self.poll(1)
+                    if not enabled:
+                        self.assertEqual(observed, 0)
+                        self.assertEqual(sent, [])
+                        self.assertTrue(any(row[0] == 'stratagem' and row[1] == action
+                                            and row[3] == 'rule-disabled' for row in diagnostics))
+                    else:
+                        self.assertEqual(observed, 1)
+                        self.assertTrue(automation.poll(1)[0])
+                        self.assertEqual(sent, [expected])
+                        self.assertTrue(any(row[0] == category and row[1] == action
+                                            and row[3] == 'queued' for row in diagnostics))
+                        self.assertTrue(any(row[0] == category and row[1] == action
+                                            and row[3] == 'sent' and row[4] == 'squad' for row in diagnostics))
+
     def test_special_stratagem_resources_are_named_and_ordinary_pickups_are_ignored(self):
         for resource, target in [('D54B9505C0F72873', 'LAS-98 激光大炮'), ('16474112801385B6', '堡垒坦克')]:
             self.setUp(); self.target(resource); self.poll(0)

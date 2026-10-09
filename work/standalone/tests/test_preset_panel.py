@@ -35,11 +35,11 @@ class PresetPanelTests(unittest.TestCase):
         self.click(lua, h, mod, 'preset:name')
         self.enter(lua, h, mod, '小队欢迎')
         self.click(lua, h, mod, 'preset:save')
-        self.assertEqual('P00000001', mod.debug_panel().preset_selected)
+        self.assertEqual('P00000001', mod.debug_panel().preset_selected_by_role['host'])
         self.click(lua, h, mod, 'preset:name')
         self.enter(lua, h, mod, '小队欢迎-主机')
         self.click(lua, h, mod, 'preset:rename')
-        self.assertEqual('小队欢迎-主机', mod.debug_preset_library().list()[1].name)
+        self.assertEqual('小队欢迎-主机', mod.debug_preset_library().list('host')[1].name)
 
         automation = mod.debug_automation()
         automation.set('welcome_message', 'changed after capture', 'host')
@@ -68,8 +68,8 @@ class PresetPanelTests(unittest.TestCase):
         self.click(lua, h, mod, 'preset:path')
         self.enter(lua, h, mod, 'C:/fixtures/import.autochat')
         self.click(lua, h, mod, 'preset:import')
-        self.assertEqual('P00000002', mod.debug_panel().preset_selected)
-        self.assertEqual('小队欢迎-主机', mod.debug_preset_library().list()[1].name)
+        self.assertEqual('P00000002', mod.debug_panel().preset_selected_by_role['host'])
+        self.assertEqual('小队欢迎-主机', mod.debug_preset_library().list('host')[1].name)
 
     def test_profile_targets_stay_separate_and_failed_save_does_not_add_entry(self):
         lua, h, mod = self.fresh()
@@ -81,8 +81,14 @@ class PresetPanelTests(unittest.TestCase):
         host_message = automation.profile('host').welcome_message
         self.click(lua, h, mod, 'profile:client')
         automation.set('welcome_message', 'client only', 'client')
+        p.preset_name = 'Client profile'
+        self.click(lua, h, mod, 'preset:save')
+        client_id = p.preset_selected_by_role['client']
+        self.assertIsNotNone(client_id)
+        self.assertNotEqual(p.preset_selected_by_role['host'], client_id)
+        automation.set('welcome_message', 'mutated client', 'client')
         self.click(lua, h, mod, 'preset:apply')
-        self.assertEqual(host_message, automation.profile('client').welcome_message)
+        self.assertEqual('client only', automation.profile('client').welcome_message)
         self.assertEqual(host_message, automation.profile('host').welcome_message)
 
         lua.execute('''local old=io.open
@@ -91,9 +97,9 @@ class PresetPanelTests(unittest.TestCase):
                 return old(path,mode)
             end''')
         p.preset_name = 'Must not be added'
-        before = len(mod.debug_preset_library().list())
+        before = len(mod.debug_preset_library().list('host'))
         self.click(lua, h, mod, 'preset:save')
-        self.assertEqual(before, len(mod.debug_preset_library().list()))
+        self.assertEqual(before, len(mod.debug_preset_library().list('host')))
         self.assertIn('预设文件', p.hint)
 
     def test_preset_page_regions_fit_and_all_32_entries_are_paginated(self):
@@ -120,10 +126,55 @@ class PresetPanelTests(unittest.TestCase):
         self.assertTrue(any(r.key == 'preset:select:P00000016' for r in regions))
         self.click(lua, h, mod, 'preset:next')
         lua.execute('for i=1,3 do update() end')
-        self.assertEqual(2, mod.debug_panel().preset_page)
+        self.assertEqual(2, mod.debug_panel().preset_page_by_role['host'])
         boxes = mod.debug_panel().regions
         self.assertTrue(any(boxes[i].key == 'preset:select:P00000032'
                             for i in range(1,len(boxes)+1)))
+
+    def test_native_ring_text_is_drained_before_save_click(self):
+        lua, h, mod = self.fresh()
+        self.click(lua, h, mod, 'presets:open')
+        p = mod.debug_panel()
+        p.preset_name = ''
+        p.editing, p.edit_field, p.edit_text = True, 'preset:name', ''
+        p.input_edit_field = 'preset:name'
+        panel_input = mod.debug_panel_input()
+        lua.execute("""queued = true
+            local input = ...
+            local old_status = input.status
+            input.status = function() local value=old_status();value.broken=false;return value end
+            input.drain = function()
+                if queued then queued=false; return {{message=0x0102,wparam=0x58,lparam=1}}, false end
+                return {}, false
+            end""", panel_input)
+        lua.eval('update()')
+        self.assertEqual('X', p.edit_text,
+                         'queued native text must be consumed before the next interaction')
+        self.click(lua, h, mod, 'preset:save')
+        entries = mod.debug_preset_library().list('host')
+        self.assertEqual(1, len(entries), 'the click must save exactly one preset')
+        self.assertEqual('X', entries[1].name,
+                         'the queued character must reach the edited name before save')
+
+    def test_pending_native_ring_text_survives_focus_release(self):
+        lua, h, mod = self.fresh()
+        p = mod.debug_panel()
+        p.editing, p.edit_field, p.edit_text = True, 'preset:name', ''
+        p.input_edit_field = 'preset:name'
+        panel_input = mod.debug_panel_input()
+        lua.execute("""queued = true
+            local input = ...
+            local old_status = input.status
+            input.status = function() local value=old_status();value.broken=false;return value end
+            input.drain = function()
+                if queued then queued=false; return {{message=0x0102,wparam=0x59,lparam=1}}, false end
+                return {}, false
+            end""", panel_input)
+        h.own_pid = 31337
+        lua.eval('update()')
+        self.assertEqual('Y', p.edit_text,
+                         'drain happens before focus-loss release, preserving the final character')
+        self.assertTrue(p.editing, 'focus loss keeps the current field draft available for resume or explicit cancel')
 
     def test_missing_library_is_empty_and_can_be_saved(self):
         lua, h = fresh_image(font_ids=True)
@@ -175,23 +226,26 @@ class PresetPanelTests(unittest.TestCase):
         lua, h, mod = self.fresh()
         automation = mod.debug_automation()
         automation.set('output', 'squad', 'host')
-        automation.set('scope', 'all', 'host')
-        ok, _, preset_id = mod.debug_preset_library().save('Public host', 'host')
+        ok, _, host_preset_id = mod.debug_preset_library().save('Public host', 'host')
         self.assertTrue(ok)
+        automation.set('output', 'squad', 'client')
+        ok, _, preset_id = mod.debug_preset_library().save('Public client', 'client')
+        self.assertTrue(ok)
+        self.assertNotEqual(host_preset_id, preset_id)
         automation.set('output', 'local', 'client')
-        automation.set('scope', 'host', 'client')
         p = mod.debug_panel()
-        p.profile, p.preset_view, p.preset_selected = 'client', True, preset_id
+        p.profile, p.preset_view = 'client', True
+        p.preset_selected_by_role['client'] = preset_id
         lua.execute('''captured_text={}
             stingray.Gui.text=function(gui,value,...)captured_text[#captured_text+1]=tostring(value)end
             stingray.Gui.text_extents=function(gui,value,face,size)return {x=0},{x=#tostring(value)*size*.5}end''')
         lua.execute('for i=1,3 do update() end')
         labels = [str(lua.globals().captured_text[i])
                   for i in range(1, len(lua.globals().captured_text)+1)]
-        self.assertTrue(any('将载入：小队公屏 / 主机和客机' in s for s in labels), labels)
+        self.assertTrue(any('将载入：小队公屏' in s for s in labels), labels)
         self.assertTrue(any('当前配置输出：仅自己可见' in s for s in labels), labels)
         self.assertEqual('local', automation.profile('client').output)
-        self.assertEqual('host', automation.profile('client').scope)
+        self.assertEqual('local', automation.profile('client').output)
 
 
 if __name__ == '__main__':

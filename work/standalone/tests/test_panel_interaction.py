@@ -125,13 +125,15 @@ class PanelInteractionTest(unittest.TestCase):
         boxes = mod.debug_panel()['regions']
         keys = {boxes[i]['key'] for i in range(1, len(boxes)+1)}
         self.assertTrue({'opt:enabled', 'opt:allow_solo', 'opt:welcome',
-            'scope:host', 'scope:all', 'option:welcome_message',
+            'output:squad', 'output:local', 'option:welcome_message',
             'option:cooldown', 'option:welcome_delay'} <= keys)
+        self.assertFalse(any(key.startswith('scope:') for key in keys),
+                         'host/client role selection owns the profile; no sender scope gate remains')
         self.assertTrue(mod.options['allow_solo'])
         click('opt:allow_solo')
         self.assertFalse(mod.options['allow_solo'])
-        click('scope:host')
-        self.assertEqual('host', mod.options['scope'])
+        click('output:local')
+        self.assertEqual('local', mod.options['output'])
         click('option:welcome_message')
         mod.debug_set_edit_buffer('你好，欢迎！')
         h.user32.set_key(0x0D, True)

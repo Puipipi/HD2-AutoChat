@@ -17,6 +17,7 @@ class PresetLibraryTests(unittest.TestCase):
         self.apply_calls = []
         self.write_ok = True
         self.export_ok = True
+        self.write_count = 0
         self.library = self.new_library()
 
     def new_library(self, data="__disk__"):
@@ -26,6 +27,7 @@ class PresetLibraryTests(unittest.TestCase):
         env[b"read_file"] = lambda: data
 
         def write(value):
+            self.write_count += 1
             if self.write_ok:
                 self.disk = value
                 return True
@@ -88,6 +90,58 @@ class PresetLibraryTests(unittest.TestCase):
         self.capture_value = b"valid:third"
         third = reopened[b"save"]("第三套".encode(), b"host")[2]
         self.assertEqual(third, b"P00000003")
+
+    def test_same_name_is_allowed_once_in_each_role_pool(self):
+        host = self.library[b"save"]("同名预设".encode(), b"host")
+        self.assertTrue(host[0])
+        client = self.library[b"save"]("同名预设".encode(), b"client")
+        self.assertTrue(client[0])
+        self.assertEqual(1, len(self.library[b"list"](b"host")))
+        self.assertEqual(1, len(self.library[b"list"](b"client")))
+        self.assertNotEqual(host[2], client[2])
+
+    def test_v1_shared_entries_migrate_losslessly_into_both_role_pools(self):
+        payload = b"valid:legacy profile"
+        name = "原有 111".encode()
+        self.disk = (b"# AutoChat preset library v1\n1\n1\nP00000001\n"
+                     + str(len(name)).encode() + b"\n" + str(len(payload)).encode() + b"\n"
+                     + name + payload)
+        library = self.new_library()
+        host = library[b"list"](b"host")
+        client = library[b"list"](b"client")
+        self.assertEqual(1, len(host))
+        self.assertEqual(1, len(client))
+        self.assertEqual(name, host[1][b"name"])
+        self.assertEqual(name, client[1][b"name"])
+        self.assertEqual(payload, host[1][b"payload"])
+        self.assertEqual(payload, client[1][b"payload"])
+        self.assertNotEqual(host[1][b"id"], client[1][b"id"])
+        self.assertEqual(b"client", client[1][b"role"])
+        self.assertIn(b"# AutoChat preset library v2\n", self.disk)
+        reopened = self.new_library()
+        self.assertEqual(1, len(reopened[b"list"](b"host")))
+        self.assertEqual(1, len(reopened[b"list"](b"client")))
+
+    def test_oversized_v1_migration_preserves_original_file(self):
+        # Fifteen valid 1 MiB entries fit under the v1 16 MiB read cap, but
+        # duplicating them into both role pools cannot fit in the v2 cap.
+        payload = b"valid:" + b"x" * (1024 * 1024 - 6)
+        rows = [b"# AutoChat preset library v1\n15\n15\n"]
+        for index in range(1, 16):
+            name = ("legacy-%02d" % index).encode()
+            rows.extend((("P%08d\n" % index).encode(), str(len(name)).encode() + b"\n",
+                         str(len(payload)).encode() + b"\n", name, payload))
+        self.disk = b"".join(rows)
+        self.assertLessEqual(len(self.disk), 16 * 1024 * 1024)
+        original = self.disk
+        writes_before = self.write_count
+
+        library = self.new_library()
+
+        self.assertTrue(library[b"state"][b"error"])
+        self.assertEqual(original, self.disk)
+        self.assertEqual(writes_before, self.write_count)
+        self.assertEqual(0, len(library[b"list"]()))
 
     def test_export_import_roundtrip_and_failures_are_reported(self):
         self.capture_value = b"valid:line one\nline two%"
@@ -178,7 +232,7 @@ class PresetLibraryTests(unittest.TestCase):
             self.assertEqual(self.disk, before)
 
     def test_serial_limit_and_missing_callbacks_fail_safely(self):
-        maximum = (b"# AutoChat preset library v1\n99999999\n1\nP99999999\n"
+        maximum = (b"# AutoChat preset library v2\n99999999\n1\nP99999999\nhost\n"
                    b"1\n7\nAvalid:x")
         self.disk = maximum
         lib = self.new_library()

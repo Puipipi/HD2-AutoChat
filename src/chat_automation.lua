@@ -1,22 +1,26 @@
 -- Automatic chat policy, inlined by the addon builder; no native offsets or writes.
 -- Session API provenance: P2P-Ping 0.1.34 scope() / update_peer_labels().
 local function build_chat_automation(env)
-    local options = {enabled = true, scope = 'all', allow_solo = true,
+    local options = {enabled = true, allow_solo = true,
         welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
         ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
-        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad'}
-    local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
+        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad',
+        quick_timer_enabled = false, quick_timer_interval = 30,
+        quick_timer_message = 'HELLO FROM AUTOCHAT'}
+    local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
-    local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output',
+        'quick_timer_enabled', 'quick_timer_interval', 'quick_timer_message'}
+    local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true, quick_timer_enabled=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
         ping_giant_enemy=true, ping_small_enemy=true, ping_flying_enemy=true, ping_summon=true}
-    local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil, status = '等待会话'}
+    local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil,
+        status = '等待会话', legacy_quick_timer_missing = false}
     local api = {options = options, state = state}
 
     local function attempt(fn, ...)
@@ -31,18 +35,18 @@ local function build_chat_automation(env)
     local function validate(key, value)
         if booleans[key] then
             if type(value) ~= 'boolean' then return false, '开关只能设为开启或关闭' end
-        elseif key == 'scope' then
-            if value ~= 'all' and value ~= 'host' then return false, '发送范围只能选仅主机或主机和客机' end
         elseif key == 'output' then
             if value ~= 'squad' and value ~= 'local' then return false, '请选择小队公屏或仅自己可见' end
-        elseif key == 'cooldown' or key == 'welcome_delay' then
-            local limit = key == 'cooldown' and 3600 or 60
-            if type(value) ~= 'number' or value ~= value or value < 0 or value > limit
+        elseif key == 'cooldown' or key == 'welcome_delay' or key == 'quick_timer_interval' then
+            local minimum = key == 'quick_timer_interval' and 5 or 0
+            local limit = (key == 'cooldown' or key == 'quick_timer_interval') and 3600 or 60
+            if type(value) ~= 'number' or value ~= value or value < minimum or value > limit
                 or value ~= math.floor(value) then
-                return false, '请输入 0 到 ' .. limit .. ' 之间的整数秒数'
+                return false, '请输入 ' .. minimum .. ' 到 ' .. limit .. ' 之间的整数秒数'
             end
-        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' or key == 'task_stratagem_message' then
-            if type(value) ~= 'string' or #value == 0 or #value > 512
+        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' or key == 'task_stratagem_message' or key == 'quick_timer_message' then
+            local maximum = key == 'quick_timer_message' and 200 or 512
+            if type(value) ~= 'string' or #value == 0 or #value > maximum
                 or value:find('%z') or not value:find('%S') then
                 return false, '消息须为非空文本，最多 512 字节'
             end
@@ -111,7 +115,7 @@ local function build_chat_automation(env)
     end
     local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v4'}
+        local lines = {'# AutoChat automation settings v5'}
         for _, role in ipairs({'host','client'}) do
             for _, key in ipairs(keys) do
                 lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
@@ -153,7 +157,7 @@ local function build_chat_automation(env)
                     if value == 'true' then value = true
                     elseif value == 'false' then value = false
                     else value = nil end
-                elseif key == 'cooldown' or key == 'welcome_delay' then
+                elseif key == 'cooldown' or key == 'welcome_delay' or key == 'quick_timer_interval' then
                     value = value and tonumber(value) or nil
                 end
                 if (key == 'ping_small_items' or key == 'ping_mission') and (value == 'true' or value == 'false') then
@@ -171,11 +175,17 @@ local function build_chat_automation(env)
     -- Upgrade only our old stock template, which hid every resolved target name.
     -- Deliberately custom category-only templates remain exactly as entered.
     local saved_version = type(saved)=='string' and tonumber(saved:match('^# AutoChat automation settings v(%d+)[\r\n]')) or 1
+    state.legacy_quick_timer_missing = (saved_version or 1)<5
+    for _, role in ipairs({'host','client'}) do
+        for _, key in ipairs({'quick_timer_enabled','quick_timer_interval','quick_timer_message'}) do
+            if role_values[role][key] == nil then state.legacy_quick_timer_missing = true end
+        end
+    end
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
         options.ping_message = '标记了{目标}（{类别}）'
     end
     profiles = {host=copy(options), client=copy(options)}
-    profiles.client.welcome, profiles.client.output, profiles.client.scope = false, 'local', 'all'
+    profiles.client.welcome, profiles.client.output = false, 'local'
     for _, role in ipairs({'host','client'}) do
         for key,value in pairs(role_values[role]) do profiles[role][key] = value end
         profiles[role].rules=saved_rules[role]
@@ -191,18 +201,49 @@ local function build_chat_automation(env)
     for _,key in ipairs(keys) do options[key] = profiles.host[key] end
     state.active_role = 'host'
     function api.profile(role) return profiles[role or state.active_role] end
+    function api.migrate_legacy_quick_timer(enabled, interval, message)
+        if not state.legacy_quick_timer_missing then return true, '快捷定时配置已存在' end
+        local valid, why=validate('quick_timer_interval',interval)
+        if not valid then return false,why end
+        valid,why=validate('quick_timer_message',message)
+        if not valid then return false,why end
+        if type(enabled)~='boolean' then return false,'旧快捷定时开关无效' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        candidate.host.quick_timer_enabled=enabled
+        candidate.host.quick_timer_interval=interval
+        candidate.host.quick_timer_message=message
+        candidate.client.quick_timer_enabled=false
+        if attempt(env.write_file,serialize(candidate))~=true then return false,'快捷定时配置迁移失败' end
+        profiles=candidate
+        state.legacy_quick_timer_missing=false
+        if state.active_role=='host' then for _,key in ipairs(keys) do options[key]=profiles.host[key] end end
+        return true,'快捷定时配置已迁移到主机预设'
+    end
 
     -- Portable named-profile format is deliberately data-only and parsed strictly.
-    function api.export_profile(role)
+    function api.export_profile(role, tasks)
         local source=profiles[role]
         if not source then return nil,'未知预设' end
-        local lines={'# AutoChat profile v1'}
+        local lines={'# AutoChat profile v3'}
         for _,key in ipairs(keys) do lines[#lines+1]=key..'='..escape(tostring(source[key])) end
         local ids={};for id in pairs(source.rules or {}) do ids[#ids+1]=id end;table.sort(ids)
         for _,id in ipairs(ids) do
             for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
                 local value=source.rules[id][field]
                 if value~=nil then lines[#lines+1]='rule_'..id..'.'..field..'='..escape(tostring(value)) end
+            end
+        end
+        tasks=type(tasks)=='table' and tasks or {}
+        if #tasks>32 then return nil,'预设最多包含32个定时任务' end
+        lines[#lines+1]='task_count='..tostring(#tasks)
+        for i,task in ipairs(tasks) do
+            if type(task)~='table' then return nil,'定时任务无效' end
+            local fields={name=task.name,mode=task.mode,time=task.time,message=task.message,
+                enabled=tostring(task.enabled==true and task.done~=true)}
+            for _,field in ipairs({'name','mode','time','message','enabled'}) do
+                local value=fields[field]
+                if type(value)~='string' then return nil,'定时任务字段无效' end
+                lines[#lines+1]='task_'..i..'.'..field..'='..escape(value)
             end
         end
         local payload=table.concat(lines,'\n')..'\n'
@@ -213,8 +254,10 @@ local function build_chat_automation(env)
         if type(payload)~='string' or #payload>1048576 then return false,'预设格式无效或超过 1 MiB' end
         if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
         local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
-        if lines[1]~='# AutoChat profile v1' then return false,'预设版本无效' end
-        local values,rules,seen={}, {}, {}
+        local version=tonumber(lines[1]:match('^# AutoChat profile v(%d+)$'))
+        if version~=1 and version~=2 and version~=3 then return false,'预设版本无效' end
+        local values,rules,seen,tasks_by_id={}, {}, {}, {}
+        local task_count
         local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
         for i=2,#lines do
             local key,raw=lines[i]:match('^([%w_%.]+)=(.*)$')
@@ -223,10 +266,28 @@ local function build_chat_automation(env)
             local value=unescape(raw)
             if value==nil or escape(value)~=raw then return false,'预设转义无效' end
             if not valid_utf8(value) then return false,'预设包含无效 UTF-8' end
-            if scalar_set[key] then
+            local task_index,task_field=key:match('^task_(%d+)%.([%a_]+)$')
+            if key=='task_count' then
+                if version<2 or not value:match('^%d+$') then return false,'定时任务数量无效' end
+                task_count=tonumber(value)
+                if task_count>32 then return false,'预设最多包含32个定时任务' end
+            elseif task_index then
+                local fields={name=true,mode=true,time=true,message=true,enabled=true}
+                if version<2 or not fields[task_field] then return false,'定时任务字段无效' end
+                local index=tonumber(task_index)
+                if not index or index<1 or index>32 or index%1~=0 then return false,'定时任务编号无效' end
+                if task_field=='enabled' then
+                    if value=='true' then value=true elseif value=='false' then value=false else return false,'定时任务开关无效' end
+                end
+                tasks_by_id[index]=tasks_by_id[index] or {}
+                tasks_by_id[index][task_field]=value
+            elseif key=='scope' then
+                if version~=1 then return false,'预设版本无效' end
+                if value~='all' and value~='host' then return false,'旧版预设发送范围无效' end
+            elseif scalar_set[key] then
                 if booleans[key] then
                     if value=='true' then value=true elseif value=='false' then value=false else return false,'开关值无效' end
-                elseif key=='cooldown' or key=='welcome_delay' then
+                elseif key=='cooldown' or key=='welcome_delay' or key=='quick_timer_interval' then
                     if not value:match('^%d+$') then return false,'冷却值无效' end
                     value=tonumber(value)
                 end
@@ -254,17 +315,56 @@ local function build_chat_automation(env)
                 rules[stable]=rules[stable] or {};rules[stable][field]=converted
             end
         end
-        for _,key in ipairs(keys) do if values[key]==nil then return false,'缺少设置：'..key end end
+        for _,key in ipairs(keys) do
+            if values[key]==nil then
+                if version<3 and key=='quick_timer_enabled' then values[key]=false
+                elseif version<3 and key=='quick_timer_interval' then values[key]=30
+                elseif version<3 and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
+                else return false,'缺少设置：'..key end
+            end
+        end
+        local task_list
+        if version>=2 then
+            if task_count==nil then return false,'缺少定时任务数量' end
+            task_list={}
+            for i=1,task_count do
+                local t=tasks_by_id[i]
+                if not t or t.name==nil or t.mode==nil or t.time==nil or t.message==nil or t.enabled==nil then
+                    return false,'定时任务字段不完整'
+                end
+                if t.name=='' or #t.name>96 or t.name:find('[%c]') or not t.name:find('%S')
+                    or t.message=='' or #t.message>200 or t.message:find('[%c]') or not t.message:find('%S') then
+                    return false,'定时任务名称或消息无效'
+                end
+                if t.mode=='repeat' or t.mode=='once' then
+                    local seconds=t.time:match('^%d+$') and tonumber(t.time)
+                    if not seconds or seconds<5 or seconds>86400 then return false,'定时任务间隔无效' end
+                    t.time=tostring(seconds)
+                elseif t.mode=='daily' then
+                    local hour,minute=t.time:match('^(%d%d?):(%d%d)$');hour,minute=tonumber(hour),tonumber(minute)
+                    if not hour or hour>23 or minute>59 then return false,'定时任务时间无效' end
+                    t.time=string.format('%02d:%02d',hour,minute)
+                else return false,'定时任务类型无效' end
+                task_list[i]={name=t.name,mode=t.mode,time=t.time,message=t.message,enabled=t.enabled}
+            end
+            for i in pairs(tasks_by_id) do if i>task_count then return false,'定时任务数量不匹配' end end
+        end
         local count=0;for _ in pairs(rules) do count=count+1 end
         if count>512 then return false,'规则数量超过 512' end
-        return true,{values=values,rules=rules}
+        return true,{values=values,rules=rules,tasks=task_list,version=version}
     end
     function api.import_profile(payload,role)
         if role~='host' and role~='client' then return false,'未知预设' end
         local valid,parsed=api.validate_profile(payload)
         if not valid then return false,parsed end
         local candidate={host=copy(profiles.host),client=copy(profiles.client)}
-        for _,key in ipairs(keys) do candidate[role][key]=parsed.values[key] end
+        for _,key in ipairs(keys) do
+            if parsed.version < 3 and key:match('^quick_timer_') then
+                -- Older portable profiles did not own this setting; loading one
+                -- must not silently change the destination role's timer.
+                candidate[role][key]=profiles[role][key]
+            else candidate[role][key]=parsed.values[key] end
+        end
         candidate[role].rules=parsed.rules
         if attempt(env.write_file,serialize(candidate))~=true then return false,'设置保存失败，已保留原设置' end
         profiles[role]=candidate[role]
@@ -461,10 +561,6 @@ local function build_chat_automation(env)
     local function policy(now, others, snapshot, peer, rule_id, cooldown)
         limits(snapshot)
         if not options.enabled then return false, '自动发送已关闭' end
-        if options.scope == 'host' then
-            if not snapshot or snapshot.is_host == nil then return false, '等待：主机身份尚未确认' end
-            if snapshot.is_host == false then return false, '等待：仅主机可自动发送' end
-        end
         if not options.allow_solo and (type(others) ~= 'number' or others < 1) then
             return false, '等待：小队中没有其他玩家'
         end
@@ -509,8 +605,8 @@ local function build_chat_automation(env)
         profiles[role][key] = value
         if role ~= state.active_role then state.status='设置已保存';return true,state.status end
         options[key] = value
-        if key == 'enabled' or key == 'welcome' or key == 'scope' then reset() end
-        if key == 'enabled' or key == 'scope' or key == 'ping' or key == 'output' then state.pings = {} end
+        if key == 'enabled' or key == 'welcome' then reset() end
+        if key == 'enabled' or key == 'ping' or key == 'output' then state.pings = {} end
         if key == 'output' then reset() end
         state.status = '设置已保存'
         return true, state.status
@@ -561,6 +657,18 @@ local function build_chat_automation(env)
             or rule_key('enemy',event.category))
         return key,key and profiles[state.active_role].rules[key] or {}
     end
+    local function event_diagnostic(event,rule_id,result)
+        if type(env.diagnostic)~='function' then return end
+        local category=type(event)=='table' and categories[event.category] and event.category or 'unknown'
+        local action=type(event)=='table' and (event.action=='summon' or event.action=='use' or event.action=='mark')
+            and event.action or 'unknown'
+        local stable_id='-'
+        if type(rule_id)=='string' and (rule_id:match('^stratagem_%d+$') or rule_id:match('^enemy_[%a_]+$')) then
+            stable_id=rule_id
+        end
+        local output=profiles[state.active_role] and profiles[state.active_role].output or 'unknown'
+        pcall(env.diagnostic,category,action,stable_id,result,output)
+    end
     local function same_session(a, b)
         return a and b and a.session == b.session and a.context == b.context
             and a.mine == b.mine and a.host == b.host
@@ -572,10 +680,6 @@ local function build_chat_automation(env)
         end
         local snapshot, why = api.snapshot()
         if not snapshot then reset(); state.status = why; return false, why end
-        if options.scope == 'host' and snapshot.is_host ~= true then
-            reset(); state.status = snapshot.is_host == false and '等待：仅主机可自动发送' or '等待：主机身份尚未确认'
-            return false, state.status
-        end
         if type(now) ~= 'number' or now ~= now or now == math.huge or now == -math.huge then
             reset(); state.status = '等待：计时尚未就绪'; return false, state.status
         end
@@ -623,27 +727,29 @@ local function build_chat_automation(env)
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
-        api.sync()
+        if not api.sync() then state.status='等待：主机身份尚未确认';event_diagnostic(event,nil,'role-unknown');return false end
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
-            or now == math.huge or now == -math.huge then return false end
-        if not options.enabled or not options.ping or not ping_enabled(event.category,event.action) then return false end
+            or now == math.huge or now == -math.huge then event_diagnostic(event,nil,'invalid-event');return false end
         local rule_id,rule=event_rule(event)
-        if rule.enabled==false then return false end
+        if not options.enabled then event_diagnostic(event,rule_id,'master-disabled');return false end
+        if not options.ping then event_diagnostic(event,rule_id,'ping-disabled');return false end
+        if not ping_enabled(event.category,event.action) then event_diagnostic(event,rule_id,'category-disabled');return false end
+        if rule.enabled==false then event_diagnostic(event,rule_id,'rule-disabled');return false end
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
-        if state.ping_seen[event.key] then return false end
+        if state.ping_seen[event.key] then event_diagnostic(event,rule_id,'duplicate-event');return false end
         local snapshot = api.snapshot()
-        if options.scope == 'host' and (not snapshot or snapshot.is_host ~= true) then return false end
-        if not creator_present(event.creator_id, snapshot) then return false end
+        if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false end
         if #state.pings>=16 then
-            if rule.cooldown~=0 then return false end
+            if rule.cooldown~=0 then event_diagnostic(event,rule_id,'queue-full');return false end
             local evict
             for i,pending in ipairs(state.pings) do if pending.cooldown~=0 then evict=i;break end end
-            if not evict then return false end
+            if not evict then event_diagnostic(event,rule_id,'queue-full-no-eviction');return false end
             table.remove(state.pings,evict)
         end
         local label = categories[event.category]
-        local target = type(event.target) == 'string' and plain(event.target,200) or label
+        local raw_target=type(event.display_name)=='string' and event.display_name or event.target
+        local target = type(raw_target) == 'string' and plain(raw_target,200) or label
         local identity = identity_for(event.creator_id)
         local short = identity and plain(identity.short, 16) or '队友'
         if short == '' then short = '队友' end
@@ -673,19 +779,28 @@ local function build_chat_automation(env)
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
         state.ping_seen[event.key] = now + 30
+        event_diagnostic(event,rule_id,'queued')
         return true
     end
     local function poll_ping(now, urgent_only)
-        if not options.enabled or not options.ping then state.pings = {}; return false end
+        if not options.enabled or not options.ping then
+            local reason=options.enabled and 'ping-disabled' or 'master-disabled'
+            for _,pending in ipairs(state.pings) do event_diagnostic(pending,pending.rule_id,reason) end
+            state.pings = {}; return false
+        end
         if type(now) ~= 'number' or now ~= now then return false end
         local snapshot = api.snapshot()
         local context = attempt(env.context)
         for i=#state.pings,1,-1 do
             local p = state.pings[i]
-            if now > p.expires or not creator_present(p.creator_id, snapshot)
-                or not ping_enabled(p.category,p.action)
-                or p.context ~= context or p.session ~= (snapshot and snapshot.session)
-                or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then
+            local reason
+            if now > p.expires then reason='queue-expired'
+            elseif not creator_present(p.creator_id, snapshot) then reason='creator-not-in-roster'
+            elseif not ping_enabled(p.category,p.action) then reason='category-disabled'
+            elseif p.context ~= context or p.session ~= (snapshot and snapshot.session)
+                or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then reason='session-changed' end
+            if reason then
+                event_diagnostic(p,p.rule_id,reason)
                 table.remove(state.pings,i)
             end
         end
@@ -694,7 +809,11 @@ local function build_chat_automation(env)
             if now>=p.retry and (not urgent_only or p.cooldown==0) then
                 local allowed,why=policy(now,snapshot and #snapshot.remote or nil,snapshot,p.creator_id,p.rule_id,p.cooldown)
                 if allowed then pending,index=p,i;break end
-                state.status=why
+                local reason=why=='等待：小队中没有其他玩家' and 'solo-disabled'
+                    or why=='等待：计时尚未就绪' and 'clock-unavailable'
+                    or why=='等待：该玩家的自动消息间隔中' and 'cooldown-active'
+                    or why=='自动发送已关闭' and 'master-disabled' or 'policy-blocked'
+                state.status=why;event_diagnostic(p,p.rule_id,reason)
             end
         end
         if not pending then return false end
@@ -705,10 +824,10 @@ local function build_chat_automation(env)
                 limits(snapshot);local key=bucket(pending.creator_id,snapshot)
                 state.last_by_rule[key]=state.last_by_rule[key] or {};state.last_by_rule[key][pending.rule_id]=now
             else api.record(now,pending.creator_id) end
-            state.status='已发送玩家标记提示'; return true, state.status
+            state.status='已发送玩家标记提示';event_diagnostic(pending,pending.rule_id,'sent');return true, state.status
         end
         pending.retry=now+5
-        state.status='等待：标记提示暂未发送（5秒后重试）'
+        state.status='等待：标记提示暂未发送（5秒后重试）';event_diagnostic(pending,pending.rule_id,'send-refused')
         return false, state.status
     end
     function api.poll(now)

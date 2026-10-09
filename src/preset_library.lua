@@ -1,8 +1,10 @@
 -- Data-only preset storage. All game/config semantics are supplied by env.
 local function build_preset_library(env)
     local MAX_PRESETS, MAX_NAME, MAX_PAYLOAD, MAX_SERIAL = 32, 96, 1024 * 1024, 99999999
+    local MAX_LIBRARY_PRESETS = MAX_PRESETS * 2
     local MAX_LIBRARY = 16 * 1024 * 1024
-    local LIB_MAGIC = "# AutoChat preset library v1\n"
+    local LIB_MAGIC_V1 = "# AutoChat preset library v1\n"
+    local LIB_MAGIC = "# AutoChat preset library v2\n"
     local FILE_MAGIC = "# AutoChat preset v1\n"
     local state = {error = nil, revision = 0}
     local entries, serial = {}, 0
@@ -52,15 +54,18 @@ local function build_preset_library(env)
     local function find(id)
         for i = 1, #entries do if entries[i].id == id then return i, entries[i] end end
     end
-    local function duplicate_name(name, except)
-        for i = 1, #entries do if i ~= except and entries[i].name == name then return true end end
+    local function valid_role(role) return role == "host" or role == "client" end
+    local function duplicate_name(name, role, except)
+        for i = 1, #entries do
+            if i ~= except and entries[i].role == role and entries[i].name == name then return true end
+        end
         return false
     end
     local function encode_library(items, next_serial)
         local out = {LIB_MAGIC, tostring(next_serial), "\n", tostring(#items), "\n"}
         for i = 1, #items do
             local e = items[i]
-            out[#out + 1] = e.id .. "\n" .. tostring(#e.name) .. "\n" .. tostring(#e.payload) .. "\n"
+            out[#out + 1] = e.id .. "\n" .. e.role .. "\n" .. tostring(#e.name) .. "\n" .. tostring(#e.payload) .. "\n"
             out[#out + 1] = e.name; out[#out + 1] = e.payload
         end
         return table.concat(out)
@@ -75,13 +80,16 @@ local function build_preset_library(env)
         return value, e + 1
     end
     local function parse_library(data)
-        if type(data) ~= "string" or #data > MAX_LIBRARY or data:sub(1, #LIB_MAGIC) ~= LIB_MAGIC then return nil, nil, "预设库格式损坏" end
-        local pos = #LIB_MAGIC + 1
+        if type(data) ~= "string" or #data > MAX_LIBRARY then return nil, nil, "预设库格式损坏" end
+        local legacy = data:sub(1, #LIB_MAGIC_V1) == LIB_MAGIC_V1
+        local magic = legacy and LIB_MAGIC_V1 or LIB_MAGIC
+        if data:sub(1, #magic) ~= magic then return nil, nil, "预设库格式损坏" end
+        local pos = #magic + 1
         local saved_serial; saved_serial, pos = parse_uint_line(data, pos, MAX_SERIAL)
         if not saved_serial then return nil, nil, "预设库序号无效" end
-        local count; count, pos = parse_uint_line(data, pos, MAX_PRESETS)
+        local count; count, pos = parse_uint_line(data, pos, legacy and MAX_PRESETS or MAX_LIBRARY_PRESETS)
         if count == nil then return nil, nil, "预设库数量无效" end
-        local result, ids, names, highest = {}, {}, {}, 0
+        local result, ids, names, highest, role_counts = {}, {}, {}, 0, {host=0,client=0}
         for _ = 1, count do
             local id_end = data:find("\n", pos, true)
             if not id_end or id_end - pos ~= 9 then return nil, nil, "预设编号无效" end
@@ -91,22 +99,46 @@ local function build_preset_library(env)
             if not number or number < 1 or number > MAX_SERIAL or ids[id] then return nil, nil, "预设编号重复或无效" end
             ids[id] = true; if number > highest then highest = number end
             pos = id_end + 1
+            local role = "host"
+            if not legacy then
+                local role_end=data:find("\n",pos,true)
+                if not role_end then return nil,nil,"预设角色无效" end
+                role=data:sub(pos,role_end-1);pos=role_end+1
+                if not valid_role(role) then return nil,nil,"预设角色无效" end
+            end
             local nl; nl, pos = parse_uint_line(data, pos, MAX_NAME)
             if not nl then return nil, nil, "预设名称长度无效" end
             local pl; pl, pos = parse_uint_line(data, pos, MAX_PAYLOAD)
             if nl == 0 or not pl or pl == 0 or pos + nl + pl - 1 > #data then return nil, nil, "预设长度无效" end
             local name = data:sub(pos, pos + nl - 1); pos = pos + nl
             local payload = data:sub(pos, pos + pl - 1); pos = pos + pl
-            if not valid_name(name) or names[name] then return nil, nil, "预设名称重复或无效" end
-            names[name] = true
+            local name_key=role.."\0"..name
+            if not valid_name(name) or names[name_key] or legacy and names[name] then return nil, nil, "预设名称重复或无效" end
+            names[name_key], names[name] = true, true
             local valid = validate_payload(payload)
             if not valid then return nil, nil, "库内预设数据无效" end
-            result[#result + 1] = {id = id, name = name, payload = payload}
+            role_counts[role]=role_counts[role]+1
+            if role_counts[role]>MAX_PRESETS then return nil,nil,"单角色预设数量超过32" end
+            result[#result + 1] = {id = id, role=role, name = name, payload = payload}
         end
         if pos ~= #data + 1 or highest > saved_serial then return nil, nil, "预设库含有多余数据或无效序号" end
-        return result, saved_serial
+        if legacy then
+            local legacy_entries={};for i,item in ipairs(result) do legacy_entries[i]=item end
+            for _,item in ipairs(legacy_entries) do
+                if #result>=MAX_LIBRARY_PRESETS or saved_serial>=MAX_SERIAL then return nil,nil,"旧版预设无法安全复制到客机预设池" end
+                saved_serial=saved_serial+1
+                result[#result+1]={id=string.format("P%08d",saved_serial),role="client",name=item.name,payload=item.payload}
+            end
+        end
+        return result, saved_serial, nil, legacy
     end
     local function persist(next_entries, next_serial)
+        local counts={host=0,client=0}
+        for _,item in ipairs(next_entries) do
+            if not valid_role(item.role) then return false,"预设角色无效" end
+            counts[item.role]=counts[item.role]+1
+            if counts[item.role]>MAX_PRESETS then return false,"每个角色最多保存32个预设" end
+        end
         local bytes = encode_library(next_entries, next_serial)
         if #bytes > MAX_LIBRARY then return false, "预设库超过大小限制" end
         local ok, wrote, why = call(env.write_file, bytes)
@@ -121,22 +153,37 @@ local function build_preset_library(env)
         elseif data == nil then
             if why ~= nil then state.error = why end
         else
-            local loaded, loaded_serial, err = parse_library(data)
-            if not loaded then state.error = err else entries, serial = loaded, loaded_serial end
+            local loaded, loaded_serial, err, migrated = parse_library(data)
+            if not loaded then state.error = err
+            elseif migrated then
+                local migrated_bytes=encode_library(loaded,loaded_serial)
+                if #migrated_bytes>MAX_LIBRARY then
+                    state.error="旧版预设复制后会超过大小限制；原文件已保留"
+                else
+                    local ok,wrote,why=call(env.write_file,migrated_bytes)
+                    if not ok or wrote~=true then state.error="旧版预设迁移未能写入；原文件已保留"..(why and ("："..tostring(why)) or "")
+                    else entries,serial=loaded,loaded_serial;state.revision=1 end
+                end
+            else entries, serial = loaded, loaded_serial end
         end
     end
     local api = {state = state}
-    function api.list()
+    function api.list(role)
         local result = {}
-        for i = 1, #entries do result[i] = {id = entries[i].id, name = entries[i].name, payload = entries[i].payload} end
+        for i = 1, #entries do
+            if role==nil or entries[i].role==role then
+                result[#result+1] = {id = entries[i].id, role=entries[i].role, name = entries[i].name, payload = entries[i].payload}
+            end
+        end
         return result
     end
     local function ready() if state.error then return false, "预设库不可用：" .. tostring(state.error) end; return true end
     function api.save(name, role)
         local r, reason = ready(); if not r then return false, reason end
+        if not valid_role(role) then return fail("请选择主机或客机预设池") end
         if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
-        if duplicate_name(name) then return fail("预设名称已存在，请先重命名现有预设") end
-        if #entries >= MAX_PRESETS then return fail("最多保存32个预设") end
+        if duplicate_name(name,role) then return fail("此角色的预设名称已存在，请先重命名现有预设") end
+        if #api.list(role) >= MAX_PRESETS then return fail("每个角色最多保存32个预设") end
         local ok, payload, why = call(env.capture, role)
         if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
@@ -144,7 +191,7 @@ local function build_preset_library(env)
         local next_serial = serial + 1
         local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
         local id = string.format("P%08d", next_serial)
-        next_entries[#next_entries + 1] = {id = id, name = name, payload = payload}
+        next_entries[#next_entries + 1] = {id = id, role=role, name = name, payload = payload}
         local saved, savewhy = persist(next_entries, next_serial)
         if not saved then return fail(savewhy) end
         return true, nil, id
@@ -152,10 +199,11 @@ local function build_preset_library(env)
     function api.replace(id, role)
         local r, reason = ready(); if not r then return false, reason end
         local index, old = find(id); if not index then return fail("找不到该预设") end
+        if not valid_role(role) or role~=old.role then return fail("所选预设不属于当前角色") end
         local ok, payload, why = call(env.capture, role)
         if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
-        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, name = old.name, payload = payload} or entries[i] end
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, role=old.role, name = old.name, payload = payload} or entries[i] end
         local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
         return true
     end
@@ -170,8 +218,8 @@ local function build_preset_library(env)
         local r, reason = ready(); if not r then return false, reason end
         local index, old = find(id); if not index then return fail("找不到该预设") end
         if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
-        if duplicate_name(name, index) then return fail("预设名称已存在") end
-        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, name = name, payload = old.payload} or entries[i] end
+        if duplicate_name(name, old.role, index) then return fail("此角色的预设名称已存在") end
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, role=old.role, name = name, payload = old.payload} or entries[i] end
         local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
         return true
     end
@@ -193,8 +241,10 @@ local function build_preset_library(env)
         if not ok or wrote ~= true then return fail(detail or "导出预设失败") end
         return true, nil, path or detail
     end
-    function api.import(path)
+    function api.import(path, role)
         local r, reason = ready(); if not r then return false, reason end
+        role=role or "host"
+        if not valid_role(role) then return fail("请选择主机或客机预设池") end
         local ok, data, why = call(env.import_file, path)
         if not ok or type(data) ~= "string" then return fail(why or "读取预设文件失败") end
         if #data > MAX_PAYLOAD + MAX_NAME + 64 or data:sub(1, #FILE_MAGIC) ~= FILE_MAGIC then return fail("预设文件格式无效或过大") end
@@ -206,14 +256,14 @@ local function build_preset_library(env)
         local name = data:sub(pos, pos + nl - 1); pos = pos + nl
         local payload = data:sub(pos, pos + pl - 1)
         if not valid_name(name) then return fail("预设名称无效") end
-        if duplicate_name(name) then return fail("预设名称已存在，请先重命名现有预设") end
+        if duplicate_name(name,role) then return fail("此角色的预设名称已存在，请先重命名现有预设") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
-        if #entries >= MAX_PRESETS then return fail("最多保存32个预设") end
+        if #api.list(role) >= MAX_PRESETS then return fail("每个角色最多保存32个预设") end
         if serial >= MAX_SERIAL then return fail("预设编号已用尽") end
         local next_serial = serial + 1
         local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
         local id = string.format("P%08d", next_serial)
-        next_entries[#next_entries + 1] = {id = id, name = name, payload = payload}
+        next_entries[#next_entries + 1] = {id = id, role=role, name = name, payload = payload}
         local saved, savewhy = persist(next_entries, next_serial); if not saved then return fail(savewhy) end
         return true, nil, id
     end

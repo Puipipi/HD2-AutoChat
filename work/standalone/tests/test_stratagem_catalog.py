@@ -6,6 +6,7 @@ import unittest
 from lupa.luajit21 import LuaRuntime
 
 SOURCE = Path(__file__).resolve().parents[3] / 'src/stratagem_catalog.lua'
+NAMES_SOURCE = Path(__file__).resolve().parents[3] / 'src/stratagem_names_zh.lua'
 BASE, ROWS, STRINGS = 0x10000000, 0x20000000, 0x30000000
 PINS = [(0x66d54c, '4b8b84fd00b67c03'), (0x179d962, '8b752c'),
         (0x183a1e5, '498b96b0000000')]
@@ -16,6 +17,7 @@ class StratagemCatalogTests(unittest.TestCase):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         self.mem, self.localized, self.reads, self.localize_calls = {}, {2994328991: '500千克炸弹'}, [], []
         self.base = BASE
+        self.names_zh = self.lua.execute(NAMES_SOURCE.read_text(encoding='utf-8') + '\nreturn STRATAGEM_NAMES_ZH')
         self.raw(BASE + 0x37cb600, bytes(256 * 8))
         for offset, data in PINS:
             self.raw(BASE + offset, bytes.fromhex(data))
@@ -29,6 +31,7 @@ class StratagemCatalogTests(unittest.TestCase):
         self.reader = factory(self.lua.table_from({
             'base': lambda: self.base, 'read': self.read,
             'localize': localize,
+            'names_zh': self.names_zh,
             'resource_aliases': self.lua.table_from({'00000000abcdef01': 4119049995}),
         }))
 
@@ -77,6 +80,29 @@ class StratagemCatalogTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(self.localize_calls, [])
         self.assertEqual(self.reader.lookup(4119049995)['name'], 'EAGLE. 500KG BOMB')
+
+    def test_catalog_exposes_chinese_display_name_without_changing_identity(self):
+        self.row(5, 123456, 'VEHICLES. FUTURE VEHICLE', 11, 21)
+        self.reader.scan(0)
+        known = self.reader.lookup(4119049995)
+        unknown = self.reader.lookup(123456)
+        self.assertEqual(known['display_name'], '“飞鹰”500KG炸弹')
+        self.assertEqual(known['name'], 'EAGLE. 500KG BOMB')
+        self.assertEqual(self.reader.resolve_name_key(2994328991)['id'], 4119049995)
+        self.assertEqual(unknown['display_name'], unknown['debug_name'])
+
+    def test_reviewed_live_catalog_fixture_has_a_display_name_for_every_stable_id(self):
+        import json
+        fixture = json.loads((SOURCE.parents[1] / 'work/standalone/tests/fixtures/stratagem_catalog_20261009.json')
+                             .read_text(encoding='utf-8'))
+        rows = fixture['rows']
+        self.assertEqual(len(rows), 149)
+        self.assertEqual(len({row['id'] for row in rows}), 149)
+        for row in rows:
+            name = self.names_zh[row['id']]
+            self.assertTrue(name, 'missing display name for stable id %s' % row['id'])
+            self.assertTrue(any('\u4e00' <= char <= '\u9fff' for char in name),
+                            'display name is not localized for stable id %s' % row['id'])
 
     def test_new_rows_discover_and_type_reordering_keeps_stable_identity(self):
         self.reader.scan(0)

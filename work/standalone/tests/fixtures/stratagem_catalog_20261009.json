@@ -1,0 +1,1048 @@
+{
+  "source": "read-only current game catalog; Steam build 25480438; 2026-10-09",
+  "rows": [
+    {
+      "id": 5185868,
+      "debug_name": "BACKPACK. GUARD DOG GAS PROJECTOR (Drone)",
+      "name_upper_key": 2499481182,
+      "name_key": 2938726003,
+      "call_type": 0
+    },
+    {
+      "id": 12688472,
+      "debug_name": "EMPLACEMENTS. ANTI-PERSONNEL MINE DEPLOYER",
+      "name_upper_key": 2248440908,
+      "name_key": 351997015,
+      "call_type": 0
+    },
+    {
+      "id": 14345846,
+      "debug_name": "TEAM WEAPONS. LIGHT MACHINE GUN",
+      "name_upper_key": 4124031159,
+      "name_key": 225756131,
+      "call_type": 0
+    },
+    {
+      "id": 45875024,
+      "debug_name": "BACKPACK. HELLBOMB",
+      "name_upper_key": 861327809,
+      "name_key": 2306470396,
+      "call_type": 0
+    },
+    {
+      "id": 65564476,
+      "debug_name": "MISSIONS. OIL RIG EXTRACT",
+      "name_upper_key": 1787745812,
+      "name_key": 1360402559,
+      "call_type": 3
+    },
+    {
+      "id": 73468749,
+      "debug_name": "BACKPACK. HOVERPACK BACKPACK",
+      "name_upper_key": 3727877127,
+      "name_key": 2768994609,
+      "call_type": 0
+    },
+    {
+      "id": 101457192,
+      "debug_name": "TANK. TANK RELOAD HE",
+      "name_upper_key": 1462990578,
+      "name_key": 2664466741,
+      "call_type": 3
+    },
+    {
+      "id": 115737856,
+      "debug_name": "MISSIONS. EXTRACTION",
+      "name_upper_key": 3109644149,
+      "name_key": 1171875332,
+      "call_type": 2
+    },
+    {
+      "id": 153819019,
+      "debug_name": "TEAM WEAPONS. GRENADE LAUNCHER TACTICAL",
+      "name_upper_key": 839881134,
+      "name_key": 1712527709,
+      "call_type": 0
+    },
+    {
+      "id": 255298804,
+      "debug_name": "PRESIDENT REWARDS. HEALTH PACK RACK",
+      "name_upper_key": 2273284544,
+      "name_key": 2673704303,
+      "call_type": 0
+    },
+    {
+      "id": 272480476,
+      "debug_name": "BACKPACK. DIRECTIONAL ENERGY SHIELD",
+      "name_upper_key": 1141542311,
+      "name_key": 3051489675,
+      "call_type": 0
+    },
+    {
+      "id": 295629711,
+      "debug_name": "VEHICLES. COMBAT WALKER",
+      "name_upper_key": 3200900560,
+      "name_key": 734964784,
+      "call_type": 0
+    },
+    {
+      "id": 336693041,
+      "debug_name": "TEAM WEAPONS. HARPOON GUN ",
+      "name_upper_key": 2728146884,
+      "name_key": 167214020,
+      "call_type": 0
+    },
+    {
+      "id": 458198946,
+      "debug_name": "TEAM WEAPONS. MACHINEGUN",
+      "name_upper_key": 1936822397,
+      "name_key": 3663193426,
+      "call_type": 0
+    },
+    {
+      "id": 460870572,
+      "debug_name": "VEHICLES. STORM(tank)",
+      "name_upper_key": 1825935594,
+      "name_key": 2149115198,
+      "call_type": 0
+    },
+    {
+      "id": 474724029,
+      "debug_name": "SENTRYS. FLAMETHROWER",
+      "name_upper_key": 2797269927,
+      "name_key": 2006946784,
+      "call_type": 0
+    },
+    {
+      "id": 485866824,
+      "debug_name": "BACKPACK. GUARD DOG (Drone)",
+      "name_upper_key": 1615718868,
+      "name_key": 3939201276,
+      "call_type": 0
+    },
+    {
+      "id": 509712523,
+      "debug_name": "MISSIONS. IMMEDIATE EXTRACTION BEACON",
+      "name_upper_key": 491152859,
+      "name_key": 3901583393,
+      "call_type": 3
+    },
+    {
+      "id": 512147393,
+      "debug_name": "TEAM WEAPONS. BELT FED GRENADE LAUNCHER",
+      "name_upper_key": 3796576739,
+      "name_key": 2606087619,
+      "call_type": 0
+    },
+    {
+      "id": 533318241,
+      "debug_name": "TEAM WEAPONS. HEAVY MACHINEGUN",
+      "name_upper_key": 1688248653,
+      "name_key": 2050119908,
+      "call_type": 0
+    },
+    {
+      "id": 563851843,
+      "debug_name": "VEHICLES. COMBAT WALKER BREACHER",
+      "name_upper_key": 1386708865,
+      "name_key": 2305804327,
+      "call_type": 0
+    },
+    {
+      "id": 599201298,
+      "debug_name": "MISSIONS. RAISE FLAG NO CLEAR AREA",
+      "name_upper_key": 2378431612,
+      "name_key": 2281165846,
+      "call_type": 3
+    },
+    {
+      "id": 623391597,
+      "debug_name": "SENTRYS. GATLING",
+      "name_upper_key": 1140023383,
+      "name_key": 600460786,
+      "call_type": 0
+    },
+    {
+      "id": 644090457,
+      "debug_name": "EMPLACEMENTS. GAS MINE DEPLOYER",
+      "name_upper_key": 3892287098,
+      "name_key": 974448089,
+      "call_type": 0
+    },
+    {
+      "id": 650447969,
+      "debug_name": "MISSIONS. SEISMIC PROBE",
+      "name_upper_key": 324859132,
+      "name_key": 2198451684,
+      "call_type": 3
+    },
+    {
+      "id": 681028671,
+      "debug_name": "MISSIONS. DATA JACK",
+      "name_upper_key": 3731882316,
+      "name_key": 1159822780,
+      "call_type": 3
+    },
+    {
+      "id": 685210453,
+      "debug_name": "MISSIONS. PROSPECTING DRILL",
+      "name_upper_key": 120574149,
+      "name_key": 2631236711,
+      "call_type": 3
+    },
+    {
+      "id": 705279885,
+      "debug_name": "MISSIONS. MOBILE COMMS RELAY",
+      "name_upper_key": 2240506575,
+      "name_key": 3593734022,
+      "call_type": 3
+    },
+    {
+      "id": 716088572,
+      "debug_name": "MISSIONS. EMERGENCY EXTRACTION BEACON",
+      "name_upper_key": 3488153744,
+      "name_key": 822640880,
+      "call_type": 3
+    },
+    {
+      "id": 716273285,
+      "debug_name": "MISSIONS. DRILLING CHARGE",
+      "name_upper_key": 716273285,
+      "name_key": 1476954631,
+      "call_type": 0
+    },
+    {
+      "id": 717707279,
+      "debug_name": "SENTRYS. ROCKET",
+      "name_upper_key": 3633384189,
+      "name_key": 3009882761,
+      "call_type": 0
+    },
+    {
+      "id": 762584056,
+      "debug_name": "EMPLACEMENTS. ANTI TANK EMPLACEMENT",
+      "name_upper_key": 1153871814,
+      "name_key": 1387831894,
+      "call_type": 0
+    },
+    {
+      "id": 774795224,
+      "debug_name": "TEAM WEAPONS. SHARK ENERGY WEAPON",
+      "name_upper_key": 2119966943,
+      "name_key": 2228355350,
+      "call_type": 0
+    },
+    {
+      "id": 854563507,
+      "debug_name": "SENTRYS. AUTOCANNON",
+      "name_upper_key": 3791174808,
+      "name_key": 2460445122,
+      "call_type": 0
+    },
+    {
+      "id": 863373678,
+      "debug_name": "TUTORIAL REINFORCEMENT BEACON",
+      "name_upper_key": 3973386260,
+      "name_key": 3241609005,
+      "call_type": 0
+    },
+    {
+      "id": 867876502,
+      "debug_name": "CONSUMABLES. RESUPPLY",
+      "name_upper_key": 1263463686,
+      "name_key": 1673875834,
+      "call_type": 0
+    },
+    {
+      "id": 871315230,
+      "debug_name": "MISSIONS. EXTRACTION BEACON",
+      "name_upper_key": 3488153744,
+      "name_key": 822640880,
+      "call_type": 3
+    },
+    {
+      "id": 875551083,
+      "debug_name": "TEAM WEAPONS. AUTOMATIC CANNON",
+      "name_upper_key": 3284848821,
+      "name_key": 727076238,
+      "call_type": 0
+    },
+    {
+      "id": 890972990,
+      "debug_name": "TEAM WEAPONS. WASP",
+      "name_upper_key": 1085917305,
+      "name_key": 2816181366,
+      "call_type": 0
+    },
+    {
+      "id": 905054095,
+      "debug_name": "MISSIONS CLAN STATION. Carpet Bombing Run",
+      "name_upper_key": 1265258834,
+      "name_key": 1679090488,
+      "call_type": 0
+    },
+    {
+      "id": 913592461,
+      "debug_name": "MISSIONS. POISON DRILL",
+      "name_upper_key": 1436471677,
+      "name_key": 966239659,
+      "call_type": 3
+    },
+    {
+      "id": 929878807,
+      "debug_name": "EAGLE. (NOT USED) ADDITIONAL STRAFING RUNS",
+      "name_upper_key": 3236255620,
+      "name_key": 2283799497,
+      "call_type": 0
+    },
+    {
+      "id": 951988742,
+      "debug_name": "BACKPACK. Laser Rifle (Drone)",
+      "name_upper_key": 3575690541,
+      "name_key": 2902819083,
+      "call_type": 0
+    },
+    {
+      "id": 960389145,
+      "debug_name": "SENTRIES. LASER CANNON SENTRY",
+      "name_upper_key": 2713617172,
+      "name_key": 2301866234,
+      "call_type": 0
+    },
+    {
+      "id": 970450596,
+      "debug_name": "ORBITAL. LASER",
+      "name_upper_key": 3335448467,
+      "name_key": 181783696,
+      "call_type": 0
+    },
+    {
+      "id": 992079466,
+      "debug_name": "TEAM WEAPONS. ARC THROWER ",
+      "name_upper_key": 448803819,
+      "name_key": 3765721070,
+      "call_type": 0
+    },
+    {
+      "id": 1005987791,
+      "debug_name": "MISSIONS. Scrambler",
+      "name_upper_key": 1857062393,
+      "name_key": 1839035128,
+      "call_type": 0
+    },
+    {
+      "id": 1042447730,
+      "debug_name": "MISSIONS. DARK FLUID BACKPACK",
+      "name_upper_key": 2370772246,
+      "name_key": 2370772246,
+      "call_type": 0
+    },
+    {
+      "id": 1053576110,
+      "debug_name": "BACKPACK. HELLBOMB",
+      "name_upper_key": 861327809,
+      "name_key": 2306470396,
+      "call_type": 0
+    },
+    {
+      "id": 1063322614,
+      "debug_name": "ORBITAL. 120MM HE STRIKE",
+      "name_upper_key": 1336596117,
+      "name_key": 1653299843,
+      "call_type": 0
+    },
+    {
+      "id": 1091253198,
+      "debug_name": "PRESIDENT REWARDS. MEDIC BACKPACK",
+      "name_upper_key": 2927578997,
+      "name_key": 3085348034,
+      "call_type": 0
+    },
+    {
+      "id": 1125307795,
+      "debug_name": "BACKPACK. GUARD DOG FLAMETHROWER (Drone)",
+      "name_upper_key": 3321311549,
+      "name_key": 2184600406,
+      "call_type": 0
+    },
+    {
+      "id": 1232978203,
+      "debug_name": "MISSIONS. REMOTE EXPLOSIVES",
+      "name_upper_key": 249660316,
+      "name_key": 2294760818,
+      "call_type": 0
+    },
+    {
+      "id": 1238358532,
+      "debug_name": "EAGLE. AIRSTRIKE",
+      "name_upper_key": 1481032983,
+      "name_key": 1584817746,
+      "call_type": 0
+    },
+    {
+      "id": 1280711447,
+      "debug_name": "ORBITAL. STATIC FIELD CONDUTORS",
+      "name_upper_key": 2006588957,
+      "name_key": 1447724304,
+      "call_type": 0
+    },
+    {
+      "id": 1290499887,
+      "debug_name": "VEHICLES. COMBAT WALKER OBSIDIAN",
+      "name_upper_key": 1544072428,
+      "name_key": 183779452,
+      "call_type": 0
+    },
+    {
+      "id": 1295431756,
+      "debug_name": "PRESIDENT REWARDS. AMMO CACHE",
+      "name_upper_key": 1263463686,
+      "name_key": 1673875834,
+      "call_type": 0
+    },
+    {
+      "id": 1298599997,
+      "debug_name": "TEAM WEAPONS. RECOILLESS RIFLE",
+      "name_upper_key": 689663659,
+      "name_key": 1764965163,
+      "call_type": 0
+    },
+    {
+      "id": 1337271929,
+      "debug_name": "TEAM WEAPONS. MINI MISSILE SILO",
+      "name_upper_key": 999321846,
+      "name_key": 568371220,
+      "call_type": 0
+    },
+    {
+      "id": 1426041086,
+      "debug_name": "MISSIONS. TCS 03 THUMPER",
+      "name_upper_key": 3177142887,
+      "name_key": 1369983896,
+      "call_type": 0
+    },
+    {
+      "id": 1432571981,
+      "debug_name": "TEAM WEAPONS. FLAMETHROWER",
+      "name_upper_key": 3821189171,
+      "name_key": 1941940848,
+      "call_type": 0
+    },
+    {
+      "id": 1449420233,
+      "debug_name": "SEAF Squad",
+      "name_upper_key": 799126270,
+      "name_key": 2400957530,
+      "call_type": 0
+    },
+    {
+      "id": 1503060624,
+      "debug_name": "MISSIONS. BUG PLUG",
+      "name_upper_key": 1998289914,
+      "name_key": 621653032,
+      "call_type": 3
+    },
+    {
+      "id": 1560416221,
+      "debug_name": "ORBITAL. AIRBURST STRIKE",
+      "name_upper_key": 643358088,
+      "name_key": 3593752689,
+      "call_type": 0
+    },
+    {
+      "id": 1567517764,
+      "debug_name": "PRESIDENT REWARDS. MACHINEGUN",
+      "name_upper_key": 1936822397,
+      "name_key": 3663193426,
+      "call_type": 0
+    },
+    {
+      "id": 1582497738,
+      "debug_name": "SENTRYS. MORTAR",
+      "name_upper_key": 2602942644,
+      "name_key": 286244856,
+      "call_type": 0
+    },
+    {
+      "id": 1606251952,
+      "debug_name": "MISSIONS. CARGO CONTAINER",
+      "name_upper_key": 4270246281,
+      "name_key": 2486779978,
+      "call_type": 3
+    },
+    {
+      "id": 1685231450,
+      "debug_name": "EAGLE. AIRSTRIKE SMOKE",
+      "name_upper_key": 4146936660,
+      "name_key": 2087441269,
+      "call_type": 0
+    },
+    {
+      "id": 1692135420,
+      "debug_name": "BACKPACK. GUARD DOG (Drone) Stun",
+      "name_upper_key": 2744645738,
+      "name_key": 2696171705,
+      "call_type": 0
+    },
+    {
+      "id": 1695682779,
+      "debug_name": "MISSIONS. ORBITAL ILLUMINATION FLARE",
+      "name_upper_key": 1071932953,
+      "name_key": 1365642266,
+      "call_type": 0
+    },
+    {
+      "id": 1753436707,
+      "debug_name": "BACKPACK. JUMPPACK BACKPACK",
+      "name_upper_key": 2204198870,
+      "name_key": 2872120750,
+      "call_type": 0
+    },
+    {
+      "id": 1813634375,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE NAPALM LAUNCHER",
+      "name_upper_key": 4072880577,
+      "name_key": 3123874207,
+      "call_type": 0
+    },
+    {
+      "id": 1824787072,
+      "debug_name": "MISSIONS. SPIRE STERILIZER",
+      "name_upper_key": 2281275566,
+      "name_key": 3964760731,
+      "call_type": 0
+    },
+    {
+      "id": 1907808218,
+      "debug_name": "BACKPACK. SUPPLY BACKPACK",
+      "name_upper_key": 2410151153,
+      "name_key": 2260948921,
+      "call_type": 0
+    },
+    {
+      "id": 1979913877,
+      "debug_name": "EAGLE. 110mm ROCKET PODS",
+      "name_upper_key": 814764658,
+      "name_key": 677845368,
+      "call_type": 0
+    },
+    {
+      "id": 2002187052,
+      "debug_name": "VEHICLES. BASTION(tank)",
+      "name_upper_key": 1916631053,
+      "name_key": 686081100,
+      "call_type": 0
+    },
+    {
+      "id": 2007887745,
+      "debug_name": "TEAM WEAPONS. AIR BURST ROCKET LAUNCHER",
+      "name_upper_key": 2292840975,
+      "name_key": 2297621495,
+      "call_type": 0
+    },
+    {
+      "id": 2040137691,
+      "debug_name": "EAGLE. NAPALM AIRSTRIKE",
+      "name_upper_key": 1829446953,
+      "name_key": 1278805896,
+      "call_type": 0
+    },
+    {
+      "id": 2084654169,
+      "debug_name": "ORBITAL. GATLING BARRAGE",
+      "name_upper_key": 2016029820,
+      "name_key": 1248707192,
+      "call_type": 0
+    },
+    {
+      "id": 2185045091,
+      "debug_name": "BACKPACK. DISPLACEMENT BACKPACK",
+      "name_upper_key": 3940822269,
+      "name_key": 2771179215,
+      "call_type": 0
+    },
+    {
+      "id": 2186648412,
+      "debug_name": "MISSIONS. SHOULDER MOUNTED CAMERA",
+      "name_upper_key": 2071327434,
+      "name_key": 2363192702,
+      "call_type": 3
+    },
+    {
+      "id": 2207713849,
+      "debug_name": "TEAM WEAPONS. SNIPER",
+      "name_upper_key": 3162817893,
+      "name_key": 3313983701,
+      "call_type": 0
+    },
+    {
+      "id": 2229216190,
+      "debug_name": "CONSUMABLES. HEALTH PACK RACK",
+      "name_upper_key": 2273284544,
+      "name_key": 2673704303,
+      "call_type": 0
+    },
+    {
+      "id": 2230051894,
+      "debug_name": "[TUTORIAL] EXTRACTION",
+      "name_upper_key": 3109644149,
+      "name_key": 1171875332,
+      "call_type": 2
+    },
+    {
+      "id": 2232989803,
+      "debug_name": "TEAM WEAPONS. COMMANDO",
+      "name_upper_key": 103056538,
+      "name_key": 2008789512,
+      "call_type": 0
+    },
+    {
+      "id": 2239174926,
+      "debug_name": "EMPLACEMENTS. ANTI-TANK MINE DEPLOYER",
+      "name_upper_key": 721197452,
+      "name_key": 1747218844,
+      "call_type": 0
+    },
+    {
+      "id": 2265180087,
+      "debug_name": "TEAM WEAPONS. MELEE FLAG",
+      "name_upper_key": 3861046095,
+      "name_key": 1764323819,
+      "call_type": 0
+    },
+    {
+      "id": 2266266587,
+      "debug_name": "MISSIONS. REINFORCEMENT BEACON",
+      "name_upper_key": 3973386260,
+      "name_key": 3241609005,
+      "call_type": 0
+    },
+    {
+      "id": 2271469939,
+      "debug_name": "TEAM WEAPONS. HEAVY FLAMETHROWER",
+      "name_upper_key": 3705134773,
+      "name_key": 563225959,
+      "call_type": 0
+    },
+    {
+      "id": 2281932031,
+      "debug_name": "EMPLACEMENTS. SHIELD GENERATOR RELAY",
+      "name_upper_key": 1557897402,
+      "name_key": 4198351113,
+      "call_type": 0
+    },
+    {
+      "id": 2319566343,
+      "debug_name": "MISSIONS. Carry Data",
+      "name_upper_key": 1683937559,
+      "name_key": 3463544321,
+      "call_type": 0
+    },
+    {
+      "id": 2402590523,
+      "debug_name": "EMPLACEMENTS. TESLA TOWER",
+      "name_upper_key": 2489495420,
+      "name_key": 4049901344,
+      "call_type": 0
+    },
+    {
+      "id": 2480128092,
+      "debug_name": "EMPLACEMENTS. DEFENSE WALL GRENADE LAUNCHER",
+      "name_upper_key": 1044194585,
+      "name_key": 3625143144,
+      "call_type": 0
+    },
+    {
+      "id": 2587901119,
+      "debug_name": "PRESIDENT REWARDS. COMBAT WALKER",
+      "name_upper_key": 3200900560,
+      "name_key": 734964784,
+      "call_type": 0
+    },
+    {
+      "id": 2625074523,
+      "debug_name": "TEAM WEAPONS. LASER PULSE CANNON",
+      "name_upper_key": 3774930640,
+      "name_key": 2557128977,
+      "call_type": 0
+    },
+    {
+      "id": 2636699686,
+      "debug_name": "VEHICLES. FAST RECON VEHICLE (Resupply Auto Turret)",
+      "name_upper_key": 3947494337,
+      "name_key": 3807063955,
+      "call_type": 0
+    },
+    {
+      "id": 2663642538,
+      "debug_name": "MISSIONS CLAN STATION. Nuke",
+      "name_upper_key": 3599477113,
+      "name_key": 3894610137,
+      "call_type": 0
+    },
+    {
+      "id": 2670122272,
+      "debug_name": "MISSIONS. CARGO CONTAINER",
+      "name_upper_key": 4270246281,
+      "name_key": 2486779978,
+      "call_type": 3
+    },
+    {
+      "id": 2720892179,
+      "debug_name": "MISSIONS. BUG THUMPER",
+      "name_upper_key": 73853870,
+      "name_key": 1923094316,
+      "call_type": 3
+    },
+    {
+      "id": 2742141597,
+      "debug_name": "EMPLACEMENTS. INCENDIARY MINE DEPLOYER",
+      "name_upper_key": 2772178636,
+      "name_key": 17580256,
+      "call_type": 0
+    },
+    {
+      "id": 2744472229,
+      "debug_name": "ORBITAL. RAILCANNON",
+      "name_upper_key": 826884584,
+      "name_key": 3194889632,
+      "call_type": 0
+    },
+    {
+      "id": 2808191861,
+      "debug_name": "EAGLE. AIR SUPPORT",
+      "name_upper_key": 3407205415,
+      "name_key": 862552343,
+      "call_type": 0
+    },
+    {
+      "id": 2822568285,
+      "debug_name": "TEAM WEAPONS. LASER CANNON",
+      "name_upper_key": 4285698599,
+      "name_key": 2089910714,
+      "call_type": 0
+    },
+    {
+      "id": 2846457047,
+      "debug_name": "VEHICLES. FAST RECON VEHICLE (Ramming Flamethrower)",
+      "name_upper_key": 799811187,
+      "name_key": 4091309553,
+      "call_type": 0
+    },
+    {
+      "id": 2902516083,
+      "debug_name": "ORBITAL. NAPALM BARRAGE",
+      "name_upper_key": 3103421391,
+      "name_key": 549159351,
+      "call_type": 0
+    },
+    {
+      "id": 2919842659,
+      "debug_name": "EMPLACEMENTS. HEAVY MACHINEGUN EMPLACEMENT",
+      "name_upper_key": 1366895198,
+      "name_key": 90063288,
+      "call_type": 0
+    },
+    {
+      "id": 2934950455,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE MASSIVE ROCKET LAUNCHER",
+      "name_upper_key": 2486763325,
+      "name_key": 3257725864,
+      "call_type": 0
+    },
+    {
+      "id": 2985177386,
+      "debug_name": "MISSIONS. SEAF GUN",
+      "name_upper_key": 1044595250,
+      "name_key": 472605007,
+      "call_type": 0
+    },
+    {
+      "id": 3001049275,
+      "debug_name": "EAGLE. (NOT USED) AIR-TO-AIR MISSLES",
+      "name_upper_key": 618026027,
+      "name_key": 391548033,
+      "call_type": 0
+    },
+    {
+      "id": 3078242205,
+      "debug_name": "TEAM WEAPONS. RAILGUN ",
+      "name_upper_key": 3276705068,
+      "name_key": 3834075640,
+      "call_type": 0
+    },
+    {
+      "id": 3085503322,
+      "debug_name": "SENTRYS. MORTAR STATICFIELD",
+      "name_upper_key": 3600967890,
+      "name_key": 3735593908,
+      "call_type": 0
+    },
+    {
+      "id": 3086305673,
+      "debug_name": "VEHICLES. COMBAT WALKER LUMBERER",
+      "name_upper_key": 831139041,
+      "name_key": 3662990498,
+      "call_type": 0
+    },
+    {
+      "id": 3108516875,
+      "debug_name": "ORBITAL. 380MM HE BARRAGE",
+      "name_upper_key": 4043773877,
+      "name_key": 2843766581,
+      "call_type": 0
+    },
+    {
+      "id": 3183339606,
+      "debug_name": "SENTRYS. MORTAR GAS",
+      "name_upper_key": 2478785269,
+      "name_key": 1683917631,
+      "call_type": 0
+    },
+    {
+      "id": 3193297673,
+      "debug_name": "ORBITAL. GAS STRIKE",
+      "name_upper_key": 887029485,
+      "name_key": 179374902,
+      "call_type": 0
+    },
+    {
+      "id": 3193487269,
+      "debug_name": "MISSIONS. SOS Beacon",
+      "name_upper_key": 2283448041,
+      "name_key": 1477555005,
+      "call_type": 0
+    },
+    {
+      "id": 3275255096,
+      "debug_name": "PRESIDENT REWARDS. ROCKET SENTRY",
+      "name_upper_key": 3633384189,
+      "name_key": 3009882761,
+      "call_type": 0
+    },
+    {
+      "id": 3279813377,
+      "debug_name": "ORBITAL. WALKING BARRAGE",
+      "name_upper_key": 316604262,
+      "name_key": 831074521,
+      "call_type": 0
+    },
+    {
+      "id": 3288352984,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE MACHINEGUN",
+      "name_upper_key": 987248759,
+      "name_key": 4291272963,
+      "call_type": 0
+    },
+    {
+      "id": 3300666223,
+      "debug_name": "MISSIONS. Upload Discovery",
+      "name_upper_key": 1418558378,
+      "name_key": 2087215146,
+      "call_type": 3
+    },
+    {
+      "id": 3316399568,
+      "debug_name": "PRESIDENT REWARDS. JUMPPACK BACKPACK",
+      "name_upper_key": 2204198870,
+      "name_key": 2872120750,
+      "call_type": 0
+    },
+    {
+      "id": 3330450692,
+      "debug_name": "TEAM WEAPONS. SLEDGE HAMMER",
+      "name_upper_key": 3139950515,
+      "name_key": 4009668453,
+      "call_type": 0
+    },
+    {
+      "id": 3343676429,
+      "debug_name": "TEAM WEAPONS. GRENADE LAUNCHER",
+      "name_upper_key": 1035420766,
+      "name_key": 449613082,
+      "call_type": 0
+    },
+    {
+      "id": 3353508219,
+      "debug_name": "BACKPACK. BALLISTIC SHIELD BACKPACK",
+      "name_upper_key": 430638869,
+      "name_key": 3265833747,
+      "call_type": 0
+    },
+    {
+      "id": 3413606544,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE ANTI-TANK",
+      "name_upper_key": 2093520486,
+      "name_key": 1885509695,
+      "call_type": 0
+    },
+    {
+      "id": 3455841218,
+      "debug_name": "TEAM WEAPONS. MINIGUN",
+      "name_upper_key": 369958519,
+      "name_key": 1999223573,
+      "call_type": 0
+    },
+    {
+      "id": 3523620028,
+      "debug_name": "ORBITAL. PRECISION STRIKE",
+      "name_upper_key": 4018205223,
+      "name_key": 188575064,
+      "call_type": 0
+    },
+    {
+      "id": 3572024208,
+      "debug_name": "TEAM WEAPONS. CHAINSAW GREATSWORD",
+      "name_upper_key": 4000631345,
+      "name_key": 3689697660,
+      "call_type": 0
+    },
+    {
+      "id": 3656370131,
+      "debug_name": "EAGLE. CLUSTERBOMBS",
+      "name_upper_key": 662406178,
+      "name_key": 3901855692,
+      "call_type": 0
+    },
+    {
+      "id": 3702563421,
+      "debug_name": "TANK. TANK RELOAD AT",
+      "name_upper_key": 386985065,
+      "name_key": 3778618418,
+      "call_type": 3
+    },
+    {
+      "id": 3713568312,
+      "debug_name": "ORBITAL. SMOKE STRIKE",
+      "name_upper_key": 704804706,
+      "name_key": 2769005858,
+      "call_type": 0
+    },
+    {
+      "id": 3722314010,
+      "debug_name": "MISSIONS. RAISE FLAG",
+      "name_upper_key": 2378431612,
+      "name_key": 2281165846,
+      "call_type": 3
+    },
+    {
+      "id": 3748434442,
+      "debug_name": "TEAM WEAPONS. C4",
+      "name_upper_key": 4226754563,
+      "name_key": 2772570910,
+      "call_type": 0
+    },
+    {
+      "id": 3753216434,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE ANTI-TANK (Booster)",
+      "name_upper_key": 2093520486,
+      "name_key": 1885509695,
+      "call_type": 0
+    },
+    {
+      "id": 3796132384,
+      "debug_name": "ORBITAL. WALKING BARRAGE SMOKE",
+      "name_upper_key": 3460715746,
+      "name_key": 1772852609,
+      "call_type": 0
+    },
+    {
+      "id": 3837064536,
+      "debug_name": "EAGLE. REARM",
+      "name_upper_key": 2306949512,
+      "name_key": 2109771423,
+      "call_type": 3
+    },
+    {
+      "id": 3843705076,
+      "debug_name": "BACKPACK.  GENERATOR PACK",
+      "name_upper_key": 2859707695,
+      "name_key": 1111626971,
+      "call_type": 0
+    },
+    {
+      "id": 3868299561,
+      "debug_name": "MISSIONS. JAMMED PINATA",
+      "name_upper_key": 4066337545,
+      "name_key": 2649749292,
+      "call_type": 0
+    },
+    {
+      "id": 3923676543,
+      "debug_name": "TEAM WEAPONS. SPEAR",
+      "name_upper_key": 4200412969,
+      "name_key": 2193864165,
+      "call_type": 0
+    },
+    {
+      "id": 3928947721,
+      "debug_name": "MISSIONS. Cyborg Carry Data",
+      "name_upper_key": 1683937559,
+      "name_key": 3463544321,
+      "call_type": 0
+    },
+    {
+      "id": 3935317067,
+      "debug_name": "VEHICLES. FAST RECON VEHICLE (FRV)",
+      "name_upper_key": 2041442475,
+      "name_key": 196776936,
+      "call_type": 0
+    },
+    {
+      "id": 3989310204,
+      "debug_name": "MISSIONS. HELLBOMB",
+      "name_upper_key": 3989310204,
+      "name_key": 124960475,
+      "call_type": 0
+    },
+    {
+      "id": 4119049995,
+      "debug_name": "EAGLE. 500KG BOMB",
+      "name_upper_key": 1057738842,
+      "name_key": 2994328991,
+      "call_type": 0
+    },
+    {
+      "id": 4152191751,
+      "debug_name": "TEAM WEAPONS. CHEM GUN",
+      "name_upper_key": 926933616,
+      "name_key": 1223276667,
+      "call_type": 0
+    },
+    {
+      "id": 4177070437,
+      "debug_name": "MISSIONS. CALL IN DESTROYER",
+      "name_upper_key": 3305068834,
+      "name_key": 2708159994,
+      "call_type": 0
+    },
+    {
+      "id": 4196275240,
+      "debug_name": "EAGLE. Gas AIRSTRIKE",
+      "name_upper_key": 1847228075,
+      "name_key": 513886541,
+      "call_type": 0
+    },
+    {
+      "id": 4239785897,
+      "debug_name": "SENTRYS. MACHINEGUN",
+      "name_upper_key": 867025332,
+      "name_key": 4028883813,
+      "call_type": 0
+    },
+    {
+      "id": 4261593827,
+      "debug_name": "TEAM WEAPONS. PLASMA BLASTER",
+      "name_upper_key": 3391732123,
+      "name_key": 2108743119,
+      "call_type": 0
+    },
+    {
+      "id": 4264661046,
+      "debug_name": "TANK. TANK RELOAD CANISTER",
+      "name_upper_key": 861212028,
+      "name_key": 527728115,
+      "call_type": 3
+    }
+  ]
+}

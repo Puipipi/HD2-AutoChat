@@ -95,3 +95,18 @@ class AlertPanelTests(unittest.TestCase):
             a.record(1000);assert(a.push_ping(event,1001))
             assert(a.state.pings[1].text=='重新补给投下来了' and a.state.pings[1].cooldown==0)
         ''')
+
+    def test_catalog_display_name_reaches_ping_template_without_changing_identity(self):
+        lua,h,m=self.fixture()
+        lua.execute('''local c=m.debug_stratagem_catalog()
+            c.lookup=function(id) if id==4119049995 then return {id=id,rule_id=id,group='red',display_name='五百千克炸弹'} end end
+            local event={key='mapped',category='stratagem',action='summon',stratagem_id=4119049995,
+                target='EAGLE.500KG'}
+            m.debug_enrich_stratagem_event(event,1000)
+            assert(event.stratagem_id==4119049995 and event.display_name=='五百千克炸弹','display enrichment missing')
+            local a=m.debug_automation();local ok,why=a.set('ping',true);assert(ok,why)
+            ok,why=a.set('ping_sender_prefix',false);assert(ok,why)
+            ok,why=a.set('summon_message','{目标}');assert(ok,why)
+            ok,why=a.push_ping(event,1000);assert(ok,why or a.state.status)
+            assert(a.state.pings[1].text=='五百千克炸弹',a.state.pings[1].text)
+        ''')
