@@ -67,6 +67,35 @@ class AutomationTests(unittest.TestCase):
             assert(c.profile('host').welcome)
         ''')
 
+    def test_settings_returns_a_detached_snapshot_of_the_confirmed_active_profile(self):
+        self.run_lua('''
+            a.set('cooldown',17,'host')
+            a.set_rule('enemy','large_enemy','enabled',false,'host')
+            a.set_rule('enemy','large_enemy','enabled',true,'client')
+            local host=a.settings()
+            assert(host.role=='host' and host.cooldown==17)
+            assert(host.rules.enemy_large_enemy.enabled==false)
+            host.cooldown=999;host.rules.enemy_large_enemy.enabled=true
+            assert(a.profile('host').cooldown==17)
+            assert(a.rule('enemy','large_enemy','host').enabled==false)
+            h.host='76561198000000002';h.peers={h.mine,h.host}
+            local client=a.settings()
+            assert(client.role=='client' and client.output=='local')
+            client.rules.enemy_large_enemy.enabled=true
+            assert(a.rule('enemy','large_enemy','client').enabled==true)
+            h.host=nil
+            local unknown,why=a.settings()
+            assert(unknown==nil and why=='role unavailable')
+        ''')
+
+    def test_send_output_override_uses_existing_local_and_public_senders(self):
+        self.run_lua('''
+            assert(a.send('private',nil,'local'))
+            assert(#h.sent==0 and #h.local_sent==1 and h.local_sent[1]=='private')
+            assert(a.send('public',nil,'squad'))
+            assert(h.sent[#h.sent]=='public' and #h.local_sent==1)
+        ''')
+
     def test_legacy_host_scope_is_ignored_for_a_client_profile(self):
         self.run_lua('''
             h.host='76561198000000002';h.peers={h.mine,h.host}
@@ -253,6 +282,91 @@ class AutomationTests(unittest.TestCase):
             local ok, why = a.check(0, 1)
             assert(ok == true)
             assert(a.push_ping({key='unknown-role',category='stratagem'},0)==false)
+        """)
+
+    def test_transient_ping_rejections_are_retryable(self):
+        self.run_lua("""
+            h.sr = nil
+            local ok, disposition = a.push_ping({key='role-retry',category='stratagem'},100)
+            assert(ok == false and disposition == 'retry', 'unknown role must not consume a live marker')
+        """)
+
+    def test_missing_creator_and_full_ping_queues_are_retryable_without_eviction(self):
+        self.run_lua("""
+            a.set('ping',true)
+            local missing, missing_disposition = a.push_ping({key='roster-retry',category='stratagem',
+                creator_id='76561198000000002'},101)
+            assert(missing == false and missing_disposition == 'retry', 'temporarily absent creator must be retryable')
+            a.set_rule('stratagem',4119049994,'cooldown',5)
+            a.set_rule('stratagem',4119049995,'cooldown',0)
+            for i=1,16 do assert(a.push_ping({key='normal-'..i,category='stratagem',
+                stratagem_id=4119049994},200+i)) end
+            local full_normal, normal_disposition = a.push_ping({key='normal-retry',category='stratagem',
+                stratagem_id=4119049994},220)
+            assert(full_normal == false and normal_disposition == 'retry', 'full normal quota must be retryable')
+        """)
+
+    def test_urgent_reserve_does_not_evict_accepted_normal_pings(self):
+        self.run_lua("""
+            a.set('ping',true)
+            a.set_rule('stratagem',4119049994,'cooldown',5)
+            a.set_rule('stratagem',4119049995,'cooldown',0)
+            for i=1,16 do assert(a.push_ping({key='normal-'..i,category='stratagem',
+                stratagem_id=4119049994},200+i)) end
+            assert(a.push_ping({key='urgent-1',category='stratagem',stratagem_id=4119049995,
+                target='urgent'},221), 'urgent reserve must accept zero-cooldown event')
+            for i=2,16 do assert(a.push_ping({key='urgent-'..i,category='stratagem',
+                stratagem_id=4119049995},220+i)) end
+            assert(#a.state.pings == 32, 'queue should preserve 16 normal and 16 urgent accepted events')
+            for i=1,16 do
+                local found=false
+                for _,pending in ipairs(a.state.pings) do if pending.key=='normal-'..i then found=true end end
+                assert(found, 'accepted normal message '..i..' was evicted')
+            end
+        """)
+
+    def test_full_ping_queue_returns_retry_without_dropping_accepted_events(self):
+        self.run_lua("""
+            a.set('ping',true)
+            a.set_rule('stratagem',4119049994,'cooldown',5)
+            a.set_rule('stratagem',4119049995,'cooldown',0)
+            for i=1,16 do assert(a.push_ping({key='normal-'..i,category='stratagem',
+                stratagem_id=4119049994},200+i)) end
+            for i=1,16 do assert(a.push_ping({key='urgent-'..i,category='stratagem',
+                stratagem_id=4119049995},220+i)) end
+            local full, full_disposition = a.push_ping({key='full-retry',category='stratagem',
+                stratagem_id=4119049995},300)
+            assert(full == false and full_disposition == 'retry', 'full queue must leave live marker retryable')
+            assert(#a.state.pings == 32, 'queue must be bounded at 32 and preserve all accepted messages')
+        """)
+
+    def test_zero_cooldown_ping_is_sent_before_older_normal_queue(self):
+        self.run_lua("""
+            a.set('ping',true);a.set('ping_sender_prefix',false)
+            a.set('cooldown',0)
+            a.set_rule('stratagem',4119049994,'cooldown',5)
+            a.set_rule('stratagem',4119049995,'cooldown',0)
+            assert(a.push_ping({key='normal-first',category='stratagem',stratagem_id=4119049994,
+                target='normal'},100))
+            assert(a.push_ping({key='urgent-next',category='stratagem',stratagem_id=4119049995,
+                target='urgent'},101))
+            assert(a.poll(102))
+            assert(#h.sent==1 and h.sent[1]:find('urgent',1,true), 'zero-cooldown event should keep priority')
+            assert(#a.state.pings==1 and a.state.pings[1].key=='normal-first', 'normal accepted item must remain queued')
+        """)
+
+    def test_permanent_ping_rejections_are_not_retryable(self):
+        self.run_lua("""
+            a.set('ping',false)
+            local disabled, disposition = a.push_ping({key='disabled',category='stratagem'},100)
+            assert(disabled == false and disposition == nil, 'user-disabled events must not be retried')
+            a.set('ping',true)
+            local invalid, invalid_disposition = a.push_ping({category='stratagem'},101)
+            assert(invalid == false and invalid_disposition == nil, 'invalid events are permanent rejects')
+            local event={key='duplicate',category='stratagem'}
+            assert(a.push_ping(event,102))
+            local duplicate, duplicate_disposition = a.push_ping(event,103)
+            assert(duplicate == false and duplicate_disposition == nil, 'duplicates are permanent rejects')
         """)
 
     def test_buildings_and_stratagems_replace_pickups_and_migrate_existing_preferences(self):

@@ -65,6 +65,100 @@ class StratagemEventsTests(unittest.TestCase):
                          ('超级地球旗帜', 'summon', '0110000100000011'))
         self.poll(2); self.assertEqual(len(self.f.events), 1)
 
+    def test_transient_emit_rejection_retries_same_task_event_once(self):
+        attempts=[]
+        localized=[]
+        def emit(event, now):
+            attempts.append(dict(event))
+            return (False, 'retry') if len(attempts)==1 else (True, None)
+        constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+        self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
+            'session':lambda:self.f.session,
+            'localize':lambda key:localized.append(key) or self.f.localized.get(int(key)),
+            'emit':emit}))
+        self.poll(0);self.success();self.poll(1)
+        self.assertEqual(len(attempts),1)
+        self.f.poll(2)
+        self.assertEqual(self.reader.poll(2)[0],1)
+        self.assertEqual(len(attempts),2)
+        self.assertEqual(attempts[0]['key'],attempts[1]['key'])
+        self.assertEqual(attempts[0]['target'],attempts[1]['target'])
+        self.assertEqual(localized,[2281165846], 'a cached retry must not repeat native localization')
+        self.poll(3)
+        self.assertEqual(len(attempts),2, 'accepted retry must be consumed exactly once')
+
+    def test_pending_retry_is_discarded_when_activation_changes(self):
+        attempts=[]
+        constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+        def emit(event, now):
+            attempts.append(event['key'])
+            return (False,'retry') if len(attempts)==1 else (True,None)
+        self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
+            'session':lambda:self.f.session,'localize':lambda key:self.f.localized.get(int(key)),
+            'emit':emit}))
+        self.poll(0);self.success();self.poll(1)
+        self.f.put(RECORDS+0x1c0+0x20,'<Q',1_009_718_900)
+        self.poll(2)
+        self.assertEqual(len(attempts),2)
+        self.assertNotEqual(attempts[0],attempts[1], 'a renewed activation is a new event, not a stale retry')
+        self.poll(3)
+        self.assertEqual(len(attempts),2)
+
+    def test_pending_retry_is_cleared_when_session_changes(self):
+        attempts=[]
+        constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+        self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
+            'session':lambda:self.f.session,'localize':lambda key:self.f.localized.get(int(key)),
+            'emit':lambda event,now: attempts.append(event['key']) or (False,'retry')}))
+        self.poll(0);self.success();self.poll(1)
+        self.f.session='session-b';self.poll(2)
+        self.assertEqual(len(attempts),1, 'session baseline must not replay pending event')
+        self.success();self.poll(3)
+        self.assertEqual(len(attempts),1, 'new session baseline should wait for a new activation')
+
+    def test_pending_retry_is_cleared_when_success_record_disappears(self):
+        attempts=[]
+        constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+        self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
+            'session':lambda:self.f.session,'localize':lambda key:self.f.localized.get(int(key)),
+            'emit':lambda event,now: attempts.append(event['key']) or (False,'retry')}))
+        self.poll(0);self.success();self.poll(1)
+        self.f.put(RECORDS+0x7c0,'<I',0);self.poll(2)
+        self.assertEqual(len(attempts),1, 'vanished success record must drop pending retry')
+        self.f.put(RECORDS+0x7c0,'<I',1);self.poll(3)
+        self.assertEqual(len(attempts),1, 'reappearing old activation must not replay')
+
+    def test_pending_retry_requires_explicit_false_and_retry_disposition(self):
+        attempts=[]
+        results=[(False,'retry'),(None,'retry')]
+        constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+        def emit(event, now):
+            attempts.append(event['key'])
+            return results.pop(0)
+        self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
+            'session':lambda:self.f.session,'localize':lambda key:self.f.localized.get(int(key)),
+            'emit':emit}))
+        self.poll(0);self.success();self.poll(1);self.poll(2);self.poll(3)
+        self.assertEqual(len(attempts),2,'nil acceptance is permanent even if the disposition says retry')
+
+    def test_permanent_refusal_exception_and_expired_retry_are_consumed(self):
+        for result in ('permanent','exception','expired'):
+            with self.subTest(result=result):
+                self.setUp();attempts=[]
+                constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+                def emit(event, now):
+                    attempts.append(event['key'])
+                    if result=='exception': raise RuntimeError('fixture failure')
+                    return (False,'rule-disabled') if result=='permanent' else (False,'retry')
+                self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
+                    'session':lambda:self.f.session,'localize':lambda key:self.f.localized.get(int(key)),
+                    'emit':emit}))
+                self.poll(0);self.success();self.poll(1)
+                self.poll(17 if result=='expired' else 2)
+                self.poll(18 if result=='expired' else 3)
+                self.assertEqual(len(attempts),1 if result!='expired' else 1,
+                    'permanent errors and expired retries must not be emitted again')
+
     def test_payloadless_upload_success_emits_execution_not_a_summon(self):
         self.entry(0, 0, 128, 3300666223, 2087215146); self.poll(0)
         self.success(128, 3300666223, 2087215146); self.poll(1)

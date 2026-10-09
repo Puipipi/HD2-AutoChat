@@ -83,8 +83,8 @@ def save_record(record):
 
 
 def newest_zip():
-    out = os.path.join(HERE, "dist")
-    zips = sorted(glob.glob(os.path.join(out, "AutoChat-*.zip")))
+    out = os.path.join(REPO, "dist")
+    zips = sorted(glob.glob(os.path.join(out, "AutoChat-[0-9]*.zip")))
     if not zips:
         raise SystemExit("no built zip in %s; run build_mod.py first" % out)
     return zips[-1]

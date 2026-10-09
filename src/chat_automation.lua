@@ -443,11 +443,20 @@ local function build_chat_automation(env)
         end
         return role
     end
-    function api.send(text, expected_role)
+    function api.settings()
+        local role = api.sync()
+        if not role then return nil, 'role unavailable' end
+        local snapshot = copy(profiles[role])
+        snapshot.role = role
+        return snapshot
+    end
+    function api.send(text, expected_role, output_override)
         local role = api.sync()
         if not role then return false, '等待：主机身份尚未确认' end
         if expected_role and role ~= expected_role then return false, '身份已变化，取消旧预设消息' end
-        if options.output == 'local' then
+        local output = output_override or options.output
+        if output ~= 'local' and output ~= 'squad' then return false, '输出方式无效' end
+        if output == 'local' then
             local ok, why = attempt(env.send_local, text)
             return ok == true, why or '本地显示入口不可用'
         end
@@ -535,6 +544,11 @@ local function build_chat_automation(env)
         return string.format('(%.0f, %.0f, %.0f)', p.x, p.y, p.z)
     end
     function api.has_peer(peer) return creator_present(peer,api.snapshot()) end
+    function api.canonical_peer(peer)
+        local snapshot = api.snapshot()
+        if not snapshot or peer ~= nil and not creator_present(peer, snapshot) then return nil end
+        return session_peer_hex(peer or snapshot.mine)
+    end
 
     function api.format(template, peer, extra, anonymous)
         if type(template) ~= 'string' then return '' end
@@ -748,7 +762,7 @@ local function build_chat_automation(env)
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
-        if not api.sync() then state.status='等待：主机身份尚未确认';event_diagnostic(event,nil,'role-unknown');return false end
+        if not api.sync() then state.status='等待：主机身份尚未确认';event_diagnostic(event,nil,'role-unknown');return false,'retry' end
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then event_diagnostic(event,nil,'invalid-event');return false end
@@ -760,13 +774,16 @@ local function build_chat_automation(env)
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
         if state.ping_seen[event.key] then event_diagnostic(event,rule_id,'duplicate-event');return false end
         local snapshot = api.snapshot()
-        if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false end
-        if #state.pings>=16 then
-            if rule.cooldown~=0 then event_diagnostic(event,rule_id,'queue-full');return false end
-            local evict
-            for i,pending in ipairs(state.pings) do if pending.cooldown~=0 then evict=i;break end end
-            if not evict then event_diagnostic(event,rule_id,'queue-full-no-eviction');return false end
-            table.remove(state.pings,evict)
+        if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false,'retry' end
+        -- Keep the historical 16 normal slots and reserve 16 additional slots
+        -- for urgent zero-cooldown events. Never evict a message already accepted.
+        if #state.pings>=32 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
+        if rule.cooldown~=0 then
+            local normal_count=0
+            for _,pending in ipairs(state.pings) do
+                if pending.cooldown~=0 then normal_count=normal_count+1 end
+            end
+            if normal_count>=16 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
         end
         local label = api.category_label(event.category)
         local raw_target=type(event.display_name)=='string' and event.display_name or event.target

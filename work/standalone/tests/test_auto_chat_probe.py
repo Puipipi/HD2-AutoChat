@@ -18,8 +18,10 @@ Run:  python -B tests/test_auto_chat_probe.py
 """
 import io
 import os
+from pathlib import Path
 import re
 import sys
+import tempfile
 import unittest
 
 try:
@@ -1623,6 +1625,100 @@ class AutoChatProbeTest(unittest.TestCase):
                              "a successful draw must record its signature")
         self.assertIsNotNone(panel["ui_s"],
                              "and must have measured a layout scale")
+
+    def test_panel_signature_cache_reuses_values_and_preserves_formatted_signature(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 2)
+        panel = mod.debug_panel()
+
+        first = mod.debug_panel_signature()
+        cache = panel["_signature_cache"]
+        frame = cache["frames"][1]
+        epoch = frame["epoch"]
+        self.assertEqual(first, mod.debug_panel_signature())
+        self.assertEqual(epoch, frame["epoch"], "unchanged raw fields must reuse the assembled signature")
+
+        scale = panel["ui_s"]
+        scale_text = lua.eval("string.format('%.3f', ...)", scale)
+        panel["ui_s"] = scale + 0.0001
+        self.assertEqual(scale_text, lua.eval("string.format('%.3f', ...)", panel["ui_s"]))
+        self.assertEqual(first, mod.debug_panel_signature())
+        self.assertEqual(epoch, frame["epoch"], "scale movement below display precision must not redraw")
+
+        cfg = mod.debug_cfg()
+        cfg["elapsed"] = 0.1
+        first = mod.debug_panel_signature()
+        epoch = frame["epoch"]
+        cfg["elapsed"] = 0.2
+        self.assertEqual(first, mod.debug_panel_signature())
+        self.assertEqual(epoch, frame["epoch"], "elapsed changes that round to the same integer must not redraw")
+
+        panel["hint"] = False
+        false_signature = mod.debug_panel_signature()
+        self.assertNotEqual(first, false_signature, "false and nil are distinct formatted values")
+        false_epoch = frame["epoch"]
+        panel["hint"] = None
+        self.assertNotEqual(false_signature, mod.debug_panel_signature())
+        self.assertGreater(frame["epoch"], false_epoch, "nil and false transitions must invalidate the cache")
+
+    def test_cached_signature_matches_all_74_fields_of_the_previous_implementation(self):
+        """The optimization must preserve the complete prior signature contract."""
+        fixture = Path(__file__).with_name("fixtures") / "panel_signature_v083.lua"
+        legacy_function = fixture.read_text(encoding="utf-8").rstrip()
+        current_source = Path(SOURCE).read_text(encoding="utf-8")
+        begin = current_source.index("PANEL._signature_cache = PANEL._signature_cache or")
+        end = current_source.index("\nend\n\n-- The plugin selected in the tab strip", begin) + len("\nend")
+        legacy_source = current_source[:begin] + legacy_function + current_source[end:]
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".lua", delete=False) as handle:
+            handle.write(legacy_source)
+            legacy_path = handle.name
+        try:
+            legacy_lua, legacy_h = fresh_image()
+            current_lua, current_h = fresh_image()
+            legacy_mod = legacy_h.load(legacy_path)
+            current_mod = current_h.load(SOURCE)
+            self.assertEqual(74, len(legacy_mod.debug_panel_signature().split("|")),
+                             "the comparison must exercise all original signature fields")
+
+            def assert_equivalent():
+                self.assertEqual(legacy_mod.debug_panel_signature(), current_mod.debug_panel_signature())
+
+            assert_equivalent()
+            for legacy_panel, current_panel in ((legacy_mod.debug_panel(), current_mod.debug_panel()),):
+                legacy_panel["hint"], current_panel["hint"] = False, False
+                assert_equivalent()
+                legacy_panel["hint"], current_panel["hint"] = None, None
+                legacy_panel["ui_s"], current_panel["ui_s"] = 1.0001, 1.0001
+                assert_equivalent()
+                legacy_cfg, current_cfg = legacy_mod.debug_cfg(), current_mod.debug_cfg()
+                legacy_cfg["elapsed"], current_cfg["elapsed"] = 0.1, 0.1
+                assert_equivalent()
+                legacy_cfg["message"], current_cfg["message"] = "contract-change", "contract-change"
+                assert_equivalent()
+        finally:
+            Path(legacy_path).unlink(missing_ok=True)
+
+    def test_panel_signature_plugin_change_and_nil_panel_signature_force_redraw(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        self._run(lua, 700)
+        mod.debug_set_open(True)
+        self._run(lua, 2)
+        panel = mod.debug_panel()
+        before = mod.debug_panel_signature()
+        lua.globals().test_api = mod.api
+        lua.execute("test_api.register{id='sigprobe',name='Signature probe',draw=function() end}")
+        self.assertNotEqual(before, mod.debug_panel_signature(), "plugin registry changes belong in the signature")
+
+        self._run(lua, 2)
+        drawn = h.text_drawn or 0
+        panel["sig"] = None
+        lua.eval("update()")
+        self.assertGreater(h.text_drawn or 0, drawn, "nil PANEL.sig must keep the established forced rebuild path")
 
     def test_the_font_is_actually_attempted_on_the_first_draw(self):
         """The real-text path must be REACHED, not merely present.

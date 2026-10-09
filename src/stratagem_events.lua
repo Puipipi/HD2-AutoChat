@@ -38,10 +38,10 @@ local function build_stratagem_events(env)
         {0x135c69c,string.char(0x48,0x89,0x8c,0xfd,0xd0,1,0,0)},
         {0x135c6f9,string.char(0x48,0x89,0x8c,0xfd,0xe0,1,0,0)},
     }
-    local state = {status='等待任务战备数据', previous={}, seen={}}
+    local state = {status='等待任务战备数据', previous={}, seen={}, pending={}}
     local api = {state=state}
     function api.reset()
-        state.scene,state.clock,state.previous,state.seen,state.last_poll=nil,nil,{},{},nil
+        state.scene,state.clock,state.previous,state.seen,state.pending,state.last_poll=nil,nil,{},{},{},nil
         state.status='等待任务战备数据'
     end
     local function word(s, at)
@@ -143,9 +143,27 @@ local function build_stratagem_events(env)
         local baseline=state.scene~=snapshot.scene or not state.clock or snapshot.clock<state.clock
         local previous,previous_clock=state.previous,state.clock
         state.scene,state.clock,state.previous=snapshot.scene,snapshot.clock,snapshot.entries
-        if baseline then state.seen={};state.status='任务战备读取就绪';return 0,state.status end
+        if baseline then state.seen,state.pending={},{};state.status='任务战备读取就绪';return 0,state.status end
         for key,expiry in pairs(state.seen) do if now>expiry then state.seen[key]=nil end end
         local emitted=0
+        if next(state.pending) then
+            for key,pending in pairs(state.pending) do
+                local item=snapshot.entries[key]
+                local token=item and item.id..':'..string.format('%.0f',item.activation) or nil
+                if not item or token~=pending.token or now>pending.expires then
+                    state.pending[key]=nil
+                else
+                    local valid=pcall(snapshot.validate)
+                    if not valid then api.reset();state.status='任务战备数据切换中';return emitted,state.status end
+                    local delivered,accepted,disposition=pcall(env.emit,pending.event,now)
+                    if delivered and accepted==true then
+                        state.pending[key]=nil;emitted=emitted+1
+                    elseif not (delivered and accepted==false and disposition=='retry') then
+                        state.pending[key]=nil
+                    end
+                end
+            end
+        end
         for key,item in pairs(snapshot.entries) do
             local old=previous[key]
             local token=item.id..':'..string.format('%.0f',item.activation)
@@ -166,8 +184,11 @@ local function build_stratagem_events(env)
                     anonymous=anonymous,creator_id=not anonymous and item.peer or nil}
                 event.id=event.key
                 if not pcall(snapshot.validate) then api.reset();state.status='任务战备数据切换中';return emitted,state.status end
-                local delivered,accepted=pcall(env.emit,event,now)
-                if delivered and accepted==true then emitted=emitted+1 end
+                local delivered,accepted,disposition=pcall(env.emit,event,now)
+                if delivered and accepted==true then emitted=emitted+1
+                elseif delivered and accepted==false and disposition=='retry' then
+                    state.pending[key]={token=token,event=event,expires=now+15}
+                end
             end
         end
         state.status='任务战备读取就绪'

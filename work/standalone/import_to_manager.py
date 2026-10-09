@@ -29,6 +29,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,7 +38,8 @@ import uuid
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DIST = os.path.join(HERE, "dist")
+REPO_ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir))
+DIST = os.path.join(REPO_ROOT, "dist")
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
 ARSENAL = os.path.join(LOCALAPPDATA, "hd2arsenal")
 LIBRARY = os.path.join(ARSENAL, "mods")
@@ -83,7 +85,7 @@ def newest_zip():
     if not os.path.isdir(DIST):
         sys.exit("no dist/ directory; run build_mod.py first")
     zips = [os.path.join(DIST, f) for f in os.listdir(DIST)
-            if f.startswith("AutoChat-") and f.endswith(".zip")]
+            if re.match(r"AutoChat-[0-9].*\.zip$", f)]
     if not zips:
         sys.exit("no AutoChat-*.zip in %s" % DIST)
     return max(zips, key=os.path.getmtime)

@@ -14,7 +14,7 @@ class SpecialTargetsTests(unittest.TestCase):
         builder = self.lua.execute(SOURCE.read_text(encoding='utf-8'))
         self.catalog = builder()
 
-    def test_six_verified_seaf_shells_resolve_to_exact_localized_names(self):
+    def test_verified_seaf_shells_and_confirmed_cache_hash_resolve_exact_fallback_names(self):
         expected = {
             'DC19126D15692D04': ('大炮 炸弹', 'Explosive (SEAF)'),
             '6B7EE87FB2EC6455': ('大炮 高爆弹', 'High-Yield Explosive (SEAF)'),
@@ -22,6 +22,7 @@ class SpecialTargetsTests(unittest.TestCase):
             'E4BE3FDF0C857B7F': ('大炮 凝固汽油弹', 'Napalm (SEAF)'),
             'F598598C47617605': ('大炮 烟雾弹', 'Smoke (SEAF)'),
             'C02C2623B6359BB3': ('大炮 静电场', 'Static Field (SEAF)'),
+            '0ABED3586E397289': ('坠落舱', 'Super Earth cache'),
         }
         rows = list(self.catalog.list().values())
         self.assertEqual(len(rows), len(expected))
@@ -33,7 +34,8 @@ class SpecialTargetsTests(unittest.TestCase):
                 self.assertEqual(row['name_en'], name_en)
 
     def test_ambiguous_shell_and_unknown_resources_are_not_guessed(self):
-        for resource in ('6C62E2E25E084083', 'C8F9A2233048B836', 'DEADBEEFDEADBEEF'):
+        for resource in ('6C62E2E25E084083', 'C8F9A2233048B836',
+                         'CA397A8610AF550A', 'DEADBEEFDEADBEEF'):
             with self.subTest(resource=resource):
                 self.assertIsNone(self.catalog.resolve(resource))
 

@@ -8,6 +8,7 @@ FRAGMENTS = [('text_input', 'UNICODE TEXT INPUT'), ('panel_input', 'ARMORY INPUT
              ('chat_automation', 'CHAT AUTOMATION'),
              ('preset_library', 'PRESET LIBRARY'),
              ('peer_identity', 'PEER IDENTITY'), ('plugin_registry', 'PLUGIN REGISTRY'),
+             ('plugin_ui', 'PLUGIN UI'),
              ('marker_localization', 'MARKER LOCALIZATION'), ('special_targets', 'SPECIAL TARGETS'),
              ('ping_events', 'NATIVE PING EVENTS'),
              ('stratagem_events', 'STRATAGEM EVENTS'), ('stratagem_names_zh', 'STRATAGEM NAMES ZH'),
@@ -20,6 +21,10 @@ def main():
     source = path.read_text(encoding='utf-8')
     for fragment, marker in FRAGMENTS:
         fragment_source = (ROOT / 'src' / (fragment + '.lua')).read_text(encoding='utf-8').rstrip()
+        if fragment == 'plugin_ui':
+            fragment_source = fragment_source.replace('local function build_plugin_ui(',
+                                                        'M.build_plugin_ui = function(', 1)
+            fragment_source = re.sub(r'\nreturn build_plugin_ui$', '', fragment_source)
         if fragment in ('language', 'game_language_reader', 'special_targets'):
             builder = 'build_' + fragment
             fragment_source = fragment_source.replace('local function ' + builder + '(', 'M.' + builder + ' = function(', 1)
@@ -55,6 +60,8 @@ end
             source = source.replace(anchor, block + '\n' + setup + '\n' + anchor, 1)
         elif fragment == 'text_input':
             source = source.replace('-- BEGIN ARMORY INPUT', block + '\n-- BEGIN ARMORY INPUT', 1)
+        elif fragment == 'plugin_ui':
+            source = source.replace('local function plugin_api(ctx)', block + '\n\nlocal function plugin_api(ctx)', 1)
         elif fragment in ('language', 'game_language_reader'):
             source = source.replace('-- BEGIN CHAT AUTOMATION', block + '\n-- BEGIN CHAT AUTOMATION', 1)
         elif fragment == 'stratagem_names_zh':

@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.8.3', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.0.0', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -1708,11 +1708,20 @@ local function build_chat_automation(env)
         end
         return role
     end
-    function api.send(text, expected_role)
+    function api.settings()
+        local role = api.sync()
+        if not role then return nil, 'role unavailable' end
+        local snapshot = copy(profiles[role])
+        snapshot.role = role
+        return snapshot
+    end
+    function api.send(text, expected_role, output_override)
         local role = api.sync()
         if not role then return false, '等待：主机身份尚未确认' end
         if expected_role and role ~= expected_role then return false, '身份已变化，取消旧预设消息' end
-        if options.output == 'local' then
+        local output = output_override or options.output
+        if output ~= 'local' and output ~= 'squad' then return false, '输出方式无效' end
+        if output == 'local' then
             local ok, why = attempt(env.send_local, text)
             return ok == true, why or '本地显示入口不可用'
         end
@@ -1800,6 +1809,11 @@ local function build_chat_automation(env)
         return string.format('(%.0f, %.0f, %.0f)', p.x, p.y, p.z)
     end
     function api.has_peer(peer) return creator_present(peer,api.snapshot()) end
+    function api.canonical_peer(peer)
+        local snapshot = api.snapshot()
+        if not snapshot or peer ~= nil and not creator_present(peer, snapshot) then return nil end
+        return session_peer_hex(peer or snapshot.mine)
+    end
 
     function api.format(template, peer, extra, anonymous)
         if type(template) ~= 'string' then return '' end
@@ -2013,7 +2027,7 @@ local function build_chat_automation(env)
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
-        if not api.sync() then state.status='等待：主机身份尚未确认';event_diagnostic(event,nil,'role-unknown');return false end
+        if not api.sync() then state.status='等待：主机身份尚未确认';event_diagnostic(event,nil,'role-unknown');return false,'retry' end
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then event_diagnostic(event,nil,'invalid-event');return false end
@@ -2025,13 +2039,16 @@ local function build_chat_automation(env)
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
         if state.ping_seen[event.key] then event_diagnostic(event,rule_id,'duplicate-event');return false end
         local snapshot = api.snapshot()
-        if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false end
-        if #state.pings>=16 then
-            if rule.cooldown~=0 then event_diagnostic(event,rule_id,'queue-full');return false end
-            local evict
-            for i,pending in ipairs(state.pings) do if pending.cooldown~=0 then evict=i;break end end
-            if not evict then event_diagnostic(event,rule_id,'queue-full-no-eviction');return false end
-            table.remove(state.pings,evict)
+        if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false,'retry' end
+        -- Keep the historical 16 normal slots and reserve 16 additional slots
+        -- for urgent zero-cooldown events. Never evict a message already accepted.
+        if #state.pings>=32 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
+        if rule.cooldown~=0 then
+            local normal_count=0
+            for _,pending in ipairs(state.pings) do
+                if pending.cooldown~=0 then normal_count=normal_count+1 end
+            end
+            if normal_count>=16 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
         end
         local label = api.category_label(event.category)
         local raw_target=type(event.display_name)=='string' and event.display_name or event.target
@@ -3188,9 +3205,25 @@ local function enrich_stratagem_event(event,now)
     end
 end
 function M.debug_enrich_stratagem_event(event,now)enrich_stratagem_event(event,now)end
+M._published_ping_events=setmetatable({}, {__mode='k'})
+function M.debug_emit_ping_event(event,now)
+    enrich_stratagem_event(event,now)
+    event.type='ping'
+    local accepted,disposition=automation.push_ping(event,now)
+    local published_ping_events=M._published_ping_events
+    local notified=published_ping_events[event]
+    if notified==nil then
+        -- Set before invoking plugin code so a reentrant publish cannot duplicate it.
+        published_ping_events[event]=0
+        notified=REGISTRY and REGISTRY.publish(event) or 0
+        published_ping_events[event]=notified
+    end
+    if disposition=='retry' then return false,'retry' end
+    return accepted==true or notified>0
+end
 
 -- BEGIN SPECIAL TARGETS
--- Verified target-name enrichment for special mission resources.
+-- Verified target-name enrichment for special resources.
 -- The six shell IDs are Spottable + ObjectiveShell entries in current RawData
 -- EntityComponentMap (game version 1.007.100). They remain ordinary building
 -- events and do not introduce a separate user-facing category or rule system.
@@ -3202,6 +3235,14 @@ M.build_special_targets = function()
         {resource='E4BE3FDF0C857B7F', name_zh='大炮 凝固汽油弹', name_en='Napalm (SEAF)'},
         {resource='F598598C47617605', name_zh='大炮 烟雾弹', name_en='Smoke (SEAF)'},
         {resource='C02C2623B6359BB3', name_zh='大炮 静电场', name_en='Static Field (SEAF)'},
+        -- Exact-hash fallback for a user-confirmed live direct-target event:
+        -- sanitized capture was kind=10, target present, resource=0ABED3586E397289,
+        -- generic location key=3585962803, identity_link=true. The immediately
+        -- preceding user action was the Salute drop pod mark. Static asset path:
+        -- work/eagle-stingray-research/stingray-archive-list.txt:93034-93035
+        -- (super_earth_cache.physics/.unit); this is a contextual fallback, not
+        -- an official localized label and must not be generalized to other caches.
+        {resource='0ABED3586E397289', name_zh='坠落舱', name_en='Super Earth cache'},
     }
     local by_resource = {}
     for _, row in ipairs(rows) do
@@ -3935,6 +3976,7 @@ local function build_ping_events(env)
         assert(header:byte(1) == 1 or map_scene, 'ping UI inactive')
         local function token(bytes)
             return bytes:sub(1,4)..bytes:sub(17,20)..bytes:sub(25,28)..bytes:sub(33,36)
+                .. bytes:sub(53,56)
                 .. string.char(math.floor(u32(bytes,0x1c)/0x2000)%2)
                 .. (u32(bytes,0)==21 and bytes:sub(5,16) or '')
         end
@@ -4104,7 +4146,9 @@ local function build_ping_events(env)
             local info = mission or enemy or PING_TARGETS[resource]
             if special then
                 if read(address, 24) ~= identity then return nil, 'retry' end
-                return {category='building',target=selected_name(special),target_id=entry.target_id,
+                local target = localized and not generic_name(localized, entry.localization_key)
+                    and localized or selected_name(special)
+                return {category='building',target=target,target_id=entry.target_id,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4181,21 +4225,34 @@ local function build_ping_events(env)
         local next_seen, events = {}, {}
         for _, entry in ipairs(snapshot.entries) do
             local previous = state.seen[entry.slot]
-            local fresh = not previous or previous.pending or previous.token ~= entry.token or entry.age < previous.age
+            local token_changed = not previous or previous.token ~= entry.token
+            local age_reset = previous and entry.age < previous.age
+            local fresh = token_changed or age_reset or previous.pending or previous.pending_emit
             next_seen[entry.slot] = {token = entry.token, age = entry.age}
             if not first and not (entry.map_source and first_map) and fresh then
-                local good, event, reason = pcall(snapshot.target, entry)
-                if not good or reason == 'retry' then
-                    -- A target can finish streaming after its ping arrives. Preserve
-                    -- freshness until it resolves or the native mark expires.
-                    next_seen[entry.slot] = {token=entry.token, age=entry.age, pending=true}
+                local event, reason
+                local reusable = not token_changed and not age_reset and previous.pending_emit
+                    and type(previous.event) == 'table'
+                if reusable then
+                    event = previous.event
+                else
+                    local good
+                    good, event, reason = pcall(snapshot.target, entry)
+                    if not good or reason == 'retry' then
+                        -- A target can finish streaming after its ping arrives. Preserve
+                        -- freshness until it resolves or the native mark expires.
+                        next_seen[entry.slot] = {token=entry.token, age=entry.age, pending=true}
+                        event = nil
+                    end
                 end
-                if good and event then
-                    state.serial = state.serial+1
-                    -- Every legitimate renewal gets a distinct key even for the same
-                    -- target and slot; the caller's queue can dedupe repeated polls.
-                    event.key = snapshot.scene..':'..state.generation..':'..state.serial
-                    event.id = event.key
+                if event then
+                    if not reusable then
+                        state.serial = state.serial+1
+                        -- Every legitimate renewal gets a distinct key even for the same
+                        -- target and slot; the caller's queue can dedupe repeated polls.
+                        event.key = snapshot.scene..':'..state.generation..':'..state.serial
+                        event.id = event.key
+                    end
                     events[#events+1] = event
                 end
             end
@@ -4217,8 +4274,15 @@ local function build_ping_events(env)
             if not stable or not same then
                 reset('标记数据切换中'); return emitted, state.status
             end
-            local success, accepted = pcall(env.emit, event, now)
+            local success, accepted, disposition = pcall(env.emit, event, now)
             if success and accepted == true then emitted = emitted+1 end
+            if success and accepted == false and disposition == 'retry' then
+                local pending = state.seen[event.slot]
+                if pending and pending.token then
+                    state.seen[event.slot] = {token=pending.token, age=pending.age,
+                        pending_emit=true, event=event}
+                end
+            end
         end
         state.status = first and '已记录现有标记' or emitted > 0 and '已识别玩家标记' or '等待新的玩家标记'
         return emitted, state.status
@@ -4235,13 +4299,7 @@ local ping_events = build_ping_events({
     special_targets = M.special_targets,
     language = function() return M.language.current() end,
     diagnostic = function(...) return M.record_ping_drop(...) end,
-    emit = function(event, now)
-        enrich_stratagem_event(event,now)
-        event.type = 'ping'
-        local accepted = automation.push_ping(event, now)
-        local notified = REGISTRY and REGISTRY.publish(event) or 0
-        return accepted or notified > 0
-    end,
+    emit = M.debug_emit_ping_event,
 })
 function M.debug_ping_events() return ping_events end
 M.ping_status = '标记消息已关闭'
@@ -4287,10 +4345,10 @@ local function build_stratagem_events(env)
         {0x135c69c,string.char(0x48,0x89,0x8c,0xfd,0xd0,1,0,0)},
         {0x135c6f9,string.char(0x48,0x89,0x8c,0xfd,0xe0,1,0,0)},
     }
-    local state = {status='等待任务战备数据', previous={}, seen={}}
+    local state = {status='等待任务战备数据', previous={}, seen={}, pending={}}
     local api = {state=state}
     function api.reset()
-        state.scene,state.clock,state.previous,state.seen,state.last_poll=nil,nil,{},{},nil
+        state.scene,state.clock,state.previous,state.seen,state.pending,state.last_poll=nil,nil,{},{},{},nil
         state.status='等待任务战备数据'
     end
     local function word(s, at)
@@ -4392,9 +4450,27 @@ local function build_stratagem_events(env)
         local baseline=state.scene~=snapshot.scene or not state.clock or snapshot.clock<state.clock
         local previous,previous_clock=state.previous,state.clock
         state.scene,state.clock,state.previous=snapshot.scene,snapshot.clock,snapshot.entries
-        if baseline then state.seen={};state.status='任务战备读取就绪';return 0,state.status end
+        if baseline then state.seen,state.pending={},{};state.status='任务战备读取就绪';return 0,state.status end
         for key,expiry in pairs(state.seen) do if now>expiry then state.seen[key]=nil end end
         local emitted=0
+        if next(state.pending) then
+            for key,pending in pairs(state.pending) do
+                local item=snapshot.entries[key]
+                local token=item and item.id..':'..string.format('%.0f',item.activation) or nil
+                if not item or token~=pending.token or now>pending.expires then
+                    state.pending[key]=nil
+                else
+                    local valid=pcall(snapshot.validate)
+                    if not valid then api.reset();state.status='任务战备数据切换中';return emitted,state.status end
+                    local delivered,accepted,disposition=pcall(env.emit,pending.event,now)
+                    if delivered and accepted==true then
+                        state.pending[key]=nil;emitted=emitted+1
+                    elseif not (delivered and accepted==false and disposition=='retry') then
+                        state.pending[key]=nil
+                    end
+                end
+            end
+        end
         for key,item in pairs(snapshot.entries) do
             local old=previous[key]
             local token=item.id..':'..string.format('%.0f',item.activation)
@@ -4415,8 +4491,11 @@ local function build_stratagem_events(env)
                     anonymous=anonymous,creator_id=not anonymous and item.peer or nil}
                 event.id=event.key
                 if not pcall(snapshot.validate) then api.reset();state.status='任务战备数据切换中';return emitted,state.status end
-                local delivered,accepted=pcall(env.emit,event,now)
-                if delivered and accepted==true then emitted=emitted+1 end
+                local delivered,accepted,disposition=pcall(env.emit,event,now)
+                if delivered and accepted==true then emitted=emitted+1
+                elseif delivered and accepted==false and disposition=='retry' then
+                    state.pending[key]={token=token,event=event,expires=now+15}
+                end
             end
         end
         state.status='任务战备读取就绪'
@@ -4429,13 +4508,7 @@ local stratagem_events = build_stratagem_events({
     base = supported_game_base, read = read_at, session = session_token,
     catalog = stratagem_catalog,
     localize = function(key) return marker_localization.lookup(key) end,
-    emit = function(event, now)
-        enrich_stratagem_event(event,now)
-        event.type = 'ping'
-        local accepted = automation.push_ping(event, now)
-        local notified = REGISTRY and REGISTRY.publish(event) or 0
-        return accepted or notified > 0
-    end,
+    emit = M.debug_emit_ping_event,
 })
 function M.debug_stratagem_events() return stratagem_events end
 M.task_stratagem_status = '等待任务战备数据'
@@ -5305,6 +5378,43 @@ local text_input = build_text_input(64)
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
                lfail = 0, version = 0,
                rw = 0, rh = 0}
+PANEL.loaded_plugin_icon = PANEL.loaded_plugin_icon or function()
+    local cache = PANEL.plugin_icon_cache
+    if not cache then
+        cache = {open=false, session=nil, generation=nil, icon=nil,
+            next_scan=0, next_session_check=0}
+        PANEL.plugin_icon_cache = cache
+    end
+    local now = os.time()
+    local generation = stratagem_catalog.state.generation or 0
+    local known_session = automation.state.limit_session
+    local function reset(token)
+        cache.session, cache.generation, cache.icon = token, generation, nil
+        cache.next_scan, cache.next_session_check = 0, now + 5
+    end
+    if not cache.open then
+        cache.open = true
+        reset(known_session or session_token())
+    elseif known_session and cache.session ~= known_session then
+        reset(known_session)
+    elseif now >= cache.next_session_check then
+        cache.next_session_check = now + 5
+        local token = session_token()
+        if token and token ~= cache.session then reset(token) end
+    end
+    if cache.generation ~= generation then reset(cache.session) end
+    if cache.icon or now < cache.next_scan then return cache.icon end
+    cache.next_scan = now + 2
+    for _, row in ipairs(stratagem_catalog.list()) do
+        local icon = row.icon
+        if type(icon) == 'string' and #icon == 16 and icon:match('^%x+$')
+            and resource_loaded('material', icon) then
+            cache.icon = icon:upper()
+            break
+        end
+    end
+    return cache.icon
+end
 M.language.set_dirty(function()
     PANEL.version = (PANEL.version or 0) + 1
     PANEL.sig = nil
@@ -5883,7 +5993,9 @@ local function build_plugin_registry(env)
     registry.plugins = type(registry.plugins) == 'table' and registry.plugins or {}
     registry.by_id = type(registry.by_id) == 'table' and registry.by_id or {}
     registry.serial = type(registry.serial) == 'number' and registry.serial or 0
-    registry.version, registry.api_version = 2, 2
+    registry.version, registry.api_version, registry.api_revision = 2, 2, 3
+    registry.capabilities = {independent_send=true, settings=true, plugin_ui=true}
+    local independent_state, context_token = {}, nil
     local function note(message)
         if type(env.note) == 'function' then pcall(env.note, '[plugin] ' .. message) end
         if type(registry.log) == 'function' then pcall(registry.log, message) end
@@ -5897,6 +6009,98 @@ local function build_plugin_registry(env)
         local ok, token = pcall(env.context)
         return ok and token or nil
     end
+    local function current_context()
+        local value = context()
+        if value ~= context_token then independent_state, context_token = {}, value end
+        return value
+    end
+    local function snapshot_copy(source)
+        local seen, remaining, failure = {}, 16384, nil
+        local function clone(value, depth)
+            local kind = type(value)
+            if kind == 'string' or kind == 'boolean' then return value end
+            if kind == 'number' then
+                return value == value and value ~= math.huge and value ~= -math.huge and value or nil
+            end
+            if kind ~= 'table' or seen[value] then return nil end
+            if depth > 8 then failure = 'settings snapshot too large'; return nil end
+            local result = {}; seen[value] = true
+            for key, item in next, value do
+                if remaining <= 0 then failure = 'settings snapshot too large'; break end
+                if type(key) == 'string' and #key <= 128 or type(key) == 'number' then
+                    remaining = remaining - 1
+                    local copied = clone(item, depth + 1)
+                    if copied ~= nil then result[key] = copied end
+                end
+            end
+            seen[value] = nil
+            return result
+        end
+        local result = clone(source, 0)
+        if failure then return nil, failure end
+        return result
+    end
+    local function normalize_options(value)
+        if value == nil then return {policy='inherit'} end
+        if type(value) ~= 'table' then return nil, 'invalid options' end
+        local allowed = {policy=true,enabled=true,cooldown=true,cooldown_key=true,allow_solo=true,output=true}
+        local count = 0
+        for key in pairs(value) do
+            if not allowed[key] then return nil, 'unknown send option' end
+            count = count + 1
+        end
+        local policy = value.policy
+        if policy == nil then
+            if count == 0 then return {policy='inherit'} end
+            return nil, 'policy required for send options'
+        end
+        if policy == 'inherit' then
+            if count > 1 then return nil, 'inherit policy does not accept overrides' end
+            return {policy='inherit'}
+        end
+        if policy ~= 'independent' then return nil, 'invalid send policy' end
+        local enabled = value.enabled
+        if enabled == nil then enabled = true end
+        if type(enabled) ~= 'boolean' then return nil, 'invalid enabled option' end
+        local allow_solo = value.allow_solo
+        if allow_solo == nil then allow_solo = true end
+        if type(allow_solo) ~= 'boolean' then return nil, 'invalid allow_solo option' end
+        local cooldown = value.cooldown
+        if cooldown == nil then cooldown = 0 end
+        if type(cooldown) ~= 'number' or cooldown ~= cooldown or cooldown == math.huge
+            or cooldown == -math.huge or cooldown < 0 then return nil, 'invalid cooldown option' end
+        local cooldown_key = value.cooldown_key
+        if cooldown_key == nil then cooldown_key = 'default' end
+        if type(cooldown_key) ~= 'string' or #cooldown_key == 0 or #cooldown_key > 64
+            or cooldown_key:find('[%c]') then return nil, 'invalid cooldown_key option' end
+        local output = value.output
+        if output == nil then output = 'inherit' end
+        if output ~= 'inherit' and output ~= 'local' and output ~= 'public' then
+            return nil, 'invalid output option'
+        end
+        return {policy='independent',enabled=enabled,cooldown=cooldown,
+            cooldown_key=cooldown_key,allow_solo=allow_solo,output=output}
+    end
+    local function bucket_key(creator_id, cooldown_key)
+        local creator = creator_id or '@self'
+        if type(env.creator_key) == 'function' then
+            local ok, canonical = pcall(env.creator_key, creator_id)
+            if not ok or type(canonical) ~= 'string' or canonical == '' then return nil end
+            creator = canonical
+        end
+        return #creator .. ':' .. creator .. ':' .. #cooldown_key .. ':' .. cooldown_key
+    end
+    local function now()
+        local value
+        if type(env.now) == 'function' then
+            local ok; ok, value = pcall(env.now)
+            if not ok then return nil end
+        else value = os.time() end
+        if type(value) ~= 'number' or value ~= value or value == math.huge or value == -math.huge then
+            return nil
+        end
+        return value
+    end
     local function fault(entry, callback, why)
         entry.faults = entry.faults + 1
         entry.last_error = callback .. ': ' .. tostring(why)
@@ -5905,13 +6109,20 @@ local function build_plugin_registry(env)
     end
     local function api_for(entry)
         local token = context()
-        return {version = 2, api_version = 2, id = entry.id,
+        local api = {version = 2, api_version = 2, api_revision = 3,
+            capabilities = registry.capabilities, id = entry.id,
             context = context,
-            send = function(value, creator_id)
+            send = function(value, creator_id, options)
                 if registry.by_id[entry.id] ~= entry then return false, 'plugin unregistered' end
                 if context() ~= token then return false, 'session changed' end
-                return registry.send(entry.id, value, creator_id)
+                return registry.send(entry.id, value, creator_id, options)
+            end,
+            settings = function()
+                if registry.by_id[entry.id] ~= entry then return nil, 'plugin unregistered' end
+                if context() ~= token then return nil, 'session changed' end
+                return registry.settings(entry.id)
             end}
+        return api
     end
     local function invoke(entry, name, ...)
         local callback = entry['_' .. name]
@@ -5925,8 +6136,10 @@ local function build_plugin_registry(env)
         if type(spec) ~= 'table' then return nil, 'register needs a table' end
         local id = rawget(spec, 'id')
         local title = rawget(spec, 'name') or rawget(spec, 'title') or id
+        local name_en = rawget(spec, 'name_en')
         if not text(id, 64) or not id:match('^[%w_.%-]+$') then return nil, 'invalid plugin id' end
         if not text(title, 96) then return nil, 'invalid plugin name' end
+        if name_en ~= nil and not text(name_en, 96) then return nil, 'invalid English plugin name' end
         if registry.by_id[id] then return nil, 'plugin id already registered' end
         if #registry.plugins >= 16 then return nil, 'maximum 16 plugins' end
         if type(rawget(spec, 'draw')) ~= 'function' then return nil, 'draw callback required' end
@@ -5935,7 +6148,7 @@ local function build_plugin_registry(env)
                 return nil, 'invalid ' .. name .. ' callback'
             end
         end
-        local entry = {id = id, title = title, name = title, faults = 0,
+        local entry = {id = id, title = title, name = title, name_en = name_en, faults = 0,
             _draw = rawget(spec, '_draw') or rawget(spec, 'draw'),
             _on_click = rawget(spec, '_on_click') or rawget(spec, 'on_click'),
             _revision = rawget(spec, '_revision') or rawget(spec, 'revision'),
@@ -5953,11 +6166,22 @@ local function build_plugin_registry(env)
         for i = #registry.plugins, 1, -1 do
             if registry.plugins[i] == entry then table.remove(registry.plugins, i) end
         end
-        registry.by_id[id], registry.serial = nil, registry.serial + 1
+        registry.by_id[id], independent_state[id], registry.serial = nil, nil, registry.serial + 1
         note('unregistered ' .. id)
         return true
     end
-    function registry.send(id, value, creator_id)
+    function registry.settings(id)
+        if type(id) ~= 'string' or not registry.by_id[id] then return nil, 'plugin unregistered' end
+        current_context()
+        if type(env.settings) ~= 'function' then return nil, 'settings unavailable' end
+        local ok, value, why = pcall(env.settings, id)
+        if not ok then note(id .. ' settings failed: ' .. tostring(value)); return nil, 'settings unavailable' end
+        if type(value) ~= 'table' then return nil, why or 'role unavailable' end
+        local snapshot, copy_error = snapshot_copy(value)
+        if type(snapshot) ~= 'table' then return nil, copy_error or 'settings unavailable' end
+        return snapshot
+    end
+    function registry.send(id, value, creator_id, options)
         if type(id) ~= 'string' or not registry.by_id[id] then return false, 'plugin unregistered' end
         if type(value) ~= 'string' or #value == 0 or #value > 512
             or value:find('%z') or not value:find('%S') then return false, 'invalid message' end
@@ -5968,10 +6192,37 @@ local function build_plugin_registry(env)
             end
             creator_id=creator_id:upper()
         end
-        local ok, sent, why = pcall(env.send, value, id, creator_id)
+        local normalized, option_error = normalize_options(options)
+        if not normalized then return false, option_error end
+        local token = current_context()
+        local stamp
+        local bucket
+        if normalized.policy == 'independent' then
+            if not normalized.enabled then return false, 'independent send disabled' end
+            stamp = now()
+            if stamp == nil then return false, 'clock unavailable' end
+            local ledger = independent_state[id]
+            if not ledger then ledger = {}; independent_state[id] = ledger end
+            bucket = bucket_key(creator_id, normalized.cooldown_key)
+            if not bucket then return false, 'trigger player unavailable' end
+            for key, record in pairs(ledger) do
+                if stamp >= record.expires or record.context ~= token then ledger[key] = nil end
+            end
+            local existing = normalized.cooldown > 0 and ledger[bucket] or nil
+            if existing and stamp < existing.expires then return false, 'independent cooldown' end
+            if normalized.cooldown > 0 and not existing then
+                local count = 0; for _ in pairs(ledger) do count = count + 1 end
+                if count >= 128 then return false, 'independent cooldown capacity reached' end
+            end
+        end
+        local ok, sent, why = pcall(env.send, value, id, creator_id, normalized)
         if not ok then
             note(id .. ' sender failed: ' .. tostring(sent))
             return false, 'sender failed'
+        end
+        if sent == true and normalized.policy == 'independent' and normalized.cooldown > 0 then
+            local ledger = independent_state[id] or {}; independent_state[id] = ledger
+            ledger[bucket] = {expires=stamp + normalized.cooldown, context=token}
         end
         note(id .. ' send ' .. (sent == true and 'accepted' or 'refused') .. ': ' .. tostring(why))
         return sent == true, why
@@ -6052,15 +6303,44 @@ REGISTRY = build_plugin_registry({
         return snapshot and table.concat({tostring(snapshot.session), tostring(snapshot.context),
             snapshot.mine, snapshot.host or '?'}, '|') or nil
     end,
-    send = function(text, id, creator_id)
+    now = function() return os.time() end,
+    creator_key = function(peer) return automation.canonical_peer(peer) end,
+    settings = function()
+        local role = automation.sync()
+        if not role then return nil, 'role unavailable' end
+        local snapshot, why = automation.settings()
+        if not snapshot then return nil, why end
+        local tasks = M.profile_tasks(role)
+        snapshot.language = M.language.current()
+        snapshot.tasks = {}
+        for i, task in ipairs(tasks) do
+            snapshot.tasks[i] = {name=task.name,mode=task.mode,time=task.time,
+                message=task.message,enabled=task.enabled == true}
+        end
+        return snapshot
+    end,
+    send = function(text, id, creator_id, options)
+        options = type(options) == 'table' and options or {policy='inherit'}
+        local role = automation.sync()
+        if not role then return false, 'role unavailable' end
         local now = os.time()
         if creator_id and not automation.has_peer(creator_id) then return false, 'trigger player unavailable' end
-        local chat, others = send_context(true)
+        local independent = options.policy == 'independent'
+        local allow_solo = independent and options.allow_solo or true
+        if independent and options.allow_solo == false then allow_solo = false end
+        local chat, others = send_context(allow_solo)
         if not chat then return false, others end
-        local allowed, why = automation.check(now, others, creator_id)
-        if not allowed then return false, why end
-        local sent, reason = automation.send(automation.format(text,creator_id), automation.state.active_role)
-        if sent then automation.record(now,creator_id) end
+        if not independent then
+            local allowed, why = automation.check(now, others, creator_id)
+            if not allowed then return false, why end
+        end
+        local profile = automation.profile(role)
+        local output = options.output or 'inherit'
+        if output == 'inherit' then output = profile.output end
+        if output == 'public' then output = 'squad' end
+        if output ~= 'local' and output ~= 'squad' then return false, 'invalid output policy' end
+        local sent, reason = automation.send(automation.format(text,creator_id), role, output)
+        if sent and not independent then automation.record(now,creator_id) end
         return sent, reason
     end,
 })
@@ -6122,95 +6402,629 @@ local UX = {}
 -- past the header and tab strip automatically, so a plugin lays out from its own top
 -- left and cannot draw over the tabs. Without that offset the helpers began at the
 -- panel's own top left and plugin content landed on top of the tab strip.
-local function plugin_api(ctx)
+-- BEGIN PLUGIN UI
+-- Build a bounded drawing facade for one registered plugin body.
+-- UX and image callbacks close over the host GUI; none of those native objects
+-- are returned to plugin code.
+M.build_plugin_ui = function(env)
+    env = type(env) == 'table' and env or {}
+    local UX = type(env.UX) == 'table' and env.UX or {}
+    local ctx = type(env.context) == 'table' and env.context or {}
     local dx, dy = ctx.ox or 0, ctx.oy or 0
-    local content_w, content_h = W_PANEL - 2 * PAD, H_PANEL - dy - PAD
-    local function area(x, y, w, h)
-        return type(x)=='number' and type(y)=='number' and type(w)=='number' and type(h)=='number'
-            and x==x and y==y and w==w and h==h and x>=0 and y>=0 and w>0 and h>0
-            and x+w<=content_w and y+h<=content_h
+    local content_w = ctx.content_w or ((ctx.w or 1000) - 44)
+    local content_h = ctx.content_h or ((ctx.h or 990) - dy - 22)
+    local palette = UX.palette or {}
+    local MAX_LINE_SEGMENTS = 512
+
+    local function finite(value)
+        return type(value) == 'number' and value == value
+            and value < math.huge and value > -math.huge
     end
-    return {
-        w = ctx.w, h = ctx.h, content_w=content_w, content_h=content_h, body_y = dy, scale = UX.s,
-        -- These forward at CALL time. Copying UX.text into the table here would capture
-        -- whatever it held when plugin_api ran, which is nothing: plugin_api is reached
-        -- before draw_panel has finished assigning, so the plugin received three nil
-        -- helpers. Forwarding through UX means the lookup happens when the plugin
-        -- actually draws.
-        -- NOTE the argument order: the panel's own text() takes the string FIRST
-        -- (value, x, y, size, ...), so the offset must be applied to arguments 2 and 3,
-        -- not 1 and 2. Offsetting the wrong pair made the plugin hand a string where a
-        -- coordinate was expected and the call died with "attempt to perform arithmetic
-        -- on a string".
-        text = function(value, x, y, ...)
-            return UX.text(value, x + dx, y + dy, ...)
-        end,
-        rect = function(x, y, ...) return UX.rect(x + dx, y + dy, ...) end,
-        border = function(x, y, ...) return UX.border(x + dx, y + dy, ...) end,
-        colour = UX.colour, palette = UX.palette,
-        -- Recorded in the same units the helpers above take, so a plugin's click area
-        -- lines up with what it drew.
-        region = function(key, x, y, w, h)
-            if not area(x,y,w,h) then return false end
-            UX.region('plugin:' .. ctx.id .. ':' .. tostring(key), x + dx, y + dy, w, h)
-        end,
-        button = function(key, value, x, y, w, h, enabled, active)
-            if not area(x,y,w,h) then return false end
-            local C = UX.palette
-            local full = 'plugin:' .. ctx.id .. ':' .. tostring(key)
-            local hovered = PANEL.hover == full
-            UX.rect(x+dx,y+dy,w,h,active and C.YELLOW or hovered and C.ROW_HI or C.PANEL,951)
-            UX.border(x+dx,y+dy,w,h,hovered and C.TEXT or C.LINE2,952)
-            UX.text(tostring(value),x+dx+8,y+dy+8,14,active and C.INK or enabled == false and C.DIM or C.TEXT,w-16)
-            if enabled ~= false then UX.region(full,x+dx,y+dy,w,h) end
-            return true
-        end,
-        note = plugin_note,
-        version = M.version,
+
+    local function area(x, y, w, h)
+        if not finite(x) or not finite(y) or not finite(w) or not finite(h)
+            or w <= 0 or h <= 0 then
+            return false, 'invalid_geometry'
+        end
+        if x < 0 or y < 0 or x + w > content_w or y + h > content_h then
+            return false, 'out_of_bounds'
+        end
+        return true
+    end
+
+    local function z_value(z, fallback)
+        if z == nil then return fallback end
+        return finite(z) and z or nil
+    end
+
+    local function forwarded(ok, reason, fn, ...)
+        if not ok then return false, reason end
+        if type(fn) ~= 'function' then return false, 'drawing_unavailable' end
+        local result, detail = fn(...)
+        if result == nil then return true end
+        if detail == nil then return result end
+        return result, detail
+    end
+
+    local function utf8_length(value)
+        local count = 0
+        for i = 1, #value do
+            local byte = value:byte(i)
+            if byte < 0x80 or byte >= 0xC0 then count = count + 1 end
+        end
+        return count
+    end
+
+    local api = {
+        w = ctx.w, h = ctx.h, content_w = content_w, content_h = content_h,
+        body_y = dy, scale = ctx.scale or UX.s,
+        colour = UX.colour, palette = palette,
+        loaded_icon = ctx.loaded_icon,
+        language = ctx.language,
+        version = env.version,
     }
+
+    api.text = function(value, x, y, size, colour, limit, align)
+        if value == nil or value == '' then return 0 end
+        local ok, string_value = pcall(tostring, value)
+        if not ok then return false, 'invalid_text' end
+        size = size == nil and 14 or size
+        if not finite(x) or not finite(y) or not finite(size) or size <= 0
+            or (limit ~= nil and (not finite(limit) or limit <= 0)) then
+            return false, 'invalid_geometry'
+        end
+        local draw_limit = limit
+        if draw_limit == nil then
+            if align == 'right' then
+                draw_limit = x
+            elseif align == 'center' then
+                draw_limit = 2 * math.min(x, content_w - x)
+            else
+                draw_limit = content_w - x
+            end
+        end
+        local estimated_width = limit or (utf8_length(string_value) * size * 0.62)
+        local left = x
+        if align == 'right' then left = x - estimated_width
+        elseif align == 'center' then left = x - estimated_width / 2 end
+        local valid, reason = area(left, y, estimated_width, size)
+        if not valid then return false, reason end
+        if align == nil then
+            return forwarded(true, nil, UX.text, string_value, x + dx, y + dy,
+                size, colour, draw_limit)
+        end
+        return forwarded(true, nil, UX.text, string_value, x + dx, y + dy,
+            size, colour, draw_limit, align)
+    end
+
+    api.rect = function(x, y, w, h, colour, z)
+        local valid, reason = area(x, y, w, h)
+        if not valid then return false, reason end
+        z = z_value(z, 951)
+        if not z then return false, 'invalid_geometry' end
+        return forwarded(true, nil, UX.rect, x + dx, y + dy, w, h, colour, z)
+    end
+
+    api.border = function(x, y, w, h, colour, z)
+        local valid, reason = area(x, y, w, h)
+        if not valid then return false, reason end
+        z = z_value(z, 952)
+        if not z then return false, 'invalid_geometry' end
+        return forwarded(true, nil, UX.border, x + dx, y + dy, w, h, colour, z)
+    end
+
+    api.region = function(key, x, y, w, h)
+        local valid, reason = area(x, y, w, h)
+        if not valid then return false, reason end
+        if type(UX.region) ~= 'function' then return false, 'drawing_unavailable' end
+        UX.region('plugin:' .. tostring(ctx.id or '') .. ':' .. tostring(key),
+            x + dx, y + dy, w, h)
+        return true
+    end
+
+    api.button = function(key, value, x, y, w, h, enabled, active)
+        local valid, reason = area(x, y, w, h)
+        if not valid then return false, reason end
+        local full = 'plugin:' .. tostring(ctx.id or '') .. ':' .. tostring(key)
+        local hovered = ctx.hover == full
+        local fill = active and palette.YELLOW or hovered and palette.ROW_HI or palette.PANEL
+        local border = active and palette.YELLOW or hovered and palette.TEXT or palette.LINE2
+        UX.rect(x + dx, y + dy, w, h, fill, 951)
+        UX.border(x + dx, y + dy, w, h, border, 952)
+        if w > 16 and h > 16 then
+            api.text(tostring(value), x + 8, y + 8, 14,
+                active and palette.INK or enabled == false and palette.DIM or palette.TEXT,
+                w - 16)
+        end
+        if enabled ~= false then
+            UX.region(full, x + dx, y + dy, w, h)
+        end
+        return true
+    end
+
+    api.line = function(x1, y1, x2, y2, colour, z, width)
+        width = width == nil and 1 or width
+        z = z_value(z, 953)
+        if not finite(x1) or not finite(y1) or not finite(x2) or not finite(y2)
+            or not finite(width) or width <= 0 or not z then
+            return false, 'invalid_geometry'
+        end
+        local dx_line, dy_line = x2 - x1, y2 - y1
+        local major = math.max(math.abs(dx_line), math.abs(dy_line))
+        if major == 0 then
+            local valid, reason = area(x1 - width / 2, y1 - width / 2, width, width)
+            if not valid then return false, reason end
+            if type(UX.rect) ~= 'function' then return false, 'drawing_unavailable' end
+            UX.rect(x1 + dx - width / 2, y1 + dy - width / 2,
+                width, width, colour or palette.TEXT, z)
+            return true
+        end
+        if dy_line == 0 then
+            local valid, reason = area(math.min(x1, x2), y1 - width / 2,
+                math.max(major, width), width)
+            if not valid then return false, reason end
+            if type(UX.rect) ~= 'function' then return false, 'drawing_unavailable' end
+            UX.rect(math.min(x1, x2) + dx, y1 + dy - width / 2,
+                math.max(major, width), width, colour or palette.TEXT, z)
+            return true
+        elseif dx_line == 0 then
+            local valid, reason = area(x1 - width / 2, math.min(y1, y2),
+                width, math.max(major, width))
+            if not valid then return false, reason end
+            if type(UX.rect) ~= 'function' then return false, 'drawing_unavailable' end
+            UX.rect(x1 + dx - width / 2, math.min(y1, y2) + dy,
+                width, math.max(major, width), colour or palette.TEXT, z)
+            return true
+        end
+        local steps = math.max(1, math.ceil(major / 2))
+        if steps > MAX_LINE_SEGMENTS then return false, 'line_too_long' end
+        local interval = major / steps
+        local stamp = math.max(width, interval + 0.25)
+        local left, right = math.min(x1, x2) - stamp / 2, math.max(x1, x2) + stamp / 2
+        local top, bottom = math.min(y1, y2) - stamp / 2, math.max(y1, y2) + stamp / 2
+        if left < 0 or top < 0 or right > content_w or bottom > content_h then
+            return false, 'out_of_bounds'
+        end
+        if type(UX.rect) ~= 'function' then return false, 'drawing_unavailable' end
+        for i = 0, steps do
+            local t = i / steps
+            local x, y = x1 + dx_line * t, y1 + dy_line * t
+            UX.rect(x + dx - stamp / 2, y + dy - stamp / 2,
+                stamp, stamp, colour or palette.TEXT, z)
+        end
+        return true
+    end
+
+    api.image = function(resource, x, y, w, h, colour, z)
+        if type(resource) ~= 'string' or #resource ~= 16 or not resource:match('^%x+$') then
+            return false, 'invalid_resource'
+        end
+        local valid, reason = area(x, y, w, h)
+        if not valid then return false, reason end
+        z = z_value(z, 953)
+        if not z then return false, 'invalid_geometry' end
+        if type(env.draw_image) ~= 'function' then return false, 'image_unavailable' end
+        local ok, result, why = pcall(env.draw_image, resource, x + dx, y + dy,
+            w, h, colour or palette.TEXT, z)
+        if not ok then return false, 'image_draw_failed' end
+        if result == true then return true end
+        return false, why or 'material_unavailable'
+    end
+
+    api.icon = function(resource, x, y, size, colour, z)
+        if not finite(size) or size <= 0 then return false, 'invalid_geometry' end
+        return api.image(resource, x, y, size, size, colour, z)
+    end
+
+    api.note = type(env.note) == 'function' and env.note or function() end
+    return api
+end
+
+-- END PLUGIN UI
+
+local function plugin_api(ctx)
+    return M.build_plugin_ui({UX=UX, context=ctx, note=plugin_note, version=M.version,
+        draw_image=function(...)
+            if type(UX.image) ~= 'function' then return false,'image_unavailable' end
+            return UX.image(...)
+        end})
 end
 
 
-local function panel_signature()
+PANEL._signature_cache = PANEL._signature_cache or {frames={},depth=0}
+PANEL._signature_cache.collect = function(frame)
     local opts = automation.profile(PANEL.profile or 'host')
     local s, ox, oy = PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy
-    return table.concat({
-        PANEL.rw, PANEL.rh,
-        string.format('%.3f', s or 0), ox or 0, oy or 0,
-        tostring(PANEL.hover), tostring(PANEL.editing), tostring(PANEL.hint),
-        M.language.current(),
-        tostring(PANEL.edit_text), tostring(PANEL.edit_field),
-        PANEL.pos and PANEL.pos.fx or '-', PANEL.pos and PANEL.pos.fy or '-',
-        tostring(PANEL.ui_scale or 1),
-        draft.name, draft.mode, draft.time, draft.message,
-        PANEL.profile or 'host', automation.state.active_role or '-', opts.output,
-        tostring(PANEL.settings_view), opts and tostring(opts.enabled) or '-',
-        tostring(PANEL.rule_view),tostring(PANEL.rule_selected),tostring(PANEL.rule_page),
-        tostring(PANEL.rule_filter),tostring(PANEL.rule_search),tostring(automation.state.rule_revision),
-        tostring(PANEL.preset_view), tostring(PANEL.preset_selected_by_role and PANEL.preset_selected_by_role[PANEL.profile or 'host']),
-        tostring(PANEL.preset_page_by_role and PANEL.preset_page_by_role[PANEL.profile or 'host']),
-        tostring(PANEL.preset_name), tostring(PANEL.preset_path),
-        tostring(preset_library.state.revision), tostring(preset_library.state.error),
-        tostring(stratagem_catalog.state.generation),tostring(stratagem_catalog.state.status),
-        tostring(opts.ping_small_enemy),tostring(opts.ping_flying_enemy),
-        opts and tostring(opts.allow_solo) or '-',
-        opts and tostring(opts.welcome) or '-', opts and opts.welcome_message or '-',
-        opts and opts.cooldown or '-', opts and opts.welcome_delay or '-',
-        opts and tostring(opts.ping) or '-', opts and opts.ping_message or '-',
-        opts and tostring(opts.ping_summon) or '-', opts and opts.summon_message or '-',
-        opts and opts.task_stratagem_message or '-', tostring(M.task_stratagem_status),
-        opts and tostring(opts.ping_building) or '-', opts and tostring(opts.ping_stratagem) or '-', opts and tostring(opts.ping_medium_enemy) or '-',
-        opts and tostring(opts.ping_large_enemy) or '-', opts and tostring(opts.ping_giant_enemy) or '-',
-        opts and tostring(opts.ping_map) or '-', opts and tostring(opts.ping_sender_prefix) or '-',
-        opts and tostring(opts.ping_sender_color) or '-', tostring(M.ping_status),
-        task_revision, PANEL.task_page or 1,
-        cfg.timer_on and 'on' or 'off', cfg.interval,
-        string.format('%.0f', cfg.elapsed), cfg.message,
-        tostring(M.sent or 0), tostring(M.last_peers or '-'),
-        M.version, PANEL.version,
-        tostring(PANEL.active_plugin), REGISTRY.signature(), tostring(PANEL.tab_page or 1),
-        M.last_send and ((M.last_send.ok and 'ok:' or 'no:') .. tostring(M.last_send.why)) or '-',
-    }, '|')
+    local initial = frame.signature == nil
+    frame.changed = initial
+    do local value = PANEL.rw
+        if initial or frame.raw[1] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[1]~=1/value) then
+            frame.raw[1] = value
+            frame.parts[1] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.rh
+        if initial or frame.raw[2] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[2]~=1/value) then
+            frame.raw[2] = value
+            frame.parts[2] = tostring(value); frame.changed = true
+        end end
+    do local value = s or 0
+        if initial or frame.raw[3] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[3]~=1/value) then
+            frame.raw[3] = value
+            local text = string.format('%.3f', value)
+            if frame.parts[3] ~= text then frame.parts[3] = text; frame.changed = true end
+        end end
+    do local value = ox or 0
+        if initial or frame.raw[4] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[4]~=1/value) then
+            frame.raw[4] = value
+            frame.parts[4] = tostring(value); frame.changed = true
+        end end
+    do local value = oy or 0
+        if initial or frame.raw[5] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[5]~=1/value) then
+            frame.raw[5] = value
+            frame.parts[5] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.hover
+        if initial or frame.raw[6] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[6]~=1/value) then
+            frame.raw[6] = value
+            frame.parts[6] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.editing
+        if initial or frame.raw[7] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[7]~=1/value) then
+            frame.raw[7] = value
+            frame.parts[7] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.hint
+        if initial or frame.raw[8] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[8]~=1/value) then
+            frame.raw[8] = value
+            frame.parts[8] = tostring(value); frame.changed = true
+        end end
+    do local value = M.language.current()
+        if initial or frame.raw[9] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[9]~=1/value) then
+            frame.raw[9] = value
+            frame.parts[9] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.edit_text
+        if initial or frame.raw[10] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[10]~=1/value) then
+            frame.raw[10] = value
+            frame.parts[10] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.edit_field
+        if initial or frame.raw[11] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[11]~=1/value) then
+            frame.raw[11] = value
+            frame.parts[11] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.pos and PANEL.pos.fx or '-'
+        if initial or frame.raw[12] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[12]~=1/value) then
+            frame.raw[12] = value
+            frame.parts[12] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.pos and PANEL.pos.fy or '-'
+        if initial or frame.raw[13] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[13]~=1/value) then
+            frame.raw[13] = value
+            frame.parts[13] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.ui_scale or 1
+        if initial or frame.raw[14] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[14]~=1/value) then
+            frame.raw[14] = value
+            frame.parts[14] = tostring(value); frame.changed = true
+        end end
+    do local value = draft.name
+        if initial or frame.raw[15] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[15]~=1/value) then
+            frame.raw[15] = value
+            frame.parts[15] = tostring(value); frame.changed = true
+        end end
+    do local value = draft.mode
+        if initial or frame.raw[16] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[16]~=1/value) then
+            frame.raw[16] = value
+            frame.parts[16] = tostring(value); frame.changed = true
+        end end
+    do local value = draft.time
+        if initial or frame.raw[17] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[17]~=1/value) then
+            frame.raw[17] = value
+            frame.parts[17] = tostring(value); frame.changed = true
+        end end
+    do local value = draft.message
+        if initial or frame.raw[18] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[18]~=1/value) then
+            frame.raw[18] = value
+            frame.parts[18] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.profile or 'host'
+        if initial or frame.raw[19] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[19]~=1/value) then
+            frame.raw[19] = value
+            frame.parts[19] = tostring(value); frame.changed = true
+        end end
+    do local value = automation.state.active_role or '-'
+        if initial or frame.raw[20] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[20]~=1/value) then
+            frame.raw[20] = value
+            frame.parts[20] = tostring(value); frame.changed = true
+        end end
+    do local value = opts.output
+        if initial or frame.raw[21] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[21]~=1/value) then
+            frame.raw[21] = value
+            frame.parts[21] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.settings_view
+        if initial or frame.raw[22] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[22]~=1/value) then
+            frame.raw[22] = value
+            frame.parts[22] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.enabled) or '-'
+        if initial or frame.raw[23] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[23]~=1/value) then
+            frame.raw[23] = value
+            frame.parts[23] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.rule_view
+        if initial or frame.raw[24] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[24]~=1/value) then
+            frame.raw[24] = value
+            frame.parts[24] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.rule_selected
+        if initial or frame.raw[25] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[25]~=1/value) then
+            frame.raw[25] = value
+            frame.parts[25] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.rule_page
+        if initial or frame.raw[26] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[26]~=1/value) then
+            frame.raw[26] = value
+            frame.parts[26] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.rule_filter
+        if initial or frame.raw[27] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[27]~=1/value) then
+            frame.raw[27] = value
+            frame.parts[27] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.rule_search
+        if initial or frame.raw[28] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[28]~=1/value) then
+            frame.raw[28] = value
+            frame.parts[28] = tostring(value); frame.changed = true
+        end end
+    do local value = automation.state.rule_revision
+        if initial or frame.raw[29] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[29]~=1/value) then
+            frame.raw[29] = value
+            frame.parts[29] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.preset_view
+        if initial or frame.raw[30] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[30]~=1/value) then
+            frame.raw[30] = value
+            frame.parts[30] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.preset_selected_by_role and PANEL.preset_selected_by_role[PANEL.profile or 'host']
+        if initial or frame.raw[31] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[31]~=1/value) then
+            frame.raw[31] = value
+            frame.parts[31] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.preset_page_by_role and PANEL.preset_page_by_role[PANEL.profile or 'host']
+        if initial or frame.raw[32] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[32]~=1/value) then
+            frame.raw[32] = value
+            frame.parts[32] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.preset_name
+        if initial or frame.raw[33] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[33]~=1/value) then
+            frame.raw[33] = value
+            frame.parts[33] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.preset_path
+        if initial or frame.raw[34] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[34]~=1/value) then
+            frame.raw[34] = value
+            frame.parts[34] = tostring(value); frame.changed = true
+        end end
+    do local value = preset_library.state.revision
+        if initial or frame.raw[35] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[35]~=1/value) then
+            frame.raw[35] = value
+            frame.parts[35] = tostring(value); frame.changed = true
+        end end
+    do local value = preset_library.state.error
+        if initial or frame.raw[36] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[36]~=1/value) then
+            frame.raw[36] = value
+            frame.parts[36] = tostring(value); frame.changed = true
+        end end
+    do local value = stratagem_catalog.state.generation
+        if initial or frame.raw[37] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[37]~=1/value) then
+            frame.raw[37] = value
+            frame.parts[37] = tostring(value); frame.changed = true
+        end end
+    do local value = stratagem_catalog.state.status
+        if initial or frame.raw[38] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[38]~=1/value) then
+            frame.raw[38] = value
+            frame.parts[38] = tostring(value); frame.changed = true
+        end end
+    do local value = opts.ping_small_enemy
+        if initial or frame.raw[39] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[39]~=1/value) then
+            frame.raw[39] = value
+            frame.parts[39] = tostring(value); frame.changed = true
+        end end
+    do local value = opts.ping_flying_enemy
+        if initial or frame.raw[40] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[40]~=1/value) then
+            frame.raw[40] = value
+            frame.parts[40] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.allow_solo) or '-'
+        if initial or frame.raw[41] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[41]~=1/value) then
+            frame.raw[41] = value
+            frame.parts[41] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.welcome) or '-'
+        if initial or frame.raw[42] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[42]~=1/value) then
+            frame.raw[42] = value
+            frame.parts[42] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and opts.welcome_message or '-'
+        if initial or frame.raw[43] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[43]~=1/value) then
+            frame.raw[43] = value
+            frame.parts[43] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and opts.cooldown or '-'
+        if initial or frame.raw[44] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[44]~=1/value) then
+            frame.raw[44] = value
+            frame.parts[44] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and opts.welcome_delay or '-'
+        if initial or frame.raw[45] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[45]~=1/value) then
+            frame.raw[45] = value
+            frame.parts[45] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping) or '-'
+        if initial or frame.raw[46] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[46]~=1/value) then
+            frame.raw[46] = value
+            frame.parts[46] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and opts.ping_message or '-'
+        if initial or frame.raw[47] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[47]~=1/value) then
+            frame.raw[47] = value
+            frame.parts[47] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_summon) or '-'
+        if initial or frame.raw[48] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[48]~=1/value) then
+            frame.raw[48] = value
+            frame.parts[48] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and opts.summon_message or '-'
+        if initial or frame.raw[49] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[49]~=1/value) then
+            frame.raw[49] = value
+            frame.parts[49] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and opts.task_stratagem_message or '-'
+        if initial or frame.raw[50] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[50]~=1/value) then
+            frame.raw[50] = value
+            frame.parts[50] = tostring(value); frame.changed = true
+        end end
+    do local value = M.task_stratagem_status
+        if initial or frame.raw[51] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[51]~=1/value) then
+            frame.raw[51] = value
+            frame.parts[51] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_building) or '-'
+        if initial or frame.raw[52] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[52]~=1/value) then
+            frame.raw[52] = value
+            frame.parts[52] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_stratagem) or '-'
+        if initial or frame.raw[53] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[53]~=1/value) then
+            frame.raw[53] = value
+            frame.parts[53] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_medium_enemy) or '-'
+        if initial or frame.raw[54] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[54]~=1/value) then
+            frame.raw[54] = value
+            frame.parts[54] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_large_enemy) or '-'
+        if initial or frame.raw[55] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[55]~=1/value) then
+            frame.raw[55] = value
+            frame.parts[55] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_giant_enemy) or '-'
+        if initial or frame.raw[56] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[56]~=1/value) then
+            frame.raw[56] = value
+            frame.parts[56] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_map) or '-'
+        if initial or frame.raw[57] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[57]~=1/value) then
+            frame.raw[57] = value
+            frame.parts[57] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_sender_prefix) or '-'
+        if initial or frame.raw[58] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[58]~=1/value) then
+            frame.raw[58] = value
+            frame.parts[58] = tostring(value); frame.changed = true
+        end end
+    do local value = opts and tostring(opts.ping_sender_color) or '-'
+        if initial or frame.raw[59] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[59]~=1/value) then
+            frame.raw[59] = value
+            frame.parts[59] = tostring(value); frame.changed = true
+        end end
+    do local value = M.ping_status
+        if initial or frame.raw[60] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[60]~=1/value) then
+            frame.raw[60] = value
+            frame.parts[60] = tostring(value); frame.changed = true
+        end end
+    do local value = task_revision
+        if initial or frame.raw[61] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[61]~=1/value) then
+            frame.raw[61] = value
+            frame.parts[61] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.task_page or 1
+        if initial or frame.raw[62] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[62]~=1/value) then
+            frame.raw[62] = value
+            frame.parts[62] = tostring(value); frame.changed = true
+        end end
+    do local value = cfg.timer_on and 'on' or 'off'
+        if initial or frame.raw[63] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[63]~=1/value) then
+            frame.raw[63] = value
+            frame.parts[63] = tostring(value); frame.changed = true
+        end end
+    do local value = cfg.interval
+        if initial or frame.raw[64] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[64]~=1/value) then
+            frame.raw[64] = value
+            frame.parts[64] = tostring(value); frame.changed = true
+        end end
+    do local value = cfg.elapsed
+        if initial or frame.raw[65] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[65]~=1/value) then
+            frame.raw[65] = value
+            local text = string.format('%.0f', value)
+            if frame.parts[65] ~= text then frame.parts[65] = text; frame.changed = true end
+        end end
+    do local value = cfg.message
+        if initial or frame.raw[66] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[66]~=1/value) then
+            frame.raw[66] = value
+            frame.parts[66] = tostring(value); frame.changed = true
+        end end
+    do local value = M.sent or 0
+        if initial or frame.raw[67] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[67]~=1/value) then
+            frame.raw[67] = value
+            frame.parts[67] = tostring(value); frame.changed = true
+        end end
+    do local value = M.last_peers or '-'
+        if initial or frame.raw[68] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[68]~=1/value) then
+            frame.raw[68] = value
+            frame.parts[68] = tostring(value); frame.changed = true
+        end end
+    do local value = M.version
+        if initial or frame.raw[69] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[69]~=1/value) then
+            frame.raw[69] = value
+            frame.parts[69] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.version
+        if initial or frame.raw[70] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[70]~=1/value) then
+            frame.raw[70] = value
+            frame.parts[70] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.active_plugin
+        if initial or frame.raw[71] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[71]~=1/value) then
+            frame.raw[71] = value
+            frame.parts[71] = tostring(value); frame.changed = true
+        end end
+    do local value = REGISTRY.signature()
+        if initial or frame.raw[72] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[72]~=1/value) then
+            frame.raw[72] = value
+            frame.parts[72] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.tab_page or 1
+        if initial or frame.raw[73] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[73]~=1/value) then
+            frame.raw[73] = value
+            frame.parts[73] = tostring(value); frame.changed = true
+        end end
+    do local value = M.last_send and ((M.last_send.ok and 'ok:' or 'no:') .. tostring(M.last_send.why)) or '-'
+        if initial or frame.raw[74] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[74]~=1/value) then
+            frame.raw[74] = value
+            frame.parts[74] = tostring(value); frame.changed = true
+        end end
+    if frame.changed then
+        frame.epoch = (frame.epoch or 0) + 1
+        frame.signature = table.concat(frame.parts, '|')
+    end
+    return frame.signature
+end
+local function panel_signature()
+    local cache = PANEL._signature_cache
+    cache.depth = cache.depth + 1
+    local depth = cache.depth
+    local frame = cache.frames[depth]
+    if not frame then frame = {raw={},parts={}}; cache.frames[depth] = frame end
+    local ok, result = pcall(cache.collect, frame)
+    cache.depth = depth - 1
+    if not ok then error(result, 0) end
+    return result
 end
 
 -- The plugin selected in the tab strip; nil means the default settings.
@@ -6598,6 +7412,20 @@ local function draw_panel()
         return pcall(Gui.bitmap_uv,gui,id,Vector2(0,0),Vector2(1,1),
             Vector3(px(ox+x*s),px(height-oy-(y+size)*s),953),Vector2(px(size*s),px(size*s)),color(255,255,255,255))
     end
+    UX.image=function(hash,x,y,w,h,tint,z)
+        if type(hash)~='string' or #hash~=16 or not hash:match('^%x+$')
+            or not sr.IdString64 or type(sr.IdString64.from_hex)~='function'
+            or type(Gui.bitmap_uv)~='function' or not resource_loaded('material',hash) then
+            return false,'material_unavailable'
+        end
+        local ok,id=pcall(sr.IdString64.from_hex,hash)
+        if not ok or not id then return false,'material_unavailable' end
+        local drawn,why=pcall(Gui.bitmap_uv,gui,id,Vector2(0,0),Vector2(1,1),
+            Vector3(px(ox+x*s),px(height-oy-(y+h)*s),z or 953),
+            Vector2(px(w*s),px(h*s)),tint or color(255,255,255,255))
+        if not drawn then return false,'image_draw_failed' end
+        return true
+    end
 
     -- ---- frame: Armory's exact structure -------------------------------------
     --   * full-bleed background at z950, a 1px border at z955, and the game's thin
@@ -6620,7 +7448,9 @@ local function draw_panel()
     region('drag', 0, 0, W, 32)
 
     local mx = text('AUTOCHAT', PAD, 12, 11, C.MUTED)
-    text(PANEL.hover == 'drag' and '拖动移动窗口 / Ctrl+0 复位' or 'AUTOMATIC SQUAD CHAT',
+    text(PANEL.hover == 'drag'
+         and M.language.text('拖动移动窗口 / Ctrl+0 复位', 'Drag to move / Ctrl+0 to reset')
+         or 'AUTOMATIC SQUAD CHAT',
          PAD + mx + 12, 12, 11, C.TEXT)
     text('v' .. M.version, W - PAD, 12, 11, C.DIM, nil, 'right')
     rect(0, 32, W, 1, C.LINE, 951)
@@ -6696,7 +7526,10 @@ local function draw_panel()
     local tabs = {{key = 'tab:default', title = M.language.text('设置','SETTINGS'), id = nil}}
     for i = 1, #M.PLUGINS do
         tabs[#tabs + 1] = {key = 'tab:' .. M.PLUGINS[i].id,
-                           title = M.PLUGINS[i].title, id = M.PLUGINS[i].id}
+                           title = M.language.current() == 'en'
+                               and (M.PLUGINS[i].name_en or M.PLUGINS[i].title)
+                               or M.PLUGINS[i].title,
+                           id = M.PLUGINS[i].id}
     end
     if PANEL.active_plugin and not M.PLUGIN_BY_ID[PANEL.active_plugin] then
         PANEL.active_plugin = nil                       -- it unregistered itself
@@ -6725,10 +7558,15 @@ local function draw_panel()
     -- ---------------------------------------------------------- plugin body
     local active = PANEL.active_plugin and M.PLUGIN_BY_ID[PANEL.active_plugin] or nil
     if active then
-        local ok, result, err = pcall(active.draw, plugin_api({
+        local plugin_context = {
             id = active.id, w = W_PANEL, h = H_PANEL,
             ox = PAD, oy = body_y + 10,
-        }), {body_y = body_y, panel_w = W_PANEL, panel_h = H_PANEL})
+            content_w = W_PANEL - 2 * PAD, content_h = H_PANEL - (body_y + 10) - PAD,
+            panel_w = W_PANEL, panel_h = H_PANEL, body_y = body_y, scale = s,
+            language = M.language.current(),
+            loaded_icon = PANEL.loaded_plugin_icon(),
+        }
+        local ok, result, err = pcall(active.draw, plugin_api(plugin_context), plugin_context)
         if not ok or result == false and active.last_error then
             -- A third-party draw runs inside this panel's frame. Drop it for the
             -- session with its name in the log rather than faulting every frame.
@@ -6745,6 +7583,11 @@ local function draw_panel()
         UX.width, UX.panel_h = width, H_PANEL
         PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy = s, ox, oy
         return
+    end
+    if PANEL.plugin_icon_cache then
+        PANEL.plugin_icon_cache.open = false
+        PANEL.plugin_icon_cache.icon = nil
+        PANEL.plugin_icon_cache.next_scan = 0
     end
 
     -- ---------------------------------------------------------- settings body
@@ -6979,6 +7822,10 @@ set_panel_open = function(open)
         PANEL.armed, mouse_was_down = nil, nil
         take_cursor()
     else
+        if PANEL.plugin_icon_cache then
+            PANEL.plugin_icon_cache.open, PANEL.plugin_icon_cache.icon = false, nil
+            PANEL.plugin_icon_cache.next_scan = 0
+        end
         stop_text_input()
         panel_input.release()
         if PANEL.drag then PANEL.drag = nil; pcall(save_position) end
@@ -7834,7 +8681,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.8.3 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v1.0.0 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -7850,6 +8697,11 @@ no input lock.
 Before anything is sent, five machine-code signatures are checked against the
 running game.dll. If any does not match, the mod goes dormant and says which one
 changed: an unverified address is an arbitrary address.
+
+Panel redraw signatures cache their raw values and rebuild only when displayed
+content changes. Ping and stratagem events rejected only for transient readiness
+or queue capacity are retried while their native marker remains valid; accepted
+messages are never evicted to make room. Plugin event notifications are sent once.
 
 Custom alert rules and Unicode input (0.8.3)
 Settings > Ping > Stratagem rules / Enemy rules opens the dedicated editors.
@@ -7875,12 +8727,13 @@ Scanning never calls native localization in bulk. Event messages prefer the
 event-time localized name, then the mapped display name. In-game IME input is
 handled through queued window-thread messages; physical in-game entry still needs
 verification for this candidate.
+One user-sampled Super Earth cache resource uses the exact-hash fallback label "坠落舱" when its native name is generic; this is not official localization and does not cover other cache resources. The tower-top marker follows its existing path; the user confirmed the tower-base generic point should remain unsupported.
 中文：设置→标记消息→战备细分设置 / 敌人体型与飞行提醒。
 空消息沿用默认；冷却留空使用全局，独立秒数按触发者+规则计时，0绕过全局。
 500千克炸弹和轨道凝固汽油弹幕首次升级预设0秒；可编辑或恢复默认。
 战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
 图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
-语言按游戏设置自动切换。当前149项战备有简体中文展示名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。六种已核实的SEAF炮弹走现有任务建筑提醒。游戏内IME输入仍待实机验收。
+语言按游戏设置自动切换。当前149项战备有简体中文展示名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。六种已核实的SEAF炮弹走现有任务建筑提醒。一个经用户实机样本核对的Super Earth cache资源在泛名称时回退显示“坠落舱”；这不是官方本地化，也不覆盖其他cache资源。广播塔顶端标记沿用既有路径；用户确认塔底泛型点不需适配。游戏内IME输入仍待实机验收。
 不能确定具体变体时不冒认ID；连同名规则也无法确定时使用默认提醒。
 飞行优先于体型；小型默认关闭；当前142条可标记敌对资源，12条飞行。
 新增战备在兼容布局下自动发现；新敌人及游戏二进制更新仍需校验。
@@ -7966,9 +8819,11 @@ Tasks and addon sends without a trigger use the local-player timer. Default 5s,
 Player placeholders work in welcome/ping/task/addon messages: {玩家名} (name),
 {缩写} (HUD label, e.g. A2), {编号} (actual squad slot, e.g. 2). {名字} and
 {触发者} alias the name. Missing profile: 队友 / 队友 / ?. Unknown tokens remain literal.
-HD2AutoChatAPI v2 registers named tabs beside SETTINGS, buttons, click/event callbacks
-and policy-governed sends. The separately packaged Interface Demo registers a passive
-example tab with an event counter switch and a test-send button. Settings persist in:
+HD2AutoChatAPI keeps the v2 handshake and adds revision 3 capabilities for independent
+sends, detached role settings snapshots, and bounded drawing helpers. The separately
+packaged Interface Demo registers a manual example tab; it does not subscribe to live
+events or send on load. The release ZIP includes plugin-author guides under Docs/.
+Settings persist in:
 
   %LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\tasks.txt
   %LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\settings.txt
@@ -8023,8 +8878,10 @@ Files / 文件位置
 同时加入的新人各有独立欢迎队列，逐条发送；定时任务与不指定触发者的扩展发送使用本机玩家间隔。
 欢迎、标记、定时任务与扩展消息支持 {玩家名}/{缩写}/{编号}；{名字}/{触发者}也是名字。
 例如：欢迎 {玩家名}（{缩写}，{编号}号）加入小队！ 数据缺失时显示“队友/队友/?”，不猜编号。
-其他模组可通过 HD2AutoChatAPI v2 注册显示名菜单、按钮、点击与标记回调及统一策略发送。
-独立接口示例包注册“接口示例”，含计数开关和发送测试按钮；加载时不自动发送。
+其他模组可通过 HD2AutoChatAPI v2 注册显示名菜单、按钮与可选事件回调。revision 3
+保留旧握手，并新增独立发送策略、当前角色设置副本和边界受限的绘图接口；独立发送仍由宿主检查会话、身份与原生发送入口。
+独立接口示例包注册“接口示例”，提供手动发送；加载和绘制时不发送，也不订阅实时事件。
+主包 ZIP 的 `Docs/` 目录包含插件 API 与接口示例指南。
 设置保存在 `AutoChat\tasks.txt`；旧版已启用的单计时器迁移成可见任务。
 
 按 K 呼出；退出输入后再按 K，或点右上角 X 关闭。

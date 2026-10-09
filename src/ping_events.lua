@@ -711,6 +711,7 @@ local function build_ping_events(env)
         assert(header:byte(1) == 1 or map_scene, 'ping UI inactive')
         local function token(bytes)
             return bytes:sub(1,4)..bytes:sub(17,20)..bytes:sub(25,28)..bytes:sub(33,36)
+                .. bytes:sub(53,56)
                 .. string.char(math.floor(u32(bytes,0x1c)/0x2000)%2)
                 .. (u32(bytes,0)==21 and bytes:sub(5,16) or '')
         end
@@ -880,7 +881,9 @@ local function build_ping_events(env)
             local info = mission or enemy or PING_TARGETS[resource]
             if special then
                 if read(address, 24) ~= identity then return nil, 'retry' end
-                return {category='building',target=selected_name(special),target_id=entry.target_id,
+                local target = localized and not generic_name(localized, entry.localization_key)
+                    and localized or selected_name(special)
+                return {category='building',target=target,target_id=entry.target_id,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -957,21 +960,34 @@ local function build_ping_events(env)
         local next_seen, events = {}, {}
         for _, entry in ipairs(snapshot.entries) do
             local previous = state.seen[entry.slot]
-            local fresh = not previous or previous.pending or previous.token ~= entry.token or entry.age < previous.age
+            local token_changed = not previous or previous.token ~= entry.token
+            local age_reset = previous and entry.age < previous.age
+            local fresh = token_changed or age_reset or previous.pending or previous.pending_emit
             next_seen[entry.slot] = {token = entry.token, age = entry.age}
             if not first and not (entry.map_source and first_map) and fresh then
-                local good, event, reason = pcall(snapshot.target, entry)
-                if not good or reason == 'retry' then
-                    -- A target can finish streaming after its ping arrives. Preserve
-                    -- freshness until it resolves or the native mark expires.
-                    next_seen[entry.slot] = {token=entry.token, age=entry.age, pending=true}
+                local event, reason
+                local reusable = not token_changed and not age_reset and previous.pending_emit
+                    and type(previous.event) == 'table'
+                if reusable then
+                    event = previous.event
+                else
+                    local good
+                    good, event, reason = pcall(snapshot.target, entry)
+                    if not good or reason == 'retry' then
+                        -- A target can finish streaming after its ping arrives. Preserve
+                        -- freshness until it resolves or the native mark expires.
+                        next_seen[entry.slot] = {token=entry.token, age=entry.age, pending=true}
+                        event = nil
+                    end
                 end
-                if good and event then
-                    state.serial = state.serial+1
-                    -- Every legitimate renewal gets a distinct key even for the same
-                    -- target and slot; the caller's queue can dedupe repeated polls.
-                    event.key = snapshot.scene..':'..state.generation..':'..state.serial
-                    event.id = event.key
+                if event then
+                    if not reusable then
+                        state.serial = state.serial+1
+                        -- Every legitimate renewal gets a distinct key even for the same
+                        -- target and slot; the caller's queue can dedupe repeated polls.
+                        event.key = snapshot.scene..':'..state.generation..':'..state.serial
+                        event.id = event.key
+                    end
                     events[#events+1] = event
                 end
             end
@@ -993,8 +1009,15 @@ local function build_ping_events(env)
             if not stable or not same then
                 reset('标记数据切换中'); return emitted, state.status
             end
-            local success, accepted = pcall(env.emit, event, now)
+            local success, accepted, disposition = pcall(env.emit, event, now)
             if success and accepted == true then emitted = emitted+1 end
+            if success and accepted == false and disposition == 'retry' then
+                local pending = state.seen[event.slot]
+                if pending and pending.token then
+                    state.seen[event.slot] = {token=pending.token, age=pending.age,
+                        pending_emit=true, event=event}
+                end
+            end
         end
         state.status = first and '已记录现有标记' or emitted > 0 and '已识别玩家标记' or '等待新的玩家标记'
         return emitted, state.status

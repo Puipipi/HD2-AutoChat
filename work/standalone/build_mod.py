@@ -41,17 +41,16 @@ MOD_SOURCE = os.path.join(W, "..", "..", "src", "auto_chat.lua")
 RESOURCE = "mods/codex/auto_chat"                 # mods/<author>/<entry>, underscore only
 GUID = "a1000000-0000-4000-8000-000000000022"     # reused across every release
 DISPLAY_NAME = "AutoChat"
-ICON = None                                       # no icon shipped; a manifest pointing
-                                                  # at a missing IconPath shows blank
+ICON = os.path.join(W, "..", "..", "assets", "cover-autochat.png")
 README_MARKER = "[===[AutoChat"
 VENDOR = os.path.join(W, "vendor", "bingus")
-OUTPUT_DIR = None                                 # None = ./dist next to this script
+OUTPUT_DIR = None                                 # None = repository ./dist
 
 USER32 = {"GetCursorPos", "GetClientRect", "ScreenToClient", "GetForegroundWindow",
           "GetAsyncKeyState", "GetWindowThreadProcessId", "GetCurrentProcessId"}
 # ------------------------------------------------------------------------------
 
-default_out = Path(OUTPUT_DIR) if OUTPUT_DIR else Path(W) / "dist"
+default_out = Path(OUTPUT_DIR) if OUTPUT_DIR else Path(W).resolve().parents[1] / "dist"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output-dir", type=Path, default=default_out)
 parser.add_argument("--validate-only", action="store_true",
@@ -61,6 +60,14 @@ OUT = str(args.output_dir.resolve())
 Path(OUT).mkdir(parents=True, exist_ok=True)
 
 src = io.open(MOD_SOURCE, encoding="utf-8").read()
+DOCS = [os.path.join(W, "..", "..", "docs", name)
+        for name in ("PLUGIN-API.md", "INTERFACE-DEMO.md")]
+if any(not os.path.isfile(path) for path in DOCS):
+    raise SystemExit("FAIL required plugin documentation is missing")
+if os.path.isfile(ICON):
+    with open(ICON, "rb") as cover_file:
+        if cover_file.read(8) != b"\x89PNG\r\n\x1a\n":
+            raise SystemExit("FAIL cover image is not a PNG file")
 input_fragment = Path(MOD_SOURCE).with_name('panel_input.lua').read_text(encoding='utf-8').rstrip()
 if ('-- BEGIN ARMORY INPUT\n' + input_fragment + '\n-- END ARMORY INPUT') not in src:
     raise SystemExit('FAIL embedded panel input differs from independently tested source fragment')
@@ -80,8 +87,13 @@ if render_enemy_catalog() not in ping_fragment:
 for fragment, marker in [('peer_identity', 'PEER IDENTITY'), ('plugin_registry', 'PLUGIN REGISTRY'),
                          ('marker_localization', 'MARKER LOCALIZATION'), ('stratagem_events', 'STRATAGEM EVENTS'),
                          ('stratagem_catalog', 'STRATAGEM CATALOG'), ('alert_panel', 'ALERT PANEL'),
-                         ('preset_library', 'PRESET LIBRARY'), ('preset_panel', 'PRESET PANEL')]:
+                         ('preset_library', 'PRESET LIBRARY'), ('preset_panel', 'PRESET PANEL'),
+                         ('plugin_ui', 'PLUGIN UI')]:
     content = Path(MOD_SOURCE).with_name(fragment + '.lua').read_text(encoding='utf-8').rstrip()
+    if fragment == 'plugin_ui':
+        content = content.replace('local function build_plugin_ui(',
+                                  'M.build_plugin_ui = function(', 1)
+        content = re.sub(r'\nreturn build_plugin_ui$', '', content)
     if ('-- BEGIN ' + marker + '\n' + content + '\n-- END ' + marker) not in src:
         raise SystemExit('FAIL embedded ' + fragment + ' differs from independently tested source fragment')
 ver = re.search(r"version\s*=\s*['\"]([\d.]+)['\"]", src).group(1)
@@ -154,7 +166,7 @@ with zipfile.ZipFile(target) as zin:
             data = zin.read(info.filename)
             if info.filename == "manifest.json" and have_icon:
                 m = json.loads(data)
-                m["IconPath"] = os.path.basename(ICON)
+                m["IconPath"] = "cover-autochat.png"
                 for opt in m.get("Options", []):
                     opt.setdefault("Image", os.path.basename(ICON))
                 data = (json.dumps(m, indent=2) + "\n").encode()
@@ -162,6 +174,8 @@ with zipfile.ZipFile(target) as zin:
         if have_icon:
             zout.write(ICON, os.path.basename(ICON))
         zout.writestr("README.txt", readme_txt.replace("\n", "\r\n"))
+        for path in DOCS:
+            zout.write(path, "Docs/" + os.path.basename(path))
 os.replace(tmp, target)
 print("built %s: %d bytes" % (os.path.basename(target), os.path.getsize(target)))
 print("version: %s" % ver)

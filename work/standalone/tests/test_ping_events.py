@@ -17,6 +17,7 @@ class PingEventsTests(unittest.TestCase):
     def setUp(self):
         self.assertTrue(SOURCE.exists(), 'native ping adapter is not implemented')
         self.mem, self.events = {}, []
+        self.emit_results = []
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         self.base, self.emit_ok = BASE, True
         self.session = 'session-a'
@@ -67,6 +68,8 @@ class PingEventsTests(unittest.TestCase):
 
     def emit(self, event, now):
         self.events.append((dict(event), now))
+        if self.emit_results:
+            return self.emit_results.pop(0)
         return self.emit_ok
 
     def hash(self, address, slots, values):
@@ -243,6 +246,22 @@ class PingEventsTests(unittest.TestCase):
                 self.assertEqual(len(self.events),1)
                 self.assertEqual(self.events[0][0]['category'],'building')
                 self.assertEqual(self.events[0][0]['target'],name)
+
+    def test_verified_salute_cache_resource_resolves_generic_live_marker(self):
+        self.target('0ABED3586E397289');self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(kind=10,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(len(self.events),1)
+        self.assertEqual(self.events[0][0]['category'],'building')
+        self.assertEqual(self.events[0][0]['target'],'坠落舱')
+        self.assertEqual(self.events[0][0]['resource'],'0ABED3586E397289')
+
+    def test_verified_salute_cache_keeps_specific_native_label_and_unknowns_drop(self):
+        self.target('0ABED3586E397289');self.localized[987654321]='Salute for Freedom';self.poll(0)
+        self.mark(kind=10,localization_key=987654321);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'Salute for Freedom')
+        self.setUp();self.target('DEADBEEFDEADBEEF');self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(kind=10,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events,[])
 
     def test_spore_lung_and_bot_emplacements_are_named_task_sites(self):
         cases=[('DC901B71A3A73B9A','孢肺'),('FF5CC825B9571052','机器人迫击炮阵地'),
@@ -712,6 +731,81 @@ class PingEventsTests(unittest.TestCase):
         self.assertEqual(len(self.events), 1)
         self.mark(slot=127, age=1.5); self.poll(2); self.assertEqual(len(self.events), 1)
         self.mark(slot=127, age=0.05); self.poll(3); self.assertEqual(len(self.events), 2)
+
+    def test_non_map_position_change_does_not_repeat_active_marker(self):
+        self.poll(0); self.mark(position=(1, 2, 3)); self.header(0, 1); self.poll(1)
+        self.mark(age=0.2, position=(4, 5, 6)); self.poll(2)
+        self.assertEqual(len(self.events), 1)
+
+    def test_irrelevant_native_flag_change_does_not_repeat_active_marker(self):
+        self.poll(0); self.mark(flags=0); self.header(0, 1); self.poll(1)
+        self.mark(age=0.2, flags=0x10); self.poll(2)
+        self.assertEqual(len(self.events), 1)
+
+    def test_map_pin_position_change_remains_a_new_mark(self):
+        self.actors(); self.poll(0)
+        self.map_pin(kind=6, position=(10, 20, 0)); self.poll(1)
+        self.map_pin(kind=6, position=(30, 40, 0)); self.poll(2)
+        self.assertEqual(len(self.events), 2)
+
+    def test_explicit_transient_emit_refusal_retries_once_with_stable_key(self):
+        self.poll(0); self.mark(); self.header(0, 1)
+        self.emit_results = [(False, 'retry'), True]
+        self.poll(1)
+        emitted, _ = self.poll(2)
+        self.assertEqual(emitted, 1, 'a refused enqueue must remain pending for retry')
+        self.assertEqual(len(self.events), 2, 'the same active mark should be offered again')
+        self.assertEqual(self.events[0][0]['key'], self.events[1][0]['key'])
+        self.poll(3)
+        self.assertEqual(len(self.events), 2, 'an accepted retry must not be offered again')
+
+    def test_permanent_emit_refusal_is_not_retried(self):
+        self.poll(0); self.mark(); self.header(0, 1)
+        self.emit_results = [(False, 'category-disabled'), True]
+        self.poll(1); self.poll(2)
+        self.assertEqual(len(self.events), 1, 'permanent policy rejection consumes the mark')
+
+    def test_pending_emit_is_discarded_when_native_mark_expires(self):
+        self.poll(0); self.mark(); self.header(0, 1)
+        self.emit_results = [(False, 'retry'), True]
+        self.poll(1)
+        self.mark(age=8.0); self.poll(2)
+        self.assertEqual(len(self.events), 1, 'expired mark must not be retried')
+
+    def test_slot_reuse_replaces_pending_event_instead_of_replaying_it(self):
+        self.poll(0); self.mark(); self.header(0, 1)
+        self.emit_results = [(False, 'retry'), True]
+        self.poll(1)
+        self.target('57DB57121F3E7ED2')
+        self.mark(age=0.05,kind=18,localization_key=3585962803)
+        self.localized[3585962803] = '特殊地点'
+        self.poll(2)
+        self.assertEqual(len(self.events), 2)
+        self.assertEqual(self.events[1][0]['target'], '非法广播塔')
+        self.assertNotEqual(self.events[0][0]['key'], self.events[1][0]['key'])
+
+    def test_localization_key_change_invalidates_cached_retry_event(self):
+        self.poll(0)
+        self.localized.update({987: 'Rare sample', 988: 'Stim box'})
+        self.mark(kind=18,target=0,localization_key=987); self.header(0, 1)
+        self.emit_results = [(False, 'retry'), True]
+        self.poll(1)
+        self.mark(kind=18,target=0,age=0.2,localization_key=988)
+        self.poll(2)
+        self.assertEqual(self.events[1][0]['target'], 'Stim box')
+        self.assertNotEqual(self.events[0][0]['key'], self.events[1][0]['key'])
+
+    def test_session_change_discards_pending_emit_and_rebaselines(self):
+        self.poll(0); self.mark(); self.header(0, 1)
+        self.emit_results = [(False, 'retry'), True]
+        self.poll(1)
+        self.session = 'session-b'
+        self.poll(2)
+        self.assertEqual(len(self.events), 1, 'new session starts with a baseline')
+        self.emit_results = [True]
+        self.mark(age=0.05); self.poll(3)
+        self.assertEqual(len(self.events), 2, 'only a new mark in the session is offered')
+        self.assertNotEqual(self.events[0][0]['key'], self.events[1][0]['key'])
 
     def test_context_change_invalid_header_and_unverified_base_reset_baseline(self):
         for mutation in ['invalid_header', 'missing_base', 'context_change']:
