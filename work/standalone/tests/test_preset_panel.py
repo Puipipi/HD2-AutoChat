@@ -102,6 +102,38 @@ class PresetPanelTests(unittest.TestCase):
         self.assertEqual(before, len(mod.debug_preset_library().list('host')))
         self.assertIn('预设文件', p.hint)
 
+    def test_apply_names_the_destination_and_warns_when_active_role_differs(self):
+        lua,h,mod=self.fresh();self.click(lua,h,mod,'presets:open')
+        p=mod.debug_panel();a=mod.debug_automation()
+        p.profile='host'
+        lua.execute("stingray.GameSession.game_session_host=function() return tostring(0x00112233445567) end")
+        a.sync()
+        self.assertEqual('client',a.state.active_role)
+        mod.debug_language().update('zh',1)
+        p.preset_name='Host profile';self.click(lua,h,mod,'preset:save')
+        preset_id=p.preset_selected_by_role['host']
+        a.set('welcome_message','mutated host','host')
+        a.set('welcome_message','client stays','client')
+        self.click(lua,h,mod,'preset:apply')
+        self.assertEqual('欢迎加入小队！',a.profile('host').welcome_message)
+        self.assertEqual('client stays',a.profile('client').welcome_message)
+        self.assertIn('主机',p.hint)
+        self.assertIn('客机',p.hint)
+
+    def test_apply_does_not_claim_match_when_role_sync_is_unknown(self):
+        lua,h,mod=self.fresh();self.click(lua,h,mod,'presets:open')
+        p=mod.debug_panel();a=mod.debug_automation()
+        p.profile='host';p.preset_name='Host profile'
+        self.click(lua,h,mod,'preset:save')
+        # The automation constructor's cached value is host, but no session host
+        # is available now. Applying a host preset must not treat that cache as proof.
+        a.state.active_role='host'
+        lua.execute("stingray.GameSession.game_session_host=function() return nil end")
+        self.assertIsNone(a.sync())
+        self.click(lua,h,mod,'preset:apply')
+        self.assertIn('session role is not confirmed',p.hint)
+        self.assertNotIn('active role matches',p.hint)
+
     def test_preset_page_regions_fit_and_all_32_entries_are_paginated(self):
         lua, h, mod = self.fresh()
         library = mod.debug_preset_library()
@@ -224,6 +256,7 @@ class PresetPanelTests(unittest.TestCase):
 
     def test_saved_output_preview_preserves_client_only_until_explicit_apply(self):
         lua, h, mod = self.fresh()
+        mod.debug_language().update('zh', 0)
         automation = mod.debug_automation()
         automation.set('output', 'squad', 'host')
         ok, _, host_preset_id = mod.debug_preset_library().save('Public host', 'host')

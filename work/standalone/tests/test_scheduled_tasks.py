@@ -11,6 +11,30 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertTrue(callable(mod.add_task), "settings needs a real task creation path")
         return lua, h, mod
 
+    def test_enabled_quick_timer_migrates_once_to_role_scoped_repeat_task(self):
+        _,_,mod=self.fresh();a=mod.debug_automation()
+        self.assertTrue(a.set('quick_timer_enabled',True,'host')[0])
+        self.assertTrue(a.set('quick_timer_interval',5,'host')[0])
+        self.assertTrue(a.set('quick_timer_message','host quick fixture','host')[0])
+        self.assertTrue(a.set('quick_timer_enabled',True,'client')[0])
+        self.assertTrue(a.set('quick_timer_interval',9,'client')[0])
+        self.assertTrue(a.set('quick_timer_message','client quick fixture','client')[0])
+        self.assertIsNotNone(mod.add_task('Existing host task','repeat','20','existing',1000,'host'))
+        self.assertTrue(mod.debug_migrate_quick_timer('host'))
+        self.assertTrue(mod.debug_migrate_quick_timer('client'))
+        self.assertTrue(mod.debug_migrate_quick_timer('host'))
+        self.assertFalse(a.profile('host').quick_timer_enabled)
+        self.assertFalse(a.profile('client').quick_timer_enabled)
+        migrated=[mod.tasks[i] for i in range(1,len(mod.tasks)+1)
+                  if mod.tasks[i].name=='旧版快捷定时' and mod.tasks[i].profile=='host']
+        self.assertEqual(1,len(migrated))
+        self.assertEqual(('repeat','5','host quick fixture'),
+                         (migrated[0].mode,migrated[0].time,migrated[0].message))
+        self.assertEqual(2,len([mod.tasks[i] for i in range(1,len(mod.tasks)+1)
+                                if mod.tasks[i].profile=='host']))
+        self.assertEqual(1,len([mod.tasks[i] for i in range(1,len(mod.tasks)+1)
+                                if mod.tasks[i].profile=='client']))
+
     def test_validation_rejects_bad_time_and_blank_message(self):
         _, _, mod = self.fresh()
         for mode, value, message in (("repeat", "0", "hi"), ("once", "abc", "hi"),
@@ -49,6 +73,7 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertTrue(automation.set('quick_timer_enabled', True, 'host')[0])
         self.assertTrue(automation.set('quick_timer_interval', 5, 'host')[0])
         self.assertTrue(automation.set('quick_timer_message', 'host quick fixture', 'host')[0])
+        self.assertTrue(mod.debug_migrate_quick_timer('host'))
         self.assertTrue(automation.set('quick_timer_enabled', False, 'client')[0])
         self.assertTrue(automation.set('quick_timer_message', 'client quick fixture', 'client')[0])
         self.assertTrue(automation.set_rule('stratagem', 4119049995, 'mark_message', 'host mark fixture', 'host')[0])
@@ -73,16 +98,19 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertEqual('host welcome fixture', automation.profile('host').welcome_message)
         self.assertEqual('squad', automation.profile('host').output)
         self.assertEqual(17, automation.profile('host').cooldown)
-        self.assertTrue(automation.profile('host').quick_timer_enabled)
-        self.assertEqual(5, automation.profile('host').quick_timer_interval)
-        self.assertEqual('host quick fixture', automation.profile('host').quick_timer_message)
+        self.assertFalse(automation.profile('host').quick_timer_enabled,
+                         'the retired sender remains disabled')
         self.assertFalse(automation.profile('client').quick_timer_enabled)
         self.assertEqual('client quick fixture', automation.profile('client').quick_timer_message)
         self.assertFalse(automation.rule('stratagem', 4119049995, 'host').enabled)
         self.assertEqual('host mark fixture', automation.rule('stratagem', 4119049995, 'host').mark_message)
         self.assertEqual('host call fixture', automation.rule('stratagem', 4119049995, 'host').call_message)
         self.assertEqual(0, automation.rule('stratagem', 4119049995, 'host').cooldown)
-        self.assertEqual(2, len(mod.tasks))
+        self.assertEqual(3, len(mod.tasks))
+        migrated=next(mod.tasks[i] for i in range(1,len(mod.tasks)+1)
+                      if mod.tasks[i].name=='旧版快捷定时' and mod.tasks[i].profile=='host')
+        self.assertEqual(('repeat','5','host quick fixture'),
+                         (migrated.mode,migrated.time,migrated.message))
         restored = next(mod.tasks[i] for i in range(1, len(mod.tasks) + 1)
                         if mod.tasks[i].profile == 'host')
         self.assertEqual(('Host reminder', 'repeat', '5', 'host fixture', 'host'),
@@ -98,6 +126,45 @@ class ScheduledTasksTest(unittest.TestCase):
                               if mod.tasks[i].profile == 'host')
         self.assertEqual('host fixture', restored_again.message)
         self.assertEqual(5005, restored_again.due)
+
+    def test_applying_named_preset_changes_the_task_that_later_sends(self):
+        lua,h,mod=self.fresh()
+        library=mod.debug_preset_library()
+        self.assertTrue(mod.add_task('Preset repeat','repeat','5','saved behavior message',1000,'host'))
+        saved=library.save('send behavior','host')
+        self.assertTrue(saved[0],saved[1]);preset_id=saved[2]
+        self.assertTrue(mod.remove_task(mod.tasks[1].id))
+        self.assertTrue(mod.add_task('Temporary','once','60','temporary',2000,'host'))
+        lua.execute('os.time=function() return 5000 end')
+        self.assertTrue(library.apply(preset_id,'host'))
+        restored=mod.tasks[1]
+        self.assertEqual(('repeat',5,'saved behavior message'),
+                         (restored.mode,restored.seconds,restored.message))
+        mod.debug_run_tasks(5005)
+        self.assertEqual(1,h.call_count())
+        self.assertEqual('saved behavior message\0',h.last_call()['arg3_text'])
+
+    def test_applying_client_preset_while_host_is_active_only_replaces_client_tasks(self):
+        _,_,mod=self.fresh();library=mod.debug_preset_library()
+        host=mod.add_task('Host untouched','repeat','17','host stays',1000,'host')
+        client=mod.add_task('Client saved','repeat','5','client saved',1000,'client')
+        self.assertIsNotNone(host);self.assertIsNotNone(client)
+        saved=library.save('client schedule','client')
+        self.assertTrue(saved[0],saved[1])
+        self.assertTrue(mod.remove_task(client.id))
+        replacement=mod.add_task('Client edited','once','60','edited client',2000,'client')
+        self.assertIsNotNone(replacement)
+        self.assertEqual('host',mod.debug_automation().state.active_role)
+
+        self.assertTrue(library.apply(saved[2],'client'))
+        host_after=next(t for i in range(1,len(mod.tasks)+1)
+                        if (t:=mod.tasks[i]).profile=='host')
+        client_after=next(t for i in range(1,len(mod.tasks)+1)
+                          if (t:=mod.tasks[i]).profile=='client')
+        self.assertEqual(('Host untouched','repeat','17','host stays'),
+                         (host_after.name,host_after.mode,host_after.time,host_after.message))
+        self.assertEqual(('Client saved','repeat','5','client saved'),
+                         (client_after.name,client_after.mode,client_after.time,client_after.message))
 
     def test_applied_daily_task_waits_until_next_day_when_time_has_passed(self):
         lua, h, mod = self.fresh()
@@ -372,7 +439,7 @@ class ScheduledTasksTest(unittest.TestCase):
         restored.debug_run_tasks(2000)
         self.assertEqual(0, h.call_count())
 
-    def test_old_enabled_timer_migrates_to_host_quick_profile_without_a_duplicate_task(self):
+    def test_old_enabled_timer_migrates_to_a_host_repeat_task(self):
         lua, h = fresh_image()
         lua.execute("""
             local old = io.open
@@ -385,12 +452,14 @@ class ScheduledTasksTest(unittest.TestCase):
             end
         """)
         mod = h.load(SOURCE)
-        self.assertEqual(0, len(mod.tasks), "quick timer remains a single profile setting")
-        profile=mod.debug_automation().profile('host')
-        self.assertTrue(profile.quick_timer_enabled)
-        self.assertEqual(45, profile.quick_timer_interval)
-        self.assertEqual("old message", profile.quick_timer_message)
-        self.assertTrue(mod.debug_automation().profile('client').quick_timer_enabled is False)
+        self.assertEqual(1, len(mod.tasks), "legacy quick timer becomes one visible scheduled task")
+        task=mod.tasks[1]
+        self.assertEqual('host',task.profile)
+        self.assertEqual('repeat',task.mode)
+        self.assertEqual(45,task.seconds)
+        self.assertEqual('old message',task.message)
+        self.assertFalse(mod.debug_automation().profile('host').quick_timer_enabled)
+        self.assertFalse(mod.debug_automation().profile('client').quick_timer_enabled)
 
     def test_full_task_pages_have_no_overlap_at_common_resolutions(self):
         for rw, rh in ((1280, 720), (1920, 1080), (3840, 2160)):
@@ -459,7 +528,10 @@ class ScheduledTasksTest(unittest.TestCase):
         panel_writes = [written[i]["text"] for i in range(1, len(written) + 1)
                         if "panel.txt" in written[i]["path"]]
         self.assertEqual([], panel_writes, "migration failure must retain the old configuration")
-        self.assertFalse(mod.debug_cfg()["timer_on"], "hidden legacy timer is suspended this session")
+        self.assertTrue(mod.debug_cfg()["timer_on"], "failed migration retains source config for retry")
+        before = h.call_count()
+        mod.debug_timed_send(3600)
+        self.assertEqual(before, h.call_count(), "retired legacy timer stays inert after migration failure")
 
 
 if __name__ == "__main__":

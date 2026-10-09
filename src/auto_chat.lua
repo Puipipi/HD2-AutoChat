@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.8.2', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.8.3', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -314,6 +314,48 @@ local function note(line)
     end)
     if not ok then log_open = false end
 end
+
+M.runtime_diagnostic_state={seen={},lines={},order={}}
+function M.record_runtime_diagnostic(kind,key,line)
+    if type(kind)~='string' or not kind:match('^[%a_]+$') or type(key)~='string'
+        or #key>128 or type(line)~='string' or #line>400 then return false end
+    local state=M.runtime_diagnostic_state
+    local signature=kind..'|'..key
+    if state.seen[signature] then return false end
+    state.seen[signature]=true
+    state.order[#state.order+1]=signature
+    if #state.order>64 then
+        local expired=table.remove(state.order,1)
+        state.seen[expired]=nil
+    end
+    state.lines[#state.lines+1]=line
+    if #state.lines>64 then table.remove(state.lines,1) end
+    note(line)
+    return true
+end
+function M.record_event_diagnostic(category,action,stable_id,result,output)
+    if not ({building=true,stratagem=true,map=true,supplies=true,small_enemy=true,flying_enemy=true,
+        medium_enemy=true,large_enemy=true,giant_enemy=true,unknown=true})[category] then category='unknown' end
+    if action~='mark' and action~='summon' and action~='use' then action='unknown' end
+    if type(stable_id)~='string' or not (stable_id:match('^stratagem_%d+$') or stable_id:match('^enemy_[%a_]+$')) then stable_id='-' end
+    if type(result)~='string' or not result:match('^[%a_%-]+$') then result='unknown' end
+    if output~='local' and output~='squad' then output='unknown' end
+    local key=category..'|'..action..'|'..stable_id..'|'..result..'|'..output
+    return M.record_runtime_diagnostic('event',key,
+        'ping event category='..category..' action='..action..' id='..stable_id..' result='..result..' output='..output)
+end
+function M.record_ping_drop(reason,kind,map_type,has_target,localization_key,resource)
+    if type(reason)~='string' or not reason:match('^[%a_%-]+$') then reason='unknown' end
+    kind=type(kind)=='number' and math.floor(kind) or -1
+    map_type=type(map_type)=='number' and math.floor(map_type) or -1
+    localization_key=type(localization_key)=='number' and math.floor(localization_key) or 0
+    resource=type(resource)=='string' and #resource==16 and resource:match('^[0-9A-Fa-f]+$') and resource:upper() or '-'
+    local key=table.concat({reason,kind,map_type,has_target and 1 or 0,localization_key,resource},'|')
+    return M.record_runtime_diagnostic('reader',key,
+        'ping reader dropped reason='..reason..' kind='..kind..' map='..map_type..' target='
+        ..tostring(has_target==true)..' key='..localization_key..' resource='..resource)
+end
+function M.debug_runtime_diagnostics() return M.runtime_diagnostic_state.lines end
 
 local function write_status(extra)
     local handle = io.open(STATUS, 'w')
@@ -756,22 +798,470 @@ local function config_save()
         handle:close()
     end)
 end
-M.quick_timer_shadow={role=nil}
-function M.quick_timer_shadow.sync(role)
-    local profile=automation and automation.profile(role)
-    if not profile then return false end
-    cfg.timer_on=profile.quick_timer_enabled==true
-    cfg.interval=profile.quick_timer_interval or 30
-    cfg.message=profile.quick_timer_message or 'HELLO FROM AUTOCHAT'
-    if M.quick_timer_shadow.role~=role then cfg.elapsed=0;M.quick_timer_shadow.role=role end
-    return true
-end
-function M.quick_timer_shadow.set(role,key,value)
-    local ok,why=automation.set(key,value,role)
-    if ok then M.quick_timer_shadow.sync(role);config_save() end
-    return ok,why
+-- BEGIN AUTOCHAT LANGUAGE
+-- Pure language selection and presentation strings. No game APIs or native reads.
+M.build_language = function(env)
+    env=type(env)=='table' and env or {}
+    local state={locale='en',option=nil,due=0}
+    local M={}
+
+    -- English fallback is deliberate for every language outside Chinese.
+    local phrases={
+        ['category.building']={zh='任务建筑',en='MISSION BUILDING'},
+        ['category.stratagem']={zh='战备提示',en='STRATAGEM'},
+        ['category.map']={zh='地图标记',en='MAP MARKER'},
+        ['category.poi']={zh='特殊目标',en='SPECIAL TARGET'},
+        ['category.mission_items']={zh='任务物品',en='MISSION ITEMS'},
+        ['category.small_enemy']={zh='小型敌人',en='SMALL ENEMY'},
+        ['category.flying_enemy']={zh='飞行敌人',en='FLYING ENEMY'},
+        ['category.medium_enemy']={zh='中型敌人',en='MEDIUM ENEMY'},
+        ['category.large_enemy']={zh='大型敌人',en='LARGE ENEMY'},
+        ['category.giant_enemy']={zh='巨型敌人',en='GIANT ENEMY'},
+        ['category.supplies']={zh='普通物资',en='SUPPLIES'},
+        ['supply.sample']={zh='样本',en='SAMPLES'},
+        ['supply.ammunition']={zh='弹药',en='AMMUNITION'},
+        ['supply.stim_case']={zh='针剂盒',en='STIM CASE'},
+        ['supply.grenade_case']={zh='手雷盒',en='GRENADE CASE'},
+        ['supply.mission_sample_box']={zh='任务样本箱',en='MISSION SAMPLE BOX'},
+        ['toggle.supplies']={zh='普通物资提醒',en='SUPPLY ALERTS'},
+        ['toggle.poi']={zh='特殊目标提醒',en='SPECIAL TARGET ALERTS'},
+        ['toggle.mission_items']={zh='任务物品提醒',en='MISSION ITEM ALERTS'},
+        ['tab.special_targets']={zh='特殊目标',en='SPECIAL TARGETS'},
+        ['tab.mission_items']={zh='任务物品',en='MISSION ITEMS'},
+        ['label.enabled']={zh='启用',en='ENABLED'},
+        ['label.message']={zh='消息模板',en='MESSAGE TEMPLATE'},
+        ['label.cooldown']={zh='冷却（秒）',en='COOLDOWN (SECONDS)'},
+        ['label.inherit_default']={zh='留空继承默认',en='BLANK = INHERIT DEFAULT'},
+        ['action.mark']={zh='标记',en='marked'},
+        ['action.summon']={zh='召唤',en='called in'},
+        ['action.start']={zh='开始',en='started'},
+        ['objective.primary']={zh='主线任务',en='PRIMARY OBJECTIVE'},
+        ['objective.prerequisite']={zh='主线前置任务',en='PREREQUISITE'},
+        ['objective.optional']={zh='支线任务',en='OPTIONAL OBJECTIVE'},
+        ['objective.tactical']={zh='战术任务',en='TACTICAL OBJECTIVE'},
+        ['objective.unknown']={zh='任务',en='OBJECTIVE'},
+    }
+    local stock={
+        ['欢迎加入小队！']='Welcome to the squad!',
+        ['标记了{目标}（{类别}）']='Marked {目标} ({类别})',
+        ['{玩家名}召唤了{目标}']='{玩家名} called in {目标}',
+        ['{玩家名}正在开始{目标}']='{玩家名} started {目标}',
+        ['自动聊天测试消息']='HELLO FROM AUTOCHAT',
+        -- Exact legacy stock text only; custom text is returned unchanged.
+        ['队友标记了{类别}，请注意！']='A teammate marked {类别}.',
+    }
+    local stock_en={}
+    for zh,en in pairs(stock) do stock_en[en]=en end
+
+    -- Exact UI statuses and errors emitted by the catalog and preset flows.
+    -- Unknown strings pass through untouched so preset names and custom text
+    -- are never guessed at or translated as if they were interface copy.
+    local statuses={
+        ['等待战备目录']='Waiting for stratagem catalog',
+        ['战备目录：不支持的游戏版本']='Stratagem catalog: unsupported game version',
+        ['战备目录数据暂不可读']='Stratagem catalog data is temporarily unreadable',
+        ['选择主机或客机配置后，点击应用按钮写入该角色。']='Select a host or client configuration, then apply the preset to that role.',
+        ['输入已确认；点击对应按钮执行操作']='Input confirmed; click the corresponding button to apply it',
+        ['已取消本次输入']='Input cancelled',
+        ['Enter 保存 / Esc 取消 / Ctrl+V 粘贴']='Enter saves / Esc cancels / Ctrl+V pastes',
+        ['Enter 确认输入 / Esc 取消']='Enter confirms / Esc cancels',
+        ['已保存当前自动消息配置']='Current automatic message settings saved',
+        ['请先选择预设']='Select a preset first',
+        ['已替换所选预设内容']='Selected preset replaced with current settings',
+        ['预设名称已更新']='Preset renamed',
+        ['预设已导出']='Preset exported',
+        ['预设已删除']='Preset deleted',
+        ['预设已导入，请选择后加载']='Preset imported; select it to apply',
+        ['设置已保存']='Settings saved',
+        ['任务状态已保存']='Task status saved',
+        ['任务已删除']='Task deleted',
+        ['保存失败']='Save failed',
+        ['该分类尚无可读取的战备']='No readable stratagems in this category',
+        ['中文输入不可用：窗口 IME 上下文未就绪']='Chinese input is unavailable: the window IME is not ready',
+        ['输入队列溢出，已取消并保留原值']='Input queue overflow; edit cancelled and the original value was kept',
+        ['搜索已应用']='Search applied',
+        ['预设数据长度无效']='Preset data length is invalid',
+        ['预设校验器不可用']='Preset validator is unavailable',
+        ['预设数据校验失败']='Preset data validation failed',
+        ['预设数据无效']='Preset data is invalid',
+        ['预设操作不可用']='Preset operation is unavailable',
+        ['文件操作失败']='File operation failed',
+        ['预设库格式损坏']='Preset library is corrupt',
+        ['预设库序号无效']='Preset library serial is invalid',
+        ['预设库数量无效']='Preset library count is invalid',
+        ['预设编号无效']='Preset ID is invalid',
+        ['预设编号重复或无效']='Preset ID is duplicated or invalid',
+        ['预设角色无效']='Preset role is invalid',
+        ['预设名称长度无效']='Preset name length is invalid',
+        ['预设长度无效']='Preset length is invalid',
+        ['预设名称重复或无效']='Preset name is duplicated or invalid',
+        ['库内预设数据无效']='Preset data in the library is invalid',
+        ['单角色预设数量超过32']='This role has more than 32 presets',
+        ['预设库含有多余数据或无效序号']='Preset library contains trailing data or an invalid serial',
+        ['旧版预设无法安全复制到客机预设池']='Legacy presets cannot be safely copied to the client preset pool',
+        ['预设角色无效']='Preset role is invalid',
+        ['每个角色最多保存32个预设']='Each role can have at most 32 presets',
+        ['预设库超过大小限制']='Preset library exceeds the size limit',
+        ['保存预设库失败']='Failed to save preset library',
+        ['读取预设库失败']='Failed to read preset library',
+        ['请选择主机或客机预设池']='Select a host or client preset pool',
+        ['名称不能为空，且须为有效UTF-8（最多96字节）']='Name must be valid UTF-8, nonempty, and at most 96 bytes',
+        ['此角色的预设名称已存在，请先重命名现有预设']='A preset with this name already exists for this role; rename it first',
+        ['此角色的预设名称已存在']='A preset with this name already exists for this role',
+        ['读取当前配置失败']='Failed to read current settings',
+        ['预设编号已用尽']='Preset ID range is exhausted',
+        ['找不到该预设']='Preset not found',
+        ['所选预设不属于当前角色']='Selected preset does not belong to the current role',
+        ['应用预设失败']='Failed to apply preset',
+        ['导出预设失败']='Failed to export preset',
+        ['读取预设文件失败']='Failed to read preset file',
+        ['预设文件格式无效或过大']='Preset file format is invalid or too large',
+        ['预设名称长度无效']='Preset name length is invalid',
+        ['预设文件长度无效']='Preset file length is invalid',
+        ['预设名称无效']='Preset name is invalid',
+        ['预设格式无效或超过 1 MiB']='Preset format is invalid or exceeds 1 MiB',
+        ['预设须以换行结束且使用 LF']='Preset must end with a newline and use LF line endings',
+        ['预设版本无效']='Preset version is invalid',
+        ['预设包含空白、重复或无效行']='Preset contains a blank, duplicate, or invalid line',
+        ['预设转义无效']='Preset escaping is invalid',
+        ['预设包含无效 UTF-8']='Preset contains invalid UTF-8',
+        ['定时任务数量无效']='Scheduled task count is invalid',
+        ['预设最多包含32个定时任务']='A preset can contain at most 32 scheduled tasks',
+        ['定时任务字段无效']='Scheduled task field is invalid',
+        ['定时任务编号无效']='Scheduled task index is invalid',
+        ['定时任务开关无效']='Scheduled task switch is invalid',
+        ['旧版预设发送范围无效']='Legacy preset send scope is invalid',
+        ['开关值无效']='Switch value is invalid',
+        ['冷却值无效']='Cooldown value is invalid',
+        ['设置值无效：']='Invalid setting: ',
+        ['预设包含未知字段']='Preset contains an unknown field',
+        ['规则无效']='Rule is invalid',
+        ['规则开关无效']='Rule switch is invalid',
+        ['规则冷却无效']='Rule cooldown is invalid',
+        ['规则值无效']='Rule value is invalid',
+        ['缺少设置：']='Missing setting: ',
+        ['缺少定时任务数量']='Scheduled task count is missing',
+        ['定时任务字段不完整']='Scheduled task fields are incomplete',
+        ['定时任务名称或消息无效']='Scheduled task name or message is invalid',
+        ['定时任务间隔无效']='Scheduled task interval is invalid',
+        ['定时任务时间无效']='Scheduled task time is invalid',
+        ['定时任务类型无效']='Scheduled task type is invalid',
+        ['定时任务数量不匹配']='Scheduled task count does not match the data',
+        ['规则数量超过 512']='Preset contains more than 512 rules',
+        ['未知预设']='Unknown preset',
+        ['任务编号已用尽']='Task ID range is exhausted',
+        ['应用后任务总数超过32']='Applying this preset would exceed 32 tasks',
+        ['保存定时任务失败；原任务已恢复']='Failed to save scheduled tasks; previous tasks were restored',
+        ['快捷定时迁移失败；预设未应用']='Quick timer migration failed; preset was not applied',
+        ['请输入事件名称']='Enter an event name',
+        ['事件名称过长']='Event name is too long',
+        ['请输入发送消息']='Enter a message to send',
+        ['消息最多 200 字节']='Message must be at most 200 bytes',
+        ['请输入 5 至 86400 的整数秒数']='Enter a whole number of seconds from 5 to 86400',
+        ['请输入有效时间，例如 21:30']='Enter a valid time, for example 21:30',
+        ['请选择定时类型']='Select a schedule type',
+    }
+    local status_prefixes={
+        ['预设应用失败：']='Preset apply failed: ',
+        ['预设库不可用：']='Preset library unavailable: ',
+        ['设置值无效：']='Invalid setting: ',
+        ['缺少设置：']='Missing setting: ',
+    }
+
+    function M.current() return state.locale end
+    function M.is_chinese() return state.locale=='zh' end
+    function M.set_dirty(callback) env.dirty=callback end
+    function M.update(option,frame)
+        if option~='zh' and option~='en' and option~='auto' then option='auto' end
+        if option=='zh' or option=='en' then
+            state.option=option
+            if state.locale~=option then
+                state.locale=option
+                if env.dirty~=nil then pcall(env.dirty) end
+            end
+            return state.locale
+        end
+        frame=tonumber(frame) or 0
+        if state.option~='auto' or frame>=state.due then
+            state.option='auto'
+            state.due=frame+120
+            local ok,value=pcall(env.read_game or function() return nil end)
+            local selected=ok and (value=='zh' and 'zh' or value=='en' and 'en' or nil) or nil
+            if selected and selected~=state.locale then
+                state.locale=selected
+                if env.dirty~=nil then pcall(env.dirty) end
+            end
+        end
+        return state.locale
+    end
+    function M.text(chinese,english)
+        if state.locale=='zh' then return tostring(chinese or english or '') end
+        return tostring(english or chinese or '')
+    end
+    function M.phrase(key)
+        local row=phrases[key]
+        return row and row[state.locale] or tostring(key or '')
+    end
+    function M.status(value)
+        if type(value)~='string' or state.locale=='zh' then return value end
+        local translated=statuses[value]
+        if translated then return translated end
+        if value:match('^战备目录读取就绪（%d+）$') then
+            return 'Stratagem catalog ready ('..value:match('（(%d+)）')..')'
+        end
+        for prefix,english in pairs(status_prefixes) do
+            if value:sub(1,#prefix)==prefix then
+                local suffix=value:sub(#prefix+1)
+                return english..(statuses[suffix] or suffix)
+            end
+        end
+        return value
+    end
+    function M.stock_template(value)
+        if type(value)~='string' then return value end
+        if state.locale=='zh' then
+            for zh,en in pairs(stock) do if value==en then return zh end end
+            return value
+        end
+        return stock[value] or stock_en[value] or value
+    end
+    function M.stock_templates() return stock end
+    function M.phrases() return phrases end
+    return M
 end
 
+-- END AUTOCHAT LANGUAGE
+-- BEGIN GAME LANGUAGE READER
+-- Read-only Text Language reader for one reviewed Helldivers 2 build.
+-- Production process access is built from kernel32/bcrypt; tests may inject a fake env.
+M.build_game_language_reader = function(options)
+    options=type(options)=='table' and options or {}
+    local env=options.env or {}
+    if type(env)~='table' then env={} end
+    local ffi=options.ffi
+    local kernel,bcrypt,process
+
+    local function production_setup()
+        if not ffi then return false end
+        -- cdef declarations are process-global and may already exist in the loader.
+        -- Declare each one separately so a duplicate cannot suppress later APIs.
+        local declarations={
+            'void *GetCurrentProcess(void);',
+            'void *GetModuleHandleA(const char *module_name);',
+            'uint32_t GetModuleFileNameW(void *module, uint16_t *filename, uint32_t size);',
+            'void *CreateFileW(const uint16_t *name, uint32_t access, uint32_t share, void *security, uint32_t creation, uint32_t flags, void *template_file);',
+            'int ReadFile(void *file, void *buffer, uint32_t size, uint32_t *received, void *overlapped);',
+            'int CloseHandle(void *handle);',
+            'int ReadProcessMemory(void *process, const void *address, void *buffer, size_t size, size_t *received);',
+            'int32_t BCryptOpenAlgorithmProvider(void **algorithm, const uint16_t *name, const uint16_t *implementation, uint32_t flags);',
+            'int32_t BCryptCreateHash(void *algorithm, void **hash, uint8_t *object, uint32_t object_size, uint8_t *secret, uint32_t secret_size, uint32_t flags);',
+            'int32_t BCryptHashData(void *hash, uint8_t *input, uint32_t input_size, uint32_t flags);',
+            'int32_t BCryptFinishHash(void *hash, uint8_t *output, uint32_t output_size, uint32_t flags);',
+            'int32_t BCryptDestroyHash(void *hash);',
+            'int32_t BCryptCloseAlgorithmProvider(void *algorithm, uint32_t flags);',
+        }
+        for _,declaration in ipairs(declarations) do pcall(ffi.cdef,declaration) end
+        if options.api then
+            kernel=options.api.kernel
+            bcrypt=options.api.bcrypt
+            if not kernel or not bcrypt then return false end
+        else
+            local loaded,k=pcall(ffi.load,'kernel32')
+            if not loaded then return false end
+            kernel=k
+            loaded,bcrypt=pcall(ffi.load,'bcrypt')
+            if not loaded then kernel=nil;return false end
+        end
+        local symbols={'GetCurrentProcess','GetModuleHandleA','GetModuleFileNameW','CreateFileW',
+            'ReadFile','CloseHandle','ReadProcessMemory'}
+        for _,name in ipairs(symbols) do
+            local good,value=pcall(function() return kernel[name] end)
+            if not good or (type(value)~='cdata' and type(value)~='function')
+                or (type(value)=='cdata' and value==ffi.NULL) then
+                kernel,bcrypt=nil,nil;return false
+            end
+        end
+        local crypto={'BCryptOpenAlgorithmProvider','BCryptCreateHash','BCryptHashData',
+            'BCryptFinishHash','BCryptDestroyHash','BCryptCloseAlgorithmProvider'}
+        for _,name in ipairs(crypto) do
+            local good,value=pcall(function() return bcrypt[name] end)
+            if not good or (type(value)~='cdata' and type(value)~='function')
+                or (type(value)=='cdata' and value==ffi.NULL) then
+                kernel,bcrypt=nil,nil;return false
+            end
+        end
+        process=options.api and options.api.process or kernel.GetCurrentProcess()
+        return process~=nil and process~=ffi.NULL
+    end
+
+    local function is_handle(value)
+        if not ffi then return false end
+        local ok,result=pcall(function()
+            return value~=nil and value~=ffi.NULL and value~=ffi.cast('void*',-1)
+        end)
+        return ok and result
+    end
+    local function wide_ascii(value)
+        local out=ffi.new('uint16_t[?]',#value+1)
+        for i=1,#value do out[i-1]=value:byte(i) end
+        out[#value]=0
+        return out
+    end
+    local function module_path(module)
+        local path=ffi.new('uint16_t[32768]')
+        local length=kernel.GetModuleFileNameW(module,path,32768)
+        if length==0 or length>=32768 then return nil end
+        return path
+    end
+    local function hash_file(path)
+        if not path then return nil end
+        local file=kernel.CreateFileW(path,0x80000000,7,nil,3,0x08000000,nil)
+        if not is_handle(file) then return nil end
+        local algorithm,hash=ffi.new('void*[1]'),ffi.new('void*[1]')
+        local digest
+        local ok,result=pcall(function()
+            local name=wide_ascii('SHA256')
+            assert(bcrypt.BCryptOpenAlgorithmProvider(algorithm,name,nil,0)==0,'SHA256 provider')
+            assert(algorithm[0]~=nil and algorithm[0]~=ffi.NULL,'SHA256 provider handle')
+            assert(bcrypt.BCryptCreateHash(algorithm[0],hash,nil,0,nil,0,0)==0,'SHA256 hash')
+            assert(hash[0]~=nil and hash[0]~=ffi.NULL,'SHA256 hash handle')
+            local buffer,received=ffi.new('uint8_t[1048576]'),ffi.new('uint32_t[1]')
+            while true do
+                assert(kernel.ReadFile(file,buffer,1048576,received,nil)~=0,'module read')
+                if received[0]==0 then break end
+                assert(bcrypt.BCryptHashData(hash[0],buffer,received[0],0)==0,'SHA256 update')
+            end
+            local bytes=ffi.new('uint8_t[32]')
+            assert(bcrypt.BCryptFinishHash(hash[0],bytes,32,0)==0,'SHA256 finish')
+            local hex={}
+            for i=0,31 do hex[#hex+1]=string.format('%02X',bytes[i]) end
+            return table.concat(hex)
+        end)
+        if hash[0]~=nil and hash[0]~=ffi.NULL then
+            pcall(function() bcrypt.BCryptDestroyHash(hash[0]) end)
+        end
+        if algorithm[0]~=nil and algorithm[0]~=ffi.NULL then
+            pcall(function() bcrypt.BCryptCloseAlgorithmProvider(algorithm[0],0) end)
+        end
+        pcall(function() kernel.CloseHandle(file) end)
+        if not ok then return nil end
+        digest=result
+        return digest
+    end
+
+    local setup_ok=false
+    if ffi and (options.api or not env.game_module or not env.exe_module
+        or not env.hash_module or not env.read) then
+        setup_ok=production_setup()
+    end
+    if setup_ok then
+        if env.game_module==nil then env.game_module=function()
+                local p=kernel.GetModuleHandleA('game.dll')
+                if not is_handle(p) then return nil end
+                return tonumber(ffi.cast('uintptr_t',p))
+            end end
+        if env.exe_module==nil then env.exe_module=function()
+                local p=kernel.GetModuleHandleA(nil)
+                if not is_handle(p) then return nil end
+                return tonumber(ffi.cast('uintptr_t',p))
+            end end
+        if env.hash_module==nil then env.hash_module=function(base)
+                local p=ffi.cast('void*',base)
+                return hash_file(module_path(p))
+            end end
+        if env.read==nil then env.read=function(address,size)
+                local buffer,received=ffi.new('uint8_t[?]',size),ffi.new('size_t[1]')
+                local ok=kernel.ReadProcessMemory(process,ffi.cast('const void*',address),buffer,size,received)
+                if ok==0 or tonumber(received[0])~=size then return nil end
+                return ffi.string(buffer,size)
+            end end
+    end
+    env=type(env)=='table' and env or {}
+    local expected_game='2E2C3B7C2500646DADD5F2B4C6E0504DBB7E7896139F64CDDC0D1813C718F51E'
+    local expected_exe='F5FEE03DCFDB2E553A4752C283590950AC13316B376D8196AA556FF0400D5F06'
+    local prologue='\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x8b'
+    local checked,verified,unsupported=false,false,false
+    local game_base
+    local M={}
+
+    local function read(address,size)
+        if env.read==nil then return nil end
+        local ok,value=pcall(env.read,address,size)
+        if not ok or type(value)~='string' or #value~=size then return nil end
+        return value
+    end
+    local function u32(bytes)
+        if type(bytes)~='string' or #bytes<4 then return nil end
+        local a,b,c,d=bytes:byte(1,4)
+        return a+b*256+c*65536+d*16777216
+    end
+    local function u64ptr(bytes)
+        if type(bytes)~='string' or #bytes<8 then return nil end
+        local a,b,c,d,e,f,g,h=bytes:byte(1,8)
+        -- The reviewed game's user-mode pointers are canonical low 47-bit addresses.
+        if g~=0 or h~=0 then return nil end
+        local p=a+b*256+c*65536+d*16777216+e*4294967296+f*1099511627776
+        if p<65536 or p>=140737488355328 then return nil end
+        return p
+    end
+    local function ptr(at) return u64ptr(read(at,8)) end
+
+    local function verify()
+        if checked then return verified end
+        local ok,result=pcall(function()
+            if env.game_module==nil or env.exe_module==nil or env.hash_module==nil then return nil end
+            local game=env.game_module()
+            local exe=env.exe_module()
+            if type(game)~='number' or type(exe)~='number' then return nil end
+            local game_hash=env.hash_module(game)
+            local exe_hash=env.hash_module(exe)
+            if type(game_hash)~='string' or type(exe_hash)~='string'
+                then return nil end
+            if game_hash:upper()~=expected_game or exe_hash:upper()~=expected_exe then return 'unsupported' end
+            local signature=read(game+0x14c0350,#prologue)
+            if not signature then return nil end
+            if signature~=prologue then return 'unsupported' end
+            game_base=game
+            return true
+        end)
+        if ok and result=='unsupported' then checked=true;unsupported=true end
+        verified=ok and result==true
+        if verified then checked=true end
+        return verified
+    end
+
+    function M.read()
+        if not verify() then return nil end
+        local settings=ptr(game_base+0x3326340)
+        if not settings then return nil end
+        local index_bytes=read(settings+705712,4)
+        local index=index_bytes and u32(index_bytes)
+        if not index or index>=15 then return nil end
+        local record=ptr(game_base+0x37c5650+index*8)
+        local text=record and ptr(record+8)
+        local bytes=text and (read(text,16) or read(text,8))
+        if not bytes or read(settings+705712,4)~=index_bytes then return nil end
+        local ending=bytes:find('\0',1,true)
+        if not ending then return nil end
+        local code=bytes:sub(1,ending-1)
+        if #code<2 or #code>12 or not code:match('^%a[%a%-]*$') then return nil end
+        code=code:lower()
+        if code=='cn' or code=='tw' or code=='zh' or code=='zhs' or code=='zht'
+            or code=='zh-cn' or code=='zh-tw' then return 'zh' end
+        return 'en'
+    end
+    function M.verified() return verified end
+    function M.unsupported() return unsupported end
+    function M.expected_fingerprints() return expected_game,expected_exe end
+    function M.hash_file_path(path)
+        if not setup_ok or type(path)~='string' or path=='' then return nil end
+        for i=1,#path do if path:byte(i)>127 then return nil end end
+        return hash_file(wide_ascii(path))
+    end
+    return M
+end
+
+-- END GAME LANGUAGE READER
 -- BEGIN CHAT AUTOMATION
 -- Automatic chat policy, inlined by the addon builder; no native offsets or writes.
 -- Session API provenance: P2P-Ping 0.1.34 scope() / update_peer_labels().
@@ -779,6 +1269,7 @@ local function build_chat_automation(env)
     local options = {enabled = true, allow_solo = true,
         welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
+        ping_supplies = false,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
@@ -787,11 +1278,11 @@ local function build_chat_automation(env)
         quick_timer_enabled = false, quick_timer_interval = 30,
         quick_timer_message = 'HELLO FROM AUTOCHAT'}
     local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
-        'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
+        'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_supplies', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
         'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output',
         'quick_timer_enabled', 'quick_timer_interval', 'quick_timer_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true, quick_timer_enabled=true,
-        ping_building=true, ping_stratagem=true, ping_map=true,
+        ping_building=true, ping_stratagem=true, ping_map=true, ping_supplies=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
         ping_giant_enemy=true, ping_small_enemy=true, ping_flying_enemy=true, ping_summon=true}
     local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil,
@@ -890,7 +1381,7 @@ local function build_chat_automation(env)
     end
     local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v5'}
+        local lines = {'# AutoChat automation settings v6'}
         for _, role in ipairs({'host','client'}) do
             for _, key in ipairs(keys) do
                 lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
@@ -999,8 +1490,10 @@ local function build_chat_automation(env)
     function api.export_profile(role, tasks)
         local source=profiles[role]
         if not source then return nil,'未知预设' end
-        local lines={'# AutoChat profile v3'}
-        for _,key in ipairs(keys) do lines[#lines+1]=key..'='..escape(tostring(source[key])) end
+        local lines={'# AutoChat profile v4'}
+        for _,key in ipairs(keys) do
+            if not key:match('^quick_timer_') then lines[#lines+1]=key..'='..escape(tostring(source[key])) end
+        end
         local ids={};for id in pairs(source.rules or {}) do ids[#ids+1]=id end;table.sort(ids)
         for _,id in ipairs(ids) do
             for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
@@ -1030,7 +1523,7 @@ local function build_chat_automation(env)
         if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
         local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
         local version=tonumber(lines[1]:match('^# AutoChat profile v(%d+)$'))
-        if version~=1 and version~=2 and version~=3 then return false,'预设版本无效' end
+        if version~=1 and version~=2 and version~=3 and version~=4 then return false,'预设版本无效' end
         local values,rules,seen,tasks_by_id={}, {}, {}, {}
         local task_count
         local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
@@ -1092,9 +1585,10 @@ local function build_chat_automation(env)
         end
         for _,key in ipairs(keys) do
             if values[key]==nil then
-                if version<3 and key=='quick_timer_enabled' then values[key]=false
-                elseif version<3 and key=='quick_timer_interval' then values[key]=30
-                elseif version<3 and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
+                if version<4 and key=='ping_supplies' then values[key]=false
+                elseif (version<3 or version>=4) and key=='quick_timer_enabled' then values[key]=false
+                elseif (version<3 or version>=4) and key=='quick_timer_interval' then values[key]=30
+                elseif (version<3 or version>=4) and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
                 else return false,'缺少设置：'..key end
             end
         end
@@ -1134,9 +1628,11 @@ local function build_chat_automation(env)
         if not valid then return false,parsed end
         local candidate={host=copy(profiles.host),client=copy(profiles.client)}
         for _,key in ipairs(keys) do
-            if parsed.version < 3 and key:match('^quick_timer_') then
+            if (parsed.version < 3 or parsed.version >= 4) and key:match('^quick_timer_') then
                 -- Older portable profiles did not own this setting; loading one
                 -- must not silently change the destination role's timer.
+                candidate[role][key]=profiles[role][key]
+            elseif parsed.version < 4 and key=='ping_supplies' then
                 candidate[role][key]=profiles[role][key]
             else candidate[role][key]=parsed.values[key] end
         end
@@ -1225,7 +1721,22 @@ local function build_chat_automation(env)
     end
 
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
+        supplies='普通物资',
         small_enemy='小型敌人', flying_enemy='飞行敌人', medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
+    function api.category_label(category)
+        local ok,value=pcall(env.category_label or function() return nil end,category)
+        if ok and type(value)=='string' and value~='' then return value end
+        return categories[category] or '未知'
+    end
+    function api.phrase(key,fallback)
+        local ok,value=pcall(env.phrase or function() return nil end,key)
+        if ok and type(value)=='string' and value~='' and value~=key then return value end
+        return fallback
+    end
+    function api.stock_template(value)
+        local ok,result=pcall(env.stock_template or function() return value end,value)
+        return ok and type(result)=='string' and result or value
+    end
     local function clipped(value, limit)
         if #value <= limit then return value end
         local at = limit + 1
@@ -1486,7 +1997,7 @@ local function build_chat_automation(env)
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
         local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
         if not allowed then state.status = reason; return false, reason end
-        local sent, send_why = api.send(api.format(options.welcome_message,candidate), state.active_role)
+        local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message),candidate), state.active_role)
         if sent == true then
             state.pending[candidate] = nil; api.record(now,candidate)
             state.status = '已发送新人欢迎'; return true, state.status
@@ -1522,7 +2033,7 @@ local function build_chat_automation(env)
             if not evict then event_diagnostic(event,rule_id,'queue-full-no-eviction');return false end
             table.remove(state.pings,evict)
         end
-        local label = categories[event.category]
+        local label = api.category_label(event.category)
         local raw_target=type(event.display_name)=='string' and event.display_name or event.target
         local target = type(raw_target) == 'string' and plain(raw_target,200) or label
         local identity = identity_for(event.creator_id)
@@ -1530,15 +2041,18 @@ local function build_chat_automation(env)
         if short == '' then short = '队友' end
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
+        local objective_kind=tostring(event.objective_kind or 'unknown')
+        local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label)
         local summoned = event.action == 'summon'
         local executing = event.action == 'use'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and '召唤' or executing and '开始' or '标记',
+            ['{动作}']=summoned and api.phrase('action.summon','召唤') or executing and api.phrase('action.start','开始') or api.phrase('action.mark','标记'),
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
-            ['{任务类型}']=objective_types[event.objective_kind] or label,
+            ['{任务类型}']=objective_type or label,
             ['{位置}']=position_text(event)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
         template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
+        template=api.stock_template(template)
         local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
         local prefix = ''
         if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
@@ -1907,6 +2421,8 @@ local function build_preset_library(env)
 end
 -- END PRESET LIBRARY
 
+M.game_language_reader = M.build_game_language_reader({ffi=ffi})
+M.language = M.build_language({read_game=function() return M.game_language_reader.read() end})
 automation = build_chat_automation({
     engine = function() return rawget(_G, 'stingray') end,
     context = function() return game_base and u64(game_base + M.CONTEXT_PTR) or nil end,
@@ -1928,6 +2444,10 @@ automation = build_chat_automation({
         return ok and saved == true
     end,
     identity = function(peer) return peer_identity and peer_identity.lookup(peer) or nil end,
+    category_label = function(category) return M.language.phrase('category.' .. tostring(category)) end,
+    phrase = function(key) return M.language.phrase(key) end,
+    stock_template = function(value) return M.language.stock_template(value) end,
+    diagnostic = function(...) return M.record_event_diagnostic(...) end,
     colorize = function(prefix, argb)
         if #argb == 6 then argb = 'FF' .. argb end
         if #argb ~= 8 or not argb:match('^%x+$') then return prefix end
@@ -2660,7 +3180,7 @@ local function enrich_stratagem_event(event,now)
         or stratagem_catalog.resolve_name_key(event.localization_key)
     if row then
         event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group
-        event.display_name=row.display_name
+        event.display_name=M.language.is_chinese() and row.display_name or row.debug_name
     else
         local rule=stratagem_catalog.resolve_rule_resource(event.resource)
             or stratagem_catalog.resolve_rule_name_key(event.localization_key)
@@ -2669,6 +3189,38 @@ local function enrich_stratagem_event(event,now)
 end
 function M.debug_enrich_stratagem_event(event,now)enrich_stratagem_event(event,now)end
 
+-- BEGIN SPECIAL TARGETS
+-- Verified target-name enrichment for special mission resources.
+-- The six shell IDs are Spottable + ObjectiveShell entries in current RawData
+-- EntityComponentMap (game version 1.007.100). They remain ordinary building
+-- events and do not introduce a separate user-facing category or rule system.
+M.build_special_targets = function()
+    local rows = {
+        {resource='DC19126D15692D04', name_zh='大炮 炸弹', name_en='Explosive (SEAF)'},
+        {resource='6B7EE87FB2EC6455', name_zh='大炮 高爆弹', name_en='High-Yield Explosive (SEAF)'},
+        {resource='E09FCB5A280ACB1D', name_zh='大炮 迷你核弹', name_en='Mini Nuke (SEAF)'},
+        {resource='E4BE3FDF0C857B7F', name_zh='大炮 凝固汽油弹', name_en='Napalm (SEAF)'},
+        {resource='F598598C47617605', name_zh='大炮 烟雾弹', name_en='Smoke (SEAF)'},
+        {resource='C02C2623B6359BB3', name_zh='大炮 静电场', name_en='Static Field (SEAF)'},
+    }
+    local by_resource = {}
+    for _, row in ipairs(rows) do
+        assert(row.resource:match('^[0-9A-F][0-9A-F]+$') and #row.resource == 16,
+            'invalid special target resource')
+        assert(not by_resource[row.resource], 'duplicate special target resource')
+        by_resource[row.resource] = row
+    end
+    return {
+        list = function() return rows end,
+        resolve = function(resource)
+            if type(resource) ~= 'string' then return nil end
+            return by_resource[resource:upper()]
+        end,
+    }
+end
+
+-- END SPECIAL TARGETS
+M.special_targets = M.build_special_targets()
 -- BEGIN NATIVE PING EVENTS
 -- Third-party reference license (etxp HD2-G60-Smart-Targeting):
 --[[
@@ -2723,7 +3275,8 @@ SOFTWARE.
 -- https://github.com/xypwn/filediver/blob/master/hashes/hashes.txt
 -- Enum: https://github.com/shalzuth/HelldiversData/blob/master/data/enums/HudMarkerType.json
 -- Historical HUD enum is corroborated by current DLL Map21 producer below.
--- Ordinary ammo, stims, grenades and samples are intentionally excluded.
+-- Resource pickups are classified separately so the main policy can keep them
+-- behind its supplies switch rather than mislabeling them as buildings.
 local EXCLUDED_SUPPLIES = {
     ['9D4935FA69B6B41A']=true, ['307E09E7698881BA']=true, ['4932CBF33CD47EF9']=true,
     ['4C63119F69165321']=true, ['5016EE397FDCFB6C']=true, ['64B49B9D8A445266']=true,
@@ -3158,13 +3711,69 @@ local PING_TARGETS = {
 -- Read-only verification: 3585962803=location, 689074879=enemy unit;
 -- Encyclopedia's common terminal key is 4234884333. Specific keys stay intact.
 local GENERIC_MISSION_NAMES = {[3585962803]=true, [689074879]=true, [4234884333]=true}
-
+-- Current data confirms these are ObjectiveShell entities, but not their shell
+-- variant. Never turn their generic catalogue fallback into a claimed type.
 local function build_ping_events(env)
     local ffi = require('ffi')
+    local classification = {
+        supply_targets = {
+            ['79CCFFD281E3F3A9'] = {name_zh='弹药盒', name_en='Ammo box'},
+            ['B4CA4C5B922F7965'] = {name_zh='针剂盒', name_en='Stim box'},
+            ['97AF34FBF093409C'] = {name_zh='手雷包', name_en='Grenade pack'},
+        },
+        ambiguous_shells = {['6C62E2E25E084083']=true, ['C8F9A2233048B836']=true},
+        generic_native_names = {['特殊地点']=true, ['special location']=true,
+            ['敌方单位']=true, ['enemy unit']=true, ['任务交互物']=true, ['objective terminal']=true,
+            ['普通物资']=true, ['supplies']=true},
+        exact_supply_names = {
+            ['弹药']=true, ['弹药盒']=true, ['针剂']=true, ['针剂盒']=true,
+            ['手雷']=true, ['手雷包']=true, ['手雷盒']=true,
+            ['样本']=true, ['样本瓶']=true, ['普通样本']=true, ['稀有样本']=true, ['超级样本']=true,
+            ['普通样本瓶']=true, ['稀有样本瓶']=true, ['超级样本瓶']=true,
+            ['ammo']=true, ['ammunition']=true, ['ammo box']=true, ['ammo canister']=true,
+            ['stim']=true, ['stims']=true, ['stim box']=true, ['stim case']=true,
+            ['grenade']=true, ['grenades']=true, ['grenade box']=true, ['grenade case']=true,
+            ['grenade pack']=true, ['sample']=true, ['samples']=true, ['common sample']=true,
+            ['rare sample']=true, ['super sample']=true, ['sample vial']=true,
+        },
+    }
     local state = {scene = nil, seen = {}, generation = 0, serial = 0, status = '等待标记数据'}
     local api = {state = state, supported = {small_enemy = true, flying_enemy = true,
         medium_enemy = true, large_enemy = true,
-        giant_enemy = true, building = true, stratagem = true, map = true}}
+        giant_enemy = true, building = true, supplies = true, stratagem = true, map = true}}
+    local function selected_name(row)
+        local language
+        if env.language then
+            local okay, value = pcall(env.language)
+            if okay then language = value end
+        end
+        if type(language) == 'string' and language:lower():match('^en') then
+            return row.name_en or row.name_zh
+        end
+        return row.name_zh or row.name_en
+    end
+    local function report_drop(reason, entry, resource)
+        if not env.diagnostic then return end
+        pcall(env.diagnostic, reason, entry.kind, entry.map_type,
+            entry.target_id ~= 0 and entry.target_id ~= 0xffffffff,
+            entry.localization_key, resource)
+    end
+    local function generic_name(name, key)
+        if type(name) == 'string' then
+            name = name:match('^%s*(.-)%s*$')
+            local lower = name:lower()
+            return GENERIC_MISSION_NAMES[key]
+                or classification.generic_native_names[name]
+                or classification.generic_native_names[lower] or false
+        end
+        return GENERIC_MISSION_NAMES[key] or false
+    end
+    local function exact_supply_name(name)
+        if type(name) ~= 'string' then return false end
+        name = name:match('^%s*(.-)%s*$')
+        return classification.exact_supply_names[name]
+            or classification.exact_supply_names[name:lower()] or false
+    end
     local function reset(reason)
         state.scene, state.session, state.seen = nil, nil, {}
         state.map_scene = nil
@@ -3433,9 +4042,17 @@ local function build_ping_events(env)
             -- accept otherwise unknown resources when the native UI label resolves.
             local native_category = (entry.kind==18 or entry.kind==19) and 'building'
                 or entry.kind==20 and 'stratagem' or nil
+            if native_category == 'building' and (entry.target_id==0 or entry.target_id==0xffffffff)
+                and exact_supply_name(localized) then
+                return {category='supplies',target=localized,position=entry.position,
+                    creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,action=action,source='native_marker'}
+            end
             if native_category and (entry.target_id==0 or entry.target_id==0xffffffff) then
-                if not localized then
-                    return nil, entry.localization_key > 0 and 'retry' or nil
+                if not localized and entry.localization_key > 0 then return nil, 'retry' end
+                if not localized or generic_name(localized, entry.localization_key) then
+                    report_drop('missing_target_or_generic_name', entry)
+                    return nil
                 end
                 return {category=native_category,target=localized,position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
@@ -3450,16 +4067,51 @@ local function build_ping_events(env)
             local identity = guarded(address, 24)
             if u32(identity, 8) ~= entry.target_id then return nil, 'retry' end
             local resource = hex64(identity, 0)
-            if EXCLUDED_SUPPLIES[resource] then return nil end
             local mission = MISSION_TARGETS[resource]
+            if not mission and exact_supply_name(localized) then
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                return {category='supplies',target=localized,target_id=entry.target_id,
+                    creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
+            if EXCLUDED_SUPPLIES[resource] then
+                local supply = classification.supply_targets[resource]
+                local label = supply and selected_name(supply)
+                    or (localized and not generic_name(localized, entry.localization_key) and localized)
+                if not label then
+                    report_drop('supply_without_specific_name', entry, resource)
+                    return nil
+                end
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                return {category='supplies',target=label,target_id=entry.target_id,
+                    creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
+            if classification.ambiguous_shells[resource] and (not localized
+                or generic_name(localized, entry.localization_key)) then
+                report_drop('ambiguous_shell_without_specific_name', entry, resource)
+                return nil
+            end
             -- A ground-style marker is meaningful only when its actual target
             -- identity is a reviewed task resource. Empty terrain still exits
             -- above, and arbitrary objects/enemies do not become locations.
             if entry.kind == 0 and not mission then return nil end
             local enemy = ENEMY_TARGETS[resource]
+            local special = env.special_targets and env.special_targets.resolve(resource,
+                entry.localization_key) or nil
             local info = mission or enemy or PING_TARGETS[resource]
-            if not info and not (native_category and localized) then
-                if native_category and entry.localization_key > 0 then return nil, 'retry' end
+            if special then
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                return {category='building',target=selected_name(special),target_id=entry.target_id,
+                    creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
+            if not info and (not native_category or not localized
+                or generic_name(localized, entry.localization_key)) then
+                report_drop('unknown_target_or_generic_name', entry, resource)
                 return nil
             end
             if read(address, 24) ~= identity then return nil, 'retry' end
@@ -3469,6 +4121,10 @@ local function build_ping_events(env)
             -- keep specific native marker text when it is available.
             if (mission or enemy) and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
                 label = localized_name(info[3]) or info[2]
+            end
+            if info and native_category and not mission and not enemy
+                and generic_name(localized, entry.localization_key) then
+                label = info[2]
             end
             if info and info[2]:match('^TCS') and localized and not localized:find('TCS',1,true)
                 and not GENERIC_MISSION_NAMES[entry.localization_key] then
@@ -3576,6 +4232,9 @@ local ping_events = build_ping_events({
     context = function() return game_base and u64(game_base + M.CONTEXT_PTR) or nil end,
     session = session_token,
     localize = function(key) return marker_localization.lookup(key) end,
+    special_targets = M.special_targets,
+    language = function() return M.language.current() end,
+    diagnostic = function(...) return M.record_ping_drop(...) end,
     emit = function(event, now)
         enrich_stratagem_event(event,now)
         event.type = 'ping'
@@ -3883,24 +4542,51 @@ local function save_tasks()
     if not ok then pcall(function() handle:close() end) note('task save failed: ' .. tostring(result)) end
     return ok
 end
+M.quick_migrated_task_name = '旧版快捷定时'
+function M.quick_task_definition_exists(definitions, interval, message)
+    for _, definition in ipairs(definitions or {}) do
+        if tostring(definition.name):match('^' .. M.quick_migrated_task_name)
+            and definition.mode == 'repeat' and tostring(definition.time) == tostring(interval)
+            and definition.message == message then return true end
+    end
+    return false
+end
+function M.append_quick_task_definition(definitions, interval, message)
+    definitions = definitions or {}
+    if M.quick_task_definition_exists(definitions, interval, message) then return definitions end
+    local occupied, name = {}, M.quick_migrated_task_name
+    for _, definition in ipairs(definitions) do
+        if tostring(definition.name):match('^' .. M.quick_migrated_task_name) then occupied[definition.name] = true end
+    end
+    local suffix = 2
+    while occupied[name] do name = M.quick_migrated_task_name .. ' ' .. suffix; suffix = suffix + 1 end
+    definitions[#definitions + 1] = {name=name,mode='repeat',time=tostring(interval),message=message,enabled=true}
+    return definitions
+end
 apply_preset_snapshot = function(payload, role)
     local valid, parsed = automation.validate_profile(payload)
     if not valid then return false, parsed end
     local old_tasks, old_serial, old_revision
-    if parsed.tasks ~= nil then
+    local migrate_quick = parsed.values.quick_timer_enabled == true
+    if parsed.tasks ~= nil or migrate_quick then
         if role ~= 'host' and role ~= 'client' then return false, '未知预设' end
         local candidate, count = {}, 0
         for _, task in ipairs(M.tasks) do
-            if (task.profile or 'host') ~= role then
+            if parsed.tasks == nil or (task.profile or 'host') ~= role then
                 count = count + 1; candidate[count] = task
             end
         end
-        if count + #parsed.tasks > MAX_TASKS then return false, '应用后任务总数超过32' end
+        local definitions = parsed.tasks
+        if migrate_quick then
+            definitions = M.append_quick_task_definition(definitions, parsed.values.quick_timer_interval,
+                parsed.values.quick_timer_message)
+        end
+        if count + #(definitions or {}) > MAX_TASKS then return false, '应用后任务总数超过32' end
         old_tasks, old_serial, old_revision = {}, task_serial, task_revision
         for i, task in ipairs(M.tasks) do old_tasks[i] = task end
         local now = os.time()
         local next_serial = task_serial
-        for _, definition in ipairs(parsed.tasks) do
+        for _, definition in ipairs(definitions or {}) do
             local task, why = task_validate(definition.name, definition.mode, definition.time, definition.message)
             if not task then return false, why end
             if next_serial >= 1000000000 then return false, '任务编号已用尽' end
@@ -3928,7 +4614,21 @@ apply_preset_snapshot = function(payload, role)
         end
         task_revision = old_revision + 1
     end
-    local applied, why = automation.import_profile(payload, role)
+    local import_payload = payload
+    if migrate_quick then
+        local count
+        import_payload, count = payload:gsub('(quick_timer_enabled=)true\n', '%1false\n', 1)
+        if count ~= 1 then
+            if old_tasks then
+                for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
+                for i, task in ipairs(old_tasks) do M.tasks[i] = task end
+                task_serial, task_revision = old_serial, old_revision
+                if not save_tasks() then note('preset task rollback failed after quick timer conversion error') end
+            end
+            return false, '快捷定时迁移失败；预设未应用'
+        end
+    end
+    local applied, why = automation.import_profile(import_payload, role)
     if applied then return true, why end
     if old_tasks then
         for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
@@ -3964,6 +4664,29 @@ function M.add_task(name, mode, time, message, now, profile)
     if not save_tasks() then table.remove(M.tasks) return nil, '保存失败，请检查配置目录' end
     task_revision = task_revision + 1
     return t
+end
+function M.migrate_quick_timer(role)
+    if role ~= 'host' and role ~= 'client' then return false, '未知身份' end
+    local profile = automation.profile(role)
+    if not profile or profile.quick_timer_enabled ~= true then return true, '无需迁移' end
+    local definitions = {}
+    for _, task in ipairs(M.profile_tasks(role)) do
+        definitions[#definitions + 1] = {name=task.name,mode=task.mode,time=task.time,message=task.message}
+    end
+    if not M.quick_task_definition_exists(definitions, profile.quick_timer_interval, profile.quick_timer_message) then
+        local name = M.quick_migrated_task_name
+        local occupied = {}
+        for _, task in ipairs(M.profile_tasks(role)) do
+            if tostring(task.name):match('^' .. M.quick_migrated_task_name) then occupied[task.name] = true end
+        end
+        local suffix=2
+        while occupied[name] do name=M.quick_migrated_task_name .. ' ' .. suffix;suffix=suffix+1 end
+        local added, why=M.add_task(name,'repeat',tostring(profile.quick_timer_interval),profile.quick_timer_message,nil,role)
+        if not added then return false, why end
+    end
+    local ok, why=automation.set('quick_timer_enabled',false,role)
+    if not ok then return false, why end
+    return true, '已迁移为定时任务'
 end
 function M.remove_task(id)
     for i, t in ipairs(M.tasks) do
@@ -4582,6 +5305,10 @@ local text_input = build_text_input(64)
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
                lfail = 0, version = 0,
                rw = 0, rh = 0}
+M.language.set_dirty(function()
+    PANEL.version = (PANEL.version or 0) + 1
+    PANEL.sig = nil
+end)
 local function stop_text_input()
     local status = panel_input.status()
     local window = status.window
@@ -5451,6 +6178,7 @@ local function panel_signature()
         PANEL.rw, PANEL.rh,
         string.format('%.3f', s or 0), ox or 0, oy or 0,
         tostring(PANEL.hover), tostring(PANEL.editing), tostring(PANEL.hint),
+        M.language.current(),
         tostring(PANEL.edit_text), tostring(PANEL.edit_field),
         PANEL.pos and PANEL.pos.fx or '-', PANEL.pos and PANEL.pos.fy or '-',
         tostring(PANEL.ui_scale or 1),
@@ -5491,10 +6219,14 @@ PANEL.active_plugin = PANEL.active_plugin
 -- BEGIN ALERT PANEL
 -- Dedicated configuration views using the existing Armory frame/input owner.
 -- No native reads here; catalog rows and safely bound icons come from the host.
-local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
+local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local C=canvas.palette
     local function say(cn,en) return chinese and cn or en end
     local function text(v,x,y,size,c,w) canvas.text(v,x,y,size or 14,c or C.TEXT,w) end
+    local function row_name(row)
+        if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
+        return row.debug_name or row.name or row.display_name or tostring(row.id)
+    end
     local function button(key,value,x,y,w,on)
         canvas.rect(x,y,w,32,on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
         canvas.border(x,y,w,32,on and C.YELLOW or C.LINE2,952)
@@ -5520,12 +6252,13 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         text(say('体型采用游戏内部 Small / Medium / Large / Massive。','SIZES FOLLOW THE GAME UNIT SIZE ENUM.'),22,278,12,C.MUTED,440)
         text(say('小型默认关闭；普通物资仍不提示。','SMALL IS OFF BY DEFAULT; NO ORDINARY SUPPLIES.'),22,303,12,C.MUTED,440)
     else
-        local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'}}
+        local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'},
+            {'mission','任务战备','MISSION STRATAGEMS'}}
         for i,v in ipairs(groups) do
             local y=237+(i-1)*38
             local total,enabled_count=0,0
             for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-                if row.group==v[1] then
+                if (v[1]=='mission' and row.family=='mission') or (v[1]~='mission' and row.group==v[1]) then
                     total=total+1
                     if a.rule('stratagem',row.id,role).enabled~=false then enabled_count=enabled_count+1 end
                 end
@@ -5535,29 +6268,34 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
             button('rules:bulk:'..v[1]..':off',say('全部关闭','DISABLE ALL'),266,y,112,false)
         end
         local x=22
-        for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},{'green','绿','GREEN'},{'other','任务等','OTHER'}}) do
-            button('rules:filter:'..v[1],say(v[2],v[3]),x,366,80,(p.rule_filter or 'all')==v[1]);x=x+86
+        for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},
+            {'green','绿','GREEN'},{'mission','任务','MISSION'}}) do
+            button('rules:filter:'..v[1],say(v[2],v[3]),x,390,80,(p.rule_filter or 'all')==v[1]);x=x+86
         end
-        canvas.rect(22,408,424,32,C.FIELD,951);canvas.border(22,408,424,32,C.LINE2,952)
+        canvas.rect(22,432,424,32,C.FIELD,951);canvas.border(22,432,424,32,C.LINE2,952)
         local search=p.edit_field=='rules:search' and p.edit_text or p.rule_search or ''
-        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,416,14,C.MUTED,408)
-        canvas.region('rules:search',22,408,424,32)
+        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,440,14,C.MUTED,408)
+        canvas.region('rules:search',22,432,424,32)
         local query=(p.rule_search or ''):lower()
         for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-            if ((p.rule_filter or 'all')=='all' or row.group==p.rule_filter)
-                and (query=='' or (row.display_name or row.name or row.debug_name):lower():find(query,1,true)
+            local filter=p.rule_filter or 'all'
+            local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
+                or (filter=='other' and row.group=='other' and row.family~='mission')
+                or (filter~='mission' and filter~='other' and row.group==filter)
+            if matches_filter
+                and (query=='' or row_name(row):lower():find(query,1,true)
                     or tostring(row.id):find(query,1,true)
                     or (row.debug_name or row.name or ''):lower():find(query,1,true)) then rows[#rows+1]=row end
         end
-        text(catalog.state.status,22,349,12,C.MUTED,424)
+        text(status_text and status_text(catalog.state.status) or catalog.state.status,22,472,12,C.MUTED,424)
     end
     local selected
     for _,row in ipairs(rows) do if tostring(row.id)==tostring(p.rule_selected) then selected=row end end
     selected=selected or rows[1];p.rule_selected=selected and selected.id or nil
-    local page_size=enemy and 5 or 10
+    local page_size=enemy and 5 or 9
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
-    local top=enemy and 356 or 456
+    local top=enemy and 356 or 480
     for i=(p.rule_page-1)*page_size+1,math.min(#rows,p.rule_page*page_size) do
         local row=rows[i];local y=top+(i-(p.rule_page-1)*page_size-1)*40
         local rule=a.rule(enemy and 'enemy' or 'stratagem',row.id,role)
@@ -5566,7 +6304,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         canvas.rect(22,y,424,36,row==selected and C.ROW_HI or C.PANEL,951)
         canvas.border(22,y,424,36,row==selected and C.YELLOW or C.LINE,952)
         if not enemy and canvas.icon then canvas.icon(row.icon,27,y+4,28) end
-        text(row.display_name or row.name or row.debug_name,enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
+        text(row_name(row),enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
         text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
         canvas.region(key,22,y,424,36)
     end
@@ -5582,7 +6320,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         return
     end
     local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
-    text(selected.display_name or selected.name or selected.debug_name,486,262,20,C.TEXT,474)
+    text(row_name(selected),486,262,20,C.TEXT,474)
     if not enemy then
         text(say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s',486,296,12,C.MUTED,474)
         if selected.variant_ids and #selected.variant_ids>1 then
@@ -5611,14 +6349,14 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
     text('{目标} / {类别} / {动作} / {位置}',486,786,14,C.TEXT,474)
     text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,828,12,C.MUTED,474)
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
-    if p.hint then text(p.hint,486,919,12,C.YELLOW,474) end
+    if p.hint then text(status_text and status_text(p.hint) or p.hint,486,919,12,C.YELLOW,474) end
 end
 -- END ALERT PANEL
 
 -- BEGIN PRESET PANEL
 -- Named automation preset page. The frame and hit testing belong to auto_chat.lua;
 -- this renderer only records ordinary panel regions through UX.
-local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok)
+local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok, status_text)
     local C, W, H = UX.palette, 1000, 990
     local text, rect, border, region = UX.text, UX.rect, UX.border, UX.region
     local role = PANEL.profile or 'host'
@@ -5695,12 +6433,14 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok)
         local count=0;for _ in selected.payload:gmatch('\nrule_[^=]+=[^\n]*') do count=count+1 end
         text(say('包含自动消息设置、模板和细粒度规则；规则字段：','AUTOMATION OPTIONS, TEMPLATES AND FINE GRAIN RULES; RULE FIELDS: ')..tostring(count),390,412,12,C.MUTED,568)
     end
-    button('preset:apply',say('加载到所选角色','LOAD TO SELECTED ROLE'),390,432,210,34,false)
+    button('preset:apply',say(role=='host' and '应用到主机配置' or '应用到客机配置',
+        role=='host' and 'APPLY TO HOST CONFIG' or 'APPLY TO CLIENT CONFIG'),390,432,210,34,false)
     button('preset:export',say('导出文件','EXPORT FILE'),612,432,160,34,false)
     button('preset:delete',say('删除','DELETE'),784,432,174,34,false)
     field('preset:path',say('导入文件路径','IMPORT FILE PATH'),PANEL.preset_path or '',488)
     button('preset:import',say('导入路径中的文件','IMPORT FILE FROM PATH'),390,556,276,34,false)
-    text(PANEL.hint or say('导入只保存为命名预设；点击加载后才写入所选角色。','Import saves a named preset. Load applies it to the selected role.'),390,606,12,PANEL.hint and C.YELLOW or C.MUTED,568)
+    text(PANEL.hint and status_text and status_text(PANEL.hint) or PANEL.hint
+        or say('选择主机或客机配置后，点击应用按钮写入该角色。','Select a host or client configuration, then apply the preset to that role.'),390,606,12,PANEL.hint and C.YELLOW or C.MUTED,568)
     if PANEL.preset_export_path then text(say('导出位置：','EXPORTED: ')..PANEL.preset_export_path,390,638,11,C.GOOD,568) end
 end
 -- END PRESET PANEL
@@ -5890,13 +6630,13 @@ local function draw_panel()
     rect(38, 59, 18, 4, C.INK, 953); rect(42, 63, 10, 4, C.INK, 953)
     local tw = text('AUTO', 86, 50, 34, C.TEXT)
     text('CHAT', 86 + tw + 12, 50, 34, C.YELLOW)
-    text(FONT.ok and '自定义定时事件，自动发送小队消息。' or 'Schedule your squad messages.',
+    text(M.language.text('自定义定时事件，自动发送小队消息。','Schedule your squad messages.'),
          88, 84, 12, C.MUTED, 420)
     text('X', W - PAD - 14, 48, 18, PANEL.hover == 'close' and C.YELLOW or C.MUTED)
     region('close', W - PAD - 28, 38, 28, 30)
     rect(470, 48, 130, 30, PANEL.preset_view and C.YELLOW or PANEL.hover == 'presets:open' and C.ROW_HI or C.PANEL, 951)
     border(470, 48, 130, 30, PANEL.preset_view and C.YELLOW or C.LINE2, 952)
-    text(FONT.ok and '命名预设' or 'PRESETS', 535, 56, 13,
+    text(M.language.text('命名预设','PRESETS'), 535, 56, 13,
          PANEL.preset_view and C.INK or C.TEXT, 118, 'center')
     region('presets:open', 470, 48, 130, 30)
     if PANEL.preset_view then
@@ -5906,12 +6646,12 @@ local function draw_panel()
             local role_label = role_key == 'host' and 'HOST PRESET' or 'CLIENT PRESET'
             rect(role_x, 48, 146, 30, chosen and C.YELLOW or PANEL.hover == 'profile:' .. role_key and C.ROW_HI or C.PANEL, 951)
             border(role_x, 48, 146, 30, chosen and C.YELLOW or C.LINE2, 952)
-            text(FONT.ok and (role_key == 'host' and '主机预设' or '客机预设') or role_label,
+            text(M.language.is_chinese() and (role_key == 'host' and '主机预设' or '客机预设') or role_label,
                  role_x + 73, 56, 13, chosen and C.INK or C.TEXT, 134, 'center')
             region('profile:' .. role_key, role_x, 48, 146, 30)
         end
         local current_role = automation.sync()
-        text(FONT.ok and ('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'))
+        text(M.language.is_chinese() and ('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'))
              or ('ACTIVE: ' .. (current_role or 'WAITING'):upper()), 614, 86, 12, C.MUTED, 300)
     end
 
@@ -5953,7 +6693,7 @@ local function draw_panel()
     -- The tab order, exactly like Armory's ui.tab_order: armory puts its tabs left to
     -- right in one strip and switches the whole body on the selected key. Tab 1 is
     -- always the SETTINGS tab; every registered mod appends one after it.
-    local tabs = {{key = 'tab:default', title = FONT.ok and '设置' or 'SETTINGS', id = nil}}
+    local tabs = {{key = 'tab:default', title = M.language.text('设置','SETTINGS'), id = nil}}
     for i = 1, #M.PLUGINS do
         tabs[#tabs + 1] = {key = 'tab:' .. M.PLUGINS[i].id,
                            title = M.PLUGINS[i].title, id = M.PLUGINS[i].id}
@@ -6010,12 +6750,12 @@ local function draw_panel()
     -- ---------------------------------------------------------- settings body
     if PANEL.rule_view then
         stratagem_catalog.scan(os.time())
-        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,FONT.ok,M.version)
+        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,M.language.is_chinese(),M.version,M.language.status)
         PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
         return
     end
     if PANEL.preset_view then
-        draw_preset_panel(UX, PANEL, automation, preset_library, FONT.ok)
+        draw_preset_panel(UX, PANEL, automation, preset_library, M.language.is_chinese(),M.language.status)
         PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
         return
     end
@@ -6065,7 +6805,7 @@ local function draw_panel()
         region(key, x - 5, y - 4, 26, 24)
     end
 
-    local function caption(cn, en) return FONT.ok and cn or en end
+    local function caption(cn, en) return M.language.text(cn,en) end
     local function field(key, title, value, y)
         label(title, IX, y)
         local focus = PANEL.edit_field == key and PANEL.editing
@@ -6087,30 +6827,20 @@ local function draw_panel()
         or PANEL.settings_view == 'pings' and caption('玩家标记消息', 'PLAYER PING MESSAGES')
         or caption('添加定时任务', 'ADD SCHEDULED TASK'))
     y = y + 55
-    local navw = (IW - 18) / 4
+    if PANEL.settings_view == 'quick' then PANEL.settings_view = 'tasks' end
+    local navw = (IW - 12) / 3
     button('view:tasks', caption('定时任务', 'TASKS'), IX, y, navw, 30, true,
            PANEL.settings_view ~= 'automation' and PANEL.settings_view ~= 'pings')
     button('view:automation', caption('自动消息', 'AUTO SEND'), IX + navw + 6,
            y, navw, 30, true, PANEL.settings_view == 'automation')
     button('view:pings', caption('标记消息', 'PING'), IX + 2 * (navw + 6),
            y, navw, 30, true, PANEL.settings_view == 'pings')
-    button('view:quick', caption('快捷定时', 'QUICK TIMER'), IX + 3 * (navw + 6),
-           y, navw, 30, true, PANEL.settings_view == 'quick')
     y = y + 44
-    if PANEL.settings_view == 'quick' and M.options then
-        local role=PANEL.profile or 'host'
-        local quick=automation.profile(role)
-        button('opt:quick_timer_enabled',caption('快捷间隔发送','QUICK TIMER')..(quick.quick_timer_enabled and ' [ON]' or ' [OFF]'),
-            IX,y,IW,32,true,quick.quick_timer_enabled);y=y+48
-        field('option:quick_timer_interval',caption('发送间隔（5–3600秒）','INTERVAL (5–3600 SECONDS)'),tostring(quick.quick_timer_interval),y);y=y+64
-        field('option:quick_timer_message',caption('快捷定时消息','QUICK TIMER MESSAGE'),quick.quick_timer_message,y);y=y+64
-        text(caption('仅当前检测到的主机或客机配置运行；保留“小队/仅自己”与冷却规则。',
-            'RUNS ONLY FOR THE DETECTED ROLE; SHARES OUTPUT AND COOLDOWN POLICY.'),IX,y,12,C.MUTED,IW)
-        if PANEL.hint then text(PANEL.hint,IX,y+34,11,C.YELLOW,IW) end
-    elseif PANEL.settings_view == 'pings' and M.options then
+    if PANEL.settings_view == 'pings' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
+            {'ping_supplies','普通物资','ORDINARY SUPPLIES'},
             {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'},
             {'ping_map','地图任务 / 撤离区','MAP OBJECTIVES / EXTRACTION'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
@@ -6128,12 +6858,12 @@ local function draw_panel()
         field('option:task_stratagem_message', caption('任务执行消息', 'TASK ACTION MESSAGE'), opts.task_stratagem_message, y)
         y = y + 58
         text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
-        text(caption(M.ping_status or '等待标记数据', 'NATIVE READER: ' .. (opts.ping and 'ACTIVE' or 'OFF')), IX, y + 22, 12, C.MUTED, IW)
-        text(caption(M.task_stratagem_status or '等待任务战备数据', 'TASK STRATAGEM READER'), IX, y + 40, 12, C.MUTED, IW)
+        text(M.language.status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
+        text(M.language.status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
         text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: CATEGORY / TARGET / POSITION / ACTION'), IX, y + 62, 12, C.MUTED, IW)
         text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 84, 12, C.MUTED, IW)
         text(caption('{玩家名} / {缩写} / {编号}', 'PLAYER NAME / SHORT / SLOT'), IX, y + 106, 12, C.MUTED, IW)
-        if PANEL.hint then text(PANEL.hint, IX, y + 128, 11, C.YELLOW, IW) end
+        if PANEL.hint then text(M.language.status(PANEL.hint), IX, y + 128, 11, C.YELLOW, IW) end
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
         local function toggle(key, zh, en)
@@ -6159,7 +6889,7 @@ local function draw_panel()
         y = y + 66
         button('view:pings', caption('玩家标记分类设置 >', 'PING CATEGORIES >'), IX, y, IW, 30, true)
         y = y + 44
-        text(PANEL.hint or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
+        text(PANEL.hint and M.language.status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
              IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW)
         text(caption('欢迎语可用 {玩家名}、{缩写}、{编号}', 'WELCOME: {玩家名} / {缩写} / {编号}'), IX, y + 38, 11, C.DIM, IW)
     else
@@ -6182,7 +6912,7 @@ local function draw_panel()
     y = y + 62
     button('task:add', caption('添加定时任务', 'ADD TASK'), IX, y, IW, 32, true, true)
     y = y + 43
-    text(PANEL.hint or caption('点击输入框填写；Enter 确认，Esc 取消', 'CLICK TO TYPE. ENTER CONFIRMS / ESC CANCELS'),
+    text(PANEL.hint and M.language.status(PANEL.hint) or caption('点击输入框填写；Enter 确认，Esc 取消', 'CLICK TO TYPE. ENTER CONFIRMS / ESC CANCELS'),
          IX, y, 12, PANEL.hint and C.YELLOW or C.DIM, IW)
         text(caption('填写完成后点击“添加任务”，任务才会保存并进入预设',
                      'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 32, 11, C.MUTED, IW)
@@ -6211,7 +6941,7 @@ local function draw_panel()
         text(cut(t.name, 14, IW - 160), IX + 8, y + 7, 14, C.TEXT, IW - 160)
         text(t.mode:upper() .. ' / ' .. t.time .. (t.mode == 'daily' and '' or ' S') .. ' / ' .. state,
              IX + 8, y + 27, 11, t.enabled and C.GOOD or C.DIM, IW - 140)
-        text(cut(t.result or t.message, 11, IW - 16), IX + 8, y + 48, 11, C.MUTED, IW - 16)
+        text(cut(t.result and M.language.status(t.result) or t.message, 11, IW - 16), IX + 8, y + 48, 11, C.MUTED, IW - 16)
         button('toggle:' .. t.id, t.done and caption('重启', 'RESTART') or t.enabled
                and caption('暂停', 'PAUSE') or caption('启用', 'ENABLE'),
                IX + IW - 136, y + 7, 72, 28, true)
@@ -6398,10 +7128,9 @@ local function panel_frame()
                 PANEL.rule_search=PANEL.edit_text or '';PANEL.rule_page=1
             elseif option then
                 local value = PANEL.edit_text
-                if option == 'cooldown' or option == 'welcome_delay' or option == 'quick_timer_interval' then value = tonumber(value) end
+                if option == 'cooldown' or option == 'welcome_delay' then value = tonumber(value) end
                 local ok, why = automation.set(option, value, PANEL.profile or 'host')
                 if not ok then PANEL.hint = why; return false end
-                if option:match('^quick_timer_') then M.quick_timer_shadow.sync(PANEL.profile or 'host') end
             elseif PANEL.edit_field == 'preset:name' then
                 PANEL.preset_name = PANEL.edit_text or ''
             elseif PANEL.edit_field == 'preset:path' then
@@ -6456,7 +7185,11 @@ local function panel_frame()
             PANEL.rule_page=math.max(1,(PANEL.rule_page or 1)+(hovered=='rules:next' and 1 or -1))
         elseif hovered:match('^rules:bulk:') then
             local group,value=hovered:match('^rules:bulk:([^:]+):([^:]+)$');local ids={}
-            for _,row in ipairs(stratagem_catalog.list_rules()) do if row.group==group then ids[#ids+1]=row.id end end
+            for _,row in ipairs(stratagem_catalog.list_rules()) do
+                if (group=='mission' and row.family=='mission') or (group~='mission' and row.group==group) then
+                    ids[#ids+1]=row.id
+                end
+            end
             if #ids>0 then local _,why=automation.set_rules('stratagem',ids,value=='on',PANEL.profile or 'host');PANEL.hint=why
             else PANEL.hint='该分类尚无可读取的战备' end
         elseif hovered=='rules:enabled' and PANEL.rule_selected then
@@ -6511,11 +7244,39 @@ local function panel_frame()
                 PANEL.hint = ok and '预设名称已更新' or why
             end
         elseif hovered == 'preset:apply' then
-            local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
-            if not selected then PANEL.hint = '请先选择预设'
+            local role=PANEL.profile or 'host'
+            local selected=PANEL.preset_selected_by_role[role]
+            if not selected then PANEL.hint = M.language.text('请先选择预设','Select a preset first.')
             else
-                local ok, why = preset_library.apply(selected, PANEL.profile or 'host')
-                PANEL.hint = ok and '已加载到所选角色' or why
+                local entry
+                for _,item in ipairs(preset_library.list(role)) do if item.id==selected then entry=item;break end end
+                local legacy_without_tasks=false
+                if entry then
+                    local valid,parsed=automation.validate_profile(entry.payload)
+                    legacy_without_tasks=valid and parsed.tasks==nil
+                end
+                local ok, why = preset_library.apply(selected, role)
+                if ok then
+                    -- The cached role starts as host before a session is known.
+                    -- Only report a match after a fresh session sync confirms it.
+                    local active=automation.sync()
+                    local role_name=role=='host' and '主机' or '客机'
+                    local active_name=active=='host' and '主机' or active=='client' and '客机' or nil
+                    local applied=M.language.text('已应用到'..role_name..'配置','Applied to '..role:upper()..' configuration')
+                    if active_name then
+                        applied=applied..M.language.text(active==role and '；当前身份匹配' or '；当前身份为'..active_name..'，切换到'..role_name..'身份后生效',
+                            active==role and '; active role matches.' or '; active role is '..active:upper()..'. It takes effect in a '..role:upper()..' session.')
+                    else
+                        applied=applied..M.language.text('；当前身份尚未确认，检测到'..role_name..'身份后生效',
+                            '; session role is not confirmed. It will take effect in a '..role:upper()..' session.')
+                    end
+                    if legacy_without_tasks then
+                        applied=applied..M.language.text('；旧版预设未保存定时任务，已保留当前'..role_name..'任务',
+                            '; this legacy preset has no task snapshot, so current '..role:upper()..' tasks were kept.')
+                    end
+                    PANEL.hint=applied
+                else PANEL.hint=M.language.text('预设应用失败：'..tostring(why),
+                    'Preset apply failed: '..M.language.status(tostring(why))) end
             end
         elseif hovered == 'preset:export' then
             local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
@@ -6548,10 +7309,8 @@ local function panel_frame()
         elseif opt_toggle then
             local ok, why = automation.set(opt_toggle, not automation.profile(PANEL.profile or 'host')[opt_toggle], PANEL.profile or 'host')
             PANEL.hint = ok and '设置已保存' or why
-            if ok and opt_toggle:match('^quick_timer_') then M.quick_timer_shadow.sync(PANEL.profile or 'host') end
         elseif hovered:match('^profile:') then
             PANEL.profile = hovered:match('^profile:(.+)$')
-            M.quick_timer_shadow.sync(PANEL.profile)
             PANEL.task_page = 1
             PANEL.hint = '正在编辑' .. (PANEL.profile == 'host' and '主机' or '客机') .. '预设；根据身份自动启用'
         elseif hovered:match('^output:') then
@@ -6565,7 +7324,7 @@ local function panel_frame()
             end
         elseif hovered == 'tabs:prev' or hovered == 'tabs:next' then
             PANEL.tab_page = math.max(1, (PANEL.tab_page or 1) + (hovered == 'tabs:next' and 1 or -1))
-        elseif hovered == 'view:tasks'  or hovered == 'view:automation' or hovered == 'view:pings' or hovered == 'view:quick' then
+        elseif hovered == 'view:tasks'  or hovered == 'view:automation' or hovered == 'view:pings' then
             PANEL.settings_view = hovered:match('^view:(.+)$')
             PANEL.preset_view = nil
             PANEL.hint = nil
@@ -6607,31 +7366,6 @@ local function panel_frame()
             PANEL.rule_view,PANEL.preset_view=nil,nil
             PANEL.version = (PANEL.version or 0) + 1
             note('panel: tab -> ' .. tostring(PANEL.active_plugin or 'default'))
-        elseif hovered == 'timer' then
-            local role=PANEL.profile or 'host'
-            local next_value=not automation.profile(role).quick_timer_enabled
-            local ok,why=automation.set('quick_timer_enabled',next_value,role)
-            if ok then M.quick_timer_shadow.sync(role);config_save() else PANEL.hint=why end
-            cfg.elapsed = 0
-            note('panel: timed send ' .. (next_value and 'ON' or 'OFF') .. ' / ' .. role)
-        elseif hovered == 'minus' then
-            local role=PANEL.profile or 'host';local value=math.max(5,automation.profile(role).quick_timer_interval-5)
-            local ok,why=automation.set('quick_timer_interval',value,role)
-            if ok then M.quick_timer_shadow.sync(role);config_save() else PANEL.hint=why end
-        elseif hovered == 'plus' then
-            local role=PANEL.profile or 'host';local value=math.min(3600,automation.profile(role).quick_timer_interval+5)
-            local ok,why=automation.set('quick_timer_interval',value,role)
-            if ok then M.quick_timer_shadow.sync(role);config_save() else PANEL.hint=why end
-        elseif hovered == 'message' then
-            local role=PANEL.profile or 'host';M.quick_timer_shadow.sync(role)
-            PANEL.quick_timer_edit_role=role
-            PANEL.editing, PANEL.edit_field = true, 'option:quick_timer_message'
-            PANEL.edit_text=automation.profile(role).quick_timer_message
-            PANEL.hint = PANEL.editing
-                        and 'TYPE THE MESSAGE   ENTER SAVES   ESC CANCELS'
-                        or nil
-            PANEL.edit_backup = automation.profile(role).quick_timer_message
-            note('panel: message editing ' .. (PANEL.editing and 'ON' or 'OFF'))
         end
         PANEL.version = (PANEL.version or 0) + 1
         write_status()
@@ -6832,29 +7566,9 @@ local function trigger_clear()
     local handle = io.open(TRIGGER, 'w')
     if handle then handle:write('') handle:close() end
 end
--- `timed on|off|interval N|message TEXT` drives the panel's settings without a
--- mouse, which is also how the offline harness exercises them.
 local function handle_config_command(body)
-    local action, rest = body:match('^timed%s+(%a+)%s*(.*)$')
-    if not action then return false end
-    action = action:lower()
-    local role=(PANEL.open and PANEL.profile) or automation.state.active_role
-    if role~='host' and role~='client' then note('timed: role unknown; no profile changed');return true end
-    local profile=automation.profile(role)
-    local ok,why
-    if action == 'on' then ok,why=M.quick_timer_shadow.set(role,'quick_timer_enabled',true);cfg.elapsed=0
-    elseif action == 'off' then ok,why=M.quick_timer_shadow.set(role,'quick_timer_enabled',false);cfg.elapsed=0
-    elseif action == 'interval' then
-        ok,why=M.quick_timer_shadow.set(role,'quick_timer_interval',math.max(5,math.min(3600,tonumber(rest) or profile.quick_timer_interval)))
-    elseif action == 'message' and #rest > 0 then
-        ok,why=M.quick_timer_shadow.set(role,'quick_timer_message',cut_utf8(single_line(rest),200))
-    else
-        note('timed: unknown action ' .. action)
-        return true
-    end
-    if not ok then note('timed: setting refused - '..tostring(why));return true end
-    note(string.format('timed: timer_on=%s interval=%d message=%s',
-        tostring(profile.quick_timer_enabled), profile.quick_timer_interval, profile.quick_timer_message))
+    if not tostring(body):match('^timed%s+') then return false end
+    note('timed: quick timer was retired; use the scheduled task settings')
     return true
 end
 local function poll_trigger()
@@ -6876,8 +7590,6 @@ local function poll_trigger()
         return
     end
     if request == 'config' then
-        local role=automation.state.active_role
-        if role=='host' or role=='client' then M.quick_timer_shadow.sync(role) end
         note(string.format('config: timer_on=%s interval=%d message=%s',
             tostring(cfg.timer_on), cfg.interval, cfg.message))
         return
@@ -6897,36 +7609,6 @@ local function poll_trigger()
     end
 end
 
--- ---------------------------------------------------------------- 14. timed send
--- Uses the NORMAL send path with every guard intact: no session, chat off, or
--- nobody else present => refused, and the reason is named in the log.
-local function timed_send(dt)
-    local role=automation.state.active_role
-    if role~='host' and role~='client' then cfg.elapsed=0;return end
-    local profile=automation.profile(role)
-    if M.quick_timer_shadow.role~=role then cfg.elapsed=0;M.quick_timer_shadow.role=role end
-    if not profile or not profile.quick_timer_enabled then cfg.elapsed = 0 return end
-    cfg.elapsed = cfg.elapsed + dt
-    if cfg.elapsed < profile.quick_timer_interval then return end
-    cfg.elapsed = 0
-    local chat, others = send_context(false)
-    local allowed, why = automation.check(os.time(), others)
-    local ok = false
-    if chat and allowed then
-        ok, why = automation.send(automation.format(profile.quick_timer_message), role)
-        if ok then automation.record(os.time()) end
-    elseif not chat then why = others end
-    -- Recorded on the MOD, not only in the log. A refusal whose only trace is a file the
-    -- player never opens is indistinguishable from "the feature does nothing" -- which
-    -- is exactly how this was reported. The panel prints this line, so "it is ON but
-    -- nothing is being sent" answers itself on screen instead of needing a log dig.
-    M.last_send = {
-        ok = ok and true or false,
-        why = ok and ('SENT TO ' .. tostring(why) .. ' PLAYER(S)') or string.upper(tostring(why)),
-    }
-    if not ok then note('timed send refused - ' .. tostring(why)) end
-end
-
 -- Exposed for the offline tests. The cursor handover is the part of the panel most
 -- likely to leave the player stuck with a visible cursor and a dead aim, and it is
 -- pure bookkeeping around counters, so it can be checked without the engine.
@@ -6943,8 +7625,10 @@ function M.debug_save_preset_selection() return save_preset_selection() end
 function M.debug_font() return {resolved = FONT.resolved, ok = FONT.ok, why = FONT.why, kind = FONT.kind} end
 function M.debug_panel_signature() return panel_signature() end
 function M.debug_cfg() return cfg end
+function M.debug_language() return M.language end
 function M.debug_last_send() return M.last_send end
-function M.debug_timed_send(dt) timed_send(dt) end
+function M.debug_timed_send(dt) return false end
+function M.debug_migrate_quick_timer(role) return M.migrate_quick_timer(role) end
 function M.debug_send_text(text, verbose, force) return M.send_text(text, verbose, force) end
 -- Panel layout is pure arithmetic, so it can be checked without an engine: a panel
 -- that would draw off-screen is a defect the tests can catch even though the rendering
@@ -6975,6 +7659,7 @@ function M.debug_set_open(open) return set_panel_open(open) end
 local function tick()
     M.frames = M.frames + 1
     if not verified then return end
+    M.language.update('auto', M.frames)
     pcall(poll_trigger)
     -- The panel gets its OWN pcall so a failure is NAMEABLE. Wrapped in the generic
     -- frame pcall it would be swallowed, the panel would simply not appear, and the
@@ -7015,7 +7700,6 @@ local function tick()
         local elapsed = M.scheduler_time and math.max(0, now - M.scheduler_time) or 0
         M.scheduler_time = now
         automation.sync()
-        timed_send(elapsed)
         if M.options.enabled and M.options.ping or REGISTRY.has_listeners() then
             if catalog_scan_phase == 0 then
                 catalog_scan_phase = 1
@@ -7058,28 +7742,36 @@ note('user32 declarations: added[' .. tostring(M.user32_added)
      .. '] reused[' .. tostring(M.user32_reused) .. ']')
 config_load()
 load_tasks()
--- The old panel.txt timer is migrated into the host profile only when the saved
--- automation settings have no role-specific quick-timer fields yet. If 0.8.1
--- already converted it to a scheduled task, that task is authoritative and the
--- quick timer stays off; this prevents two sends for one legacy interval.
-local has_legacy_timer_task=false
-for _,task in ipairs(M.tasks) do
-    if task.profile=='host' and task.name=='旧版定时发送' then has_legacy_timer_task=true;break end
-end
-if automation.state.legacy_quick_timer_missing then
-    local ok,why=automation.migrate_legacy_quick_timer(cfg.timer_on and not has_legacy_timer_task,
-        cfg.interval,cut_utf8(cfg.message,200))
-    if ok then
-        M.quick_timer_shadow.sync('host')
-        if has_legacy_timer_task and cfg.timer_on then cfg.timer_on=false;config_save() end
-        note('legacy quick timer migration: '..tostring(why))
-    else
-        M.quick_timer_shadow.sync('host')
-        note('legacy quick timer migration failed: '..tostring(why))
+-- The retired quick timer is converted to an ordinary role-scoped repeat task.
+-- Never leave an enabled hidden sender behind when saving the task fails.
+;(function()
+    local has_legacy_timer_task=false
+    for _,task in ipairs(M.tasks) do
+        if task.profile=='host' and task.name=='旧版定时发送' and task.mode=='repeat'
+            and tostring(task.time)==tostring(cfg.interval) and task.message==cut_utf8(cfg.message,200) then
+            has_legacy_timer_task=true;break
+        end
     end
-else
-    M.quick_timer_shadow.sync('host')
-end
+    if automation.state.legacy_quick_timer_missing then
+        local migration_ok=true
+        if cfg.timer_on and not has_legacy_timer_task then
+            local task,why=M.add_task('旧版定时发送','repeat',tostring(cfg.interval),cut_utf8(cfg.message,200),nil,'host')
+            if not task then migration_ok=false;PANEL.hint=M.language.text('旧版定时迁移失败，原设置保留但不会发送：'..tostring(why),'Legacy timer migration failed; old settings were kept, and no hidden sender will run: '..tostring(why));note('legacy timer task migration failed: '..tostring(why)) end
+        end
+        if migration_ok then
+            local ok,why=automation.migrate_legacy_quick_timer(false,cfg.interval,cut_utf8(cfg.message,200))
+            if ok then
+                if cfg.timer_on then cfg.timer_on=false;config_save() end
+                note('legacy timer migrated to scheduled task: '..tostring(why))
+            else PANEL.hint=M.language.text('旧版定时设置迁移失败，原设置保留：'..tostring(why),'Legacy timer settings migration failed; old settings were kept: '..tostring(why));note('legacy timer profile migration failed: '..tostring(why)) end
+        end
+    else
+        for _,role in ipairs({'host','client'}) do
+            local ok,why=M.migrate_quick_timer(role)
+            if not ok then PANEL.hint=M.language.text('旧版定时迁移失败，原设置保留但不会发送：'..tostring(why),'Legacy timer migration failed; old settings were kept, and no hidden sender will run: '..tostring(why));note('quick timer task migration failed ('..role..'): '..tostring(why)) end
+        end
+    end
+end)()
 -- Rescue the pointer FIRST, before anything else can fail. If a previous session died
 -- with the panel open, the cursor is still visible and this is the only place that can
 -- put it back: the state that would have released it died with the old Lua state.
@@ -7142,7 +7834,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.8.2 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.8.3 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -7159,7 +7851,7 @@ Before anything is sent, five machine-code signatures are checked against the
 running game.dll. If any does not match, the mod goes dormant and says which one
 changed: an unverified address is an arbitrary address.
 
-Custom alert rules and Unicode input (0.8.2)
+Custom alert rules and Unicode input (0.8.3)
 Settings > Ping > Stratagem rules / Enemy rules opens the dedicated editors.
 Each stratagem has an enable switch, separate mark/call templates and cooldown.
 Blank messages inherit defaults; blank cooldown uses the global player timer.
@@ -7188,15 +7880,15 @@ verification for this candidate.
 500千克炸弹和轨道凝固汽油弹幕首次升级预设0秒；可编辑或恢复默认。
 战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
 图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
-0.8.2 候选版战备目录为当前149条记录提供简体中文名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。游戏内IME输入已加入队列式窗口消息处理，但本版实机输入仍待验收。
+语言按游戏设置自动切换。当前149项战备有简体中文展示名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。六种已核实的SEAF炮弹走现有任务建筑提醒。游戏内IME输入仍待实机验收。
 不能确定具体变体时不冒认ID；连同名规则也无法确定时使用默认提醒。
 飞行优先于体型；小型默认关闭；当前142条可标记敌对资源，12条飞行。
 新增战备在兼容布局下自动发现；新敌人及游戏二进制更新仍需校验。
 
-Role presets, quick timer and private output (0.8.2)
+Role presets and private output (0.8.3)
 ---------------------------------------
 HOST PRESET / CLIENT PRESET select what you EDIT. The current session role selects
-what RUNS. Welcome, ping categories, templates, cooldown, quick timer, output and tasks are separate.
+what RUNS. Welcome, ping categories, templates, cooldown, output and tasks are separate.
 Old settings/tasks remain with host. Client copies old ping preferences, disables
 welcome and defaults to ONLY ME. Host keeps its saved welcome choice (off on a fresh install).
 AUTO MESSAGES > SQUAD CHAT / ONLY ME selects output for all automatic messages and
@@ -7205,10 +7897,10 @@ other players do not receive it. It retains normal chat name formatting.
 An unknown role waits; local signature failure never falls back to public chat.
 Role changes clear old welcome/ping queues and cooldown. Deadlines continue while
 another role is active. There are 32 task slots total across both presets.
-The quick timer enable, interval and message are role-scoped and included in named
-preset v3 files. Older v1/v2 presets preserve the destination role's current quick
-timer. Old panel settings migrate the timer to host once; an 0.8.1 timer already
-converted to a task is not duplicated.
+Named preset v4 files save task definitions and all other behavior settings.
+Older presets without task definitions preserve the destination role's current
+tasks. Old quick-timer values are read only for one-time conversion to ordinary
+repeat tasks; there is no separate quick-timer sender or settings page.
 Manual console send/force remain explicit squad sends. New native local display
 requires an in-game check; offline tests do not establish multiplayer visibility.
 
@@ -7226,19 +7918,19 @@ The panel (hotkey K)
   - SETTINGS: event name, schedule mode, custom time and message fields
   - repeat every N seconds / countdown once / daily HH:MM (local system clock)
   - click fields to type, including Windows IME; ENTER confirms, ESC cancels,
-    CTRL+V pastes Unicode. The 0.8.2 IME path has offline native tests; in-game
+    CTRL+V pastes Unicode. The 0.8.3 IME path has offline native tests; in-game
     physical input remains unverified.
   - click ADD TASK to save; up to 32 tasks, with pause / enable / restart / delete
 
 Timed send
 ----------
-Tasks and the role-specific quick timer run while the game is running, using real
-elapsed time independent of FPS. The quick timer keeps the selected local/squad
-output and normal send cooldown.
+Role-specific tasks run while the game is running, using real elapsed time
+independent of FPS. Scheduled tasks keep the selected local/squad output and
+normal send cooldown.
 Repeat/countdown accept 5-86400 seconds. Daily tasks run at most once per local day.
 Countdown deadlines persist across restarts; overdue tasks attempt once on launch.
 Unavailable chat, unknown role and cooldown leave tasks pending with a reason.
-An enabled pre-profile timer migrates once into the host quick timer. An 0.8.1
+An enabled pre-profile timer migrates once into a host repeat task. An 0.8.1
 timer already converted to a task remains that task. Oldest deadlines get priority
 so short repeat tasks cannot starve countdowns. The AUTO MESSAGES section has a master
 switch, separate host/client profiles selected from session identity, allow-solo switch, per-player cooldown, newcomer
@@ -7307,10 +7999,10 @@ Files / 文件位置
   - 填写完成后还须点击“添加任务”，任务才会保存并进入命名预设
   - 最多 32 个独立任务，可暂停、启用、删除、重启
 
-任务和主客机独立的快捷定时按真实时间计时，仅在游戏运行时执行。倒计时保存截止时刻；重启后到期任务尝试一次。
+任务按真实时间计时，仅在游戏运行时执行。倒计时保存截止时刻；重启后到期任务尝试一次。
 聊天未就绪、身份未知或冷却中时，任务保持等待，不会直接消耗一次倒计时。
 最早到期的任务优先，避免短周期任务一直占用发送机会。
-自动消息：总开关、主机/客机独立配置并按当前会话身份启用、无人房间允许发送、自动消息最短间隔、新人欢迎及自定义欢迎语/延迟。快捷定时开关、间隔和消息也保存于各自角色；输出仍可选小队公屏或仅自己可见。
+自动消息：总开关、主机/客机独立配置并按当前会话身份启用、无人房间允许发送、自动消息最短间隔、新人欢迎及自定义欢迎语/延迟；输出仍可选小队公屏或仅自己可见。旧快捷定时只在升级时转为普通重复任务，不再单独显示或发送。
 默认允许主客机及单人发送，冷却5秒，新人欢迎关闭，欢迎延迟2秒；启用时不欢迎已有队友。
 标记消息：任务建筑、战备提示、中型/大型/巨型敌人、地图标记分别开关；不再提示普通弹药、针剂、手雷、样本。
 静态资源包含 TCS、LAS-98激光大炮、堡垒坦克、重新补给和M-103补给车；特殊标记优先读取游戏本地化名称（需校验当前DLL）。

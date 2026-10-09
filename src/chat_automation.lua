@@ -4,6 +4,7 @@ local function build_chat_automation(env)
     local options = {enabled = true, allow_solo = true,
         welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
+        ping_supplies = false,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
@@ -12,11 +13,11 @@ local function build_chat_automation(env)
         quick_timer_enabled = false, quick_timer_interval = 30,
         quick_timer_message = 'HELLO FROM AUTOCHAT'}
     local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
-        'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
+        'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_supplies', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
         'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output',
         'quick_timer_enabled', 'quick_timer_interval', 'quick_timer_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true, quick_timer_enabled=true,
-        ping_building=true, ping_stratagem=true, ping_map=true,
+        ping_building=true, ping_stratagem=true, ping_map=true, ping_supplies=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
         ping_giant_enemy=true, ping_small_enemy=true, ping_flying_enemy=true, ping_summon=true}
     local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil,
@@ -115,7 +116,7 @@ local function build_chat_automation(env)
     end
     local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v5'}
+        local lines = {'# AutoChat automation settings v6'}
         for _, role in ipairs({'host','client'}) do
             for _, key in ipairs(keys) do
                 lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
@@ -224,8 +225,10 @@ local function build_chat_automation(env)
     function api.export_profile(role, tasks)
         local source=profiles[role]
         if not source then return nil,'未知预设' end
-        local lines={'# AutoChat profile v3'}
-        for _,key in ipairs(keys) do lines[#lines+1]=key..'='..escape(tostring(source[key])) end
+        local lines={'# AutoChat profile v4'}
+        for _,key in ipairs(keys) do
+            if not key:match('^quick_timer_') then lines[#lines+1]=key..'='..escape(tostring(source[key])) end
+        end
         local ids={};for id in pairs(source.rules or {}) do ids[#ids+1]=id end;table.sort(ids)
         for _,id in ipairs(ids) do
             for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
@@ -255,7 +258,7 @@ local function build_chat_automation(env)
         if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
         local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
         local version=tonumber(lines[1]:match('^# AutoChat profile v(%d+)$'))
-        if version~=1 and version~=2 and version~=3 then return false,'预设版本无效' end
+        if version~=1 and version~=2 and version~=3 and version~=4 then return false,'预设版本无效' end
         local values,rules,seen,tasks_by_id={}, {}, {}, {}
         local task_count
         local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
@@ -317,9 +320,10 @@ local function build_chat_automation(env)
         end
         for _,key in ipairs(keys) do
             if values[key]==nil then
-                if version<3 and key=='quick_timer_enabled' then values[key]=false
-                elseif version<3 and key=='quick_timer_interval' then values[key]=30
-                elseif version<3 and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
+                if version<4 and key=='ping_supplies' then values[key]=false
+                elseif (version<3 or version>=4) and key=='quick_timer_enabled' then values[key]=false
+                elseif (version<3 or version>=4) and key=='quick_timer_interval' then values[key]=30
+                elseif (version<3 or version>=4) and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
                 else return false,'缺少设置：'..key end
             end
         end
@@ -359,9 +363,11 @@ local function build_chat_automation(env)
         if not valid then return false,parsed end
         local candidate={host=copy(profiles.host),client=copy(profiles.client)}
         for _,key in ipairs(keys) do
-            if parsed.version < 3 and key:match('^quick_timer_') then
+            if (parsed.version < 3 or parsed.version >= 4) and key:match('^quick_timer_') then
                 -- Older portable profiles did not own this setting; loading one
                 -- must not silently change the destination role's timer.
+                candidate[role][key]=profiles[role][key]
+            elseif parsed.version < 4 and key=='ping_supplies' then
                 candidate[role][key]=profiles[role][key]
             else candidate[role][key]=parsed.values[key] end
         end
@@ -450,7 +456,22 @@ local function build_chat_automation(env)
     end
 
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
+        supplies='普通物资',
         small_enemy='小型敌人', flying_enemy='飞行敌人', medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
+    function api.category_label(category)
+        local ok,value=pcall(env.category_label or function() return nil end,category)
+        if ok and type(value)=='string' and value~='' then return value end
+        return categories[category] or '未知'
+    end
+    function api.phrase(key,fallback)
+        local ok,value=pcall(env.phrase or function() return nil end,key)
+        if ok and type(value)=='string' and value~='' and value~=key then return value end
+        return fallback
+    end
+    function api.stock_template(value)
+        local ok,result=pcall(env.stock_template or function() return value end,value)
+        return ok and type(result)=='string' and result or value
+    end
     local function clipped(value, limit)
         if #value <= limit then return value end
         local at = limit + 1
@@ -711,7 +732,7 @@ local function build_chat_automation(env)
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
         local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
         if not allowed then state.status = reason; return false, reason end
-        local sent, send_why = api.send(api.format(options.welcome_message,candidate), state.active_role)
+        local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message),candidate), state.active_role)
         if sent == true then
             state.pending[candidate] = nil; api.record(now,candidate)
             state.status = '已发送新人欢迎'; return true, state.status
@@ -747,7 +768,7 @@ local function build_chat_automation(env)
             if not evict then event_diagnostic(event,rule_id,'queue-full-no-eviction');return false end
             table.remove(state.pings,evict)
         end
-        local label = categories[event.category]
+        local label = api.category_label(event.category)
         local raw_target=type(event.display_name)=='string' and event.display_name or event.target
         local target = type(raw_target) == 'string' and plain(raw_target,200) or label
         local identity = identity_for(event.creator_id)
@@ -755,15 +776,18 @@ local function build_chat_automation(env)
         if short == '' then short = '队友' end
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
+        local objective_kind=tostring(event.objective_kind or 'unknown')
+        local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label)
         local summoned = event.action == 'summon'
         local executing = event.action == 'use'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and '召唤' or executing and '开始' or '标记',
+            ['{动作}']=summoned and api.phrase('action.summon','召唤') or executing and api.phrase('action.start','开始') or api.phrase('action.mark','标记'),
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
-            ['{任务类型}']=objective_types[event.objective_kind] or label,
+            ['{任务类型}']=objective_type or label,
             ['{位置}']=position_text(event)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
         template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
+        template=api.stock_template(template)
         local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
         local prefix = ''
         if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then

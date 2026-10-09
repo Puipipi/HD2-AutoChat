@@ -1,6 +1,6 @@
 -- Named automation preset page. The frame and hit testing belong to auto_chat.lua;
 -- this renderer only records ordinary panel regions through UX.
-local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok)
+local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok, status_text)
     local C, W, H = UX.palette, 1000, 990
     local text, rect, border, region = UX.text, UX.rect, UX.border, UX.region
     local role = PANEL.profile or 'host'
@@ -77,11 +77,13 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok)
         local count=0;for _ in selected.payload:gmatch('\nrule_[^=]+=[^\n]*') do count=count+1 end
         text(say('包含自动消息设置、模板和细粒度规则；规则字段：','AUTOMATION OPTIONS, TEMPLATES AND FINE GRAIN RULES; RULE FIELDS: ')..tostring(count),390,412,12,C.MUTED,568)
     end
-    button('preset:apply',say('加载到所选角色','LOAD TO SELECTED ROLE'),390,432,210,34,false)
+    button('preset:apply',say(role=='host' and '应用到主机配置' or '应用到客机配置',
+        role=='host' and 'APPLY TO HOST CONFIG' or 'APPLY TO CLIENT CONFIG'),390,432,210,34,false)
     button('preset:export',say('导出文件','EXPORT FILE'),612,432,160,34,false)
     button('preset:delete',say('删除','DELETE'),784,432,174,34,false)
     field('preset:path',say('导入文件路径','IMPORT FILE PATH'),PANEL.preset_path or '',488)
     button('preset:import',say('导入路径中的文件','IMPORT FILE FROM PATH'),390,556,276,34,false)
-    text(PANEL.hint or say('导入只保存为命名预设；点击加载后才写入所选角色。','Import saves a named preset. Load applies it to the selected role.'),390,606,12,PANEL.hint and C.YELLOW or C.MUTED,568)
+    text(PANEL.hint and status_text and status_text(PANEL.hint) or PANEL.hint
+        or say('选择主机或客机配置后，点击应用按钮写入该角色。','Select a host or client configuration, then apply the preset to that role.'),390,606,12,PANEL.hint and C.YELLOW or C.MUTED,568)
     if PANEL.preset_export_path then text(say('导出位置：','EXPORTED: ')..PANEL.preset_export_path,390,638,11,C.GOOD,568) end
 end

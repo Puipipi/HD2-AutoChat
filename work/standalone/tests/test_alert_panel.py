@@ -15,7 +15,9 @@ class AlertPanelTests(unittest.TestCase):
                 {id=4119049995,name='500千克炸弹',debug_name='EAGLE.500KG',group='red',icon='F96A659EBFFDFBE4',cooldown=15},
                 {id=2902516083,name='轨道凝固汽油弹幕',debug_name='ORBITAL.NAPALM',group='red',cooldown=120},
                 {id=867876502,name='重新补给',debug_name='CONSUMABLES.RESUPPLY',group='blue',cooldown=180,variant_ids={867876502,1295431756}},
-                {id=3,name='机枪哨戒炮',debug_name='SENTRYS.MACHINEGUN',group='green',cooldown=180}}
+                {id=3,name='机枪哨戒炮',debug_name='SENTRYS.MACHINEGUN',group='green',cooldown=180},
+                {id=4,name='超级地球旗帜',debug_name='MISSIONS.RAISE FLAG',group='other',family='mission',cooldown=30},
+                {id=5,name='上传数据',debug_name='MISSIONS.DATA JACK',group='other',family='mission',cooldown=30}}
             c.scan=function()return #rows,'fixture' end
             c.list=function()return rows end;c.list_rules=c.list
             c.state.ready=true;c.state.status='fixture'
@@ -54,8 +56,23 @@ class AlertPanelTests(unittest.TestCase):
         self.assertTrue(a.rule('stratagem',4119049995,'client').enabled)
         self.assertIsNone(m.draw_error_text)
 
+    def test_task_stratagem_batch_controls_cover_only_catalog_mission_family(self):
+        lua,h,m=self.fixture();self.click(lua,h,m,'rules:open:stratagem')
+        a=m.debug_automation()
+        self.assertTrue(a.set_rule('stratagem',4,'call_message','custom mission copy','host')[0])
+        self.click(lua,h,m,'rules:bulk:mission:off')
+        self.assertFalse(a.rule('stratagem',4,'host').enabled)
+        self.assertFalse(a.rule('stratagem',5,'host').enabled)
+        self.assertIsNone(a.rule('stratagem',4119049995,'host').enabled)
+        self.assertIsNone(a.rule('stratagem',867876502,'host').enabled)
+        self.assertIsNone(a.rule('stratagem',3,'host').enabled)
+        self.assertEqual('custom mission copy',a.rule('stratagem',4,'host').call_message)
+        self.click(lua,h,m,'rules:bulk:mission:on')
+        self.assertTrue(a.rule('stratagem',4,'host').enabled)
+        self.assertTrue(a.rule('stratagem',5,'host').enabled)
+
     def test_enemy_flying_controls_and_search_do_not_change_other_rules(self):
-        lua,h,m=self.fixture();self.click(lua,h,m,'rules:open:enemy')
+        lua,h,m=self.fixture();m.debug_language().update('zh',0);self.click(lua,h,m,'rules:open:enemy')
         self.click(lua,h,m,'rules:select:flying_enemy');self.click(lua,h,m,'rules:enabled')
         a=m.debug_automation();self.assertFalse(a.profile('host').ping_flying_enemy)
         self.assertTrue(a.profile('host').ping_large_enemy)
@@ -98,6 +115,7 @@ class AlertPanelTests(unittest.TestCase):
 
     def test_catalog_display_name_reaches_ping_template_without_changing_identity(self):
         lua,h,m=self.fixture()
+        m.debug_language().update('zh',0)
         lua.execute('''local c=m.debug_stratagem_catalog()
             c.lookup=function(id) if id==4119049995 then return {id=id,rule_id=id,group='red',display_name='五百千克炸弹'} end end
             local event={key='mapped',category='stratagem',action='summon',stratagem_id=4119049995,
@@ -109,4 +127,13 @@ class AlertPanelTests(unittest.TestCase):
             ok,why=a.set('summon_message','{目标}');assert(ok,why)
             ok,why=a.push_ping(event,1000);assert(ok,why or a.state.status)
             assert(a.state.pings[1].text=='五百千克炸弹',a.state.pings[1].text)
+            ok,why=a.set_rule('stratagem',4119049995,'call_message','{任务类型}');assert(ok,why)
+            ok,why=a.set_rule('stratagem',4119049995,'cooldown',0);assert(ok,why)
+            event.key='mapped-objective-zh';event.objective_kind='primary'
+            ok,why=a.push_ping(event,1001);assert(ok,why or a.state.status)
+            assert(a.state.pings[1].text=='主线任务',a.state.pings[1].text)
+            m.debug_language().update('en',2)
+            event.key='mapped-objective-en'
+            ok,why=a.push_ping(event,1002);assert(ok,why or a.state.status)
+            assert(a.state.pings[2].text=='PRIMARY OBJECTIVE',a.state.pings[2].text)
         ''')

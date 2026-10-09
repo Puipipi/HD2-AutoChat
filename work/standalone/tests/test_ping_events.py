@@ -7,6 +7,7 @@ import unittest
 from lupa.luajit21 import LuaRuntime
 
 SOURCE = Path(__file__).resolve().parents[3] / 'src' / 'ping_events.lua'
+SPECIAL_TARGETS = Path(__file__).resolve().parents[3] / 'src' / 'special_targets.lua'
 BASE, CTX, ROOT, PLAYERS, RING = 0x10000000, 0x20000000, 0x30000000, 0x40000000, 0x50000000
 ENTITY_SLOTS, NETWORK_SLOTS = 0x60000000, 0x60001000
 OWN, FRIEND = bytes.fromhex('1100000001001001'), bytes.fromhex('2200000001001001')
@@ -20,6 +21,7 @@ class PingEventsTests(unittest.TestCase):
         self.base, self.emit_ok = BASE, True
         self.session = 'session-a'
         self.localized = {}
+        self.diagnostics = []
         self.put(BASE + 0x347cef0, '<Q', CTX)
         self.put(CTX + 0xb398, '8s', OWN)
         self.put(BASE + 0x346bf98, '<Q', ROOT)
@@ -40,10 +42,14 @@ class PingEventsTests(unittest.TestCase):
         self.target('1A7FCDFF98C664B0')
         self.header(0, 0)
         constructor = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_ping_events')
+        special_builder = self.lua.execute(SPECIAL_TARGETS.read_text(encoding='utf-8'))
         self.adapter = constructor(self.lua.table_from({
             'base': lambda: self.base, 'read': self.read, 'emit': self.emit,
             'session': lambda: self.session,
             'localize': lambda key: self.localized.get(int(key)),
+            'special_targets': special_builder(),
+            'language': lambda: 'zh',
+            'diagnostic': lambda *values: self.diagnostics.append(values),
         }))
 
     def raw(self, address, data):
@@ -272,17 +278,24 @@ class PingEventsTests(unittest.TestCase):
 
     def test_reviewed_mission_catalog_is_recognized_without_a_specific_native_marker_name(self):
         catalog=json.loads((SOURCE.parents[1]/'docs/mission-targets.json').read_text(encoding='utf-8'))
+        shell_names={'DC19126D15692D04':'大炮 炸弹','6B7EE87FB2EC6455':'大炮 高爆弹',
+            'E09FCB5A280ACB1D':'大炮 迷你核弹','E4BE3FDF0C857B7F':'大炮 凝固汽油弹',
+            'F598598C47617605':'大炮 烟雾弹','C02C2623B6359BB3':'大炮 静电场'}
+        ambiguous_shells={'6C62E2E25E084083','C8F9A2233048B836'}
         for row in catalog['targets']:
             with self.subTest(resource=row['resource'],path=row['path']):
                 self.setUp();self.target(row['resource'])
                 self.localized[3585962803]='特殊地点';self.localized[4234884333]='终端';self.poll(0)
                 self.mark(kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+                if row['resource'] in ambiguous_shells:
+                    self.assertEqual(self.events,[])
+                    continue
                 self.assertEqual(len(self.events),1)
                 self.assertEqual(self.events[0][0]['category'],'building')
-                self.assertEqual(self.events[0][0]['target'],row['label'])
+                self.assertEqual(self.events[0][0]['target'],shell_names.get(row['resource'],row['label']))
 
     def test_mission_terminal_generic_name_is_replaced_but_specific_unit_name_is_localized(self):
-        self.target('542A14BA4D755F4E');self.localized[4234884333]='终端';self.poll(0)
+        self.target('542A14BA4D755F4E');self.localized[4234884333]='\u7ec8\u7aef';self.poll(0)
         self.mark(kind=18,localization_key=4234884333);self.header(0,1);self.poll(1)
         self.assertEqual(self.events[0][0]['target'],'雷达站终端')
         self.setUp();self.target('A1BDB3A13E3633DD')
@@ -297,11 +310,147 @@ class PingEventsTests(unittest.TestCase):
         self.assertEqual(self.events[0][0]['target'],'孢子喷涌体')
 
     def test_captured_broadcast_location_uses_native_label_without_guessing_a_building(self):
-        self.localized[3585962803]='特殊地点';self.poll(0)
+        self.localized[3585962803]='\u7279\u6b8a\u5730\u70b9';self.poll(0)
         self.mark(creator=1001,kind=18,target=0,localization_key=3585962803,
                   position=(153.36035,6.0918,1.00098));self.header(0,1);self.poll(1)
-        self.assertEqual(self.events[0][0]['target'],'特殊地点')
+        self.assertEqual(self.events, [], 'a generic native label cannot identify a building')
+
+    def test_generic_native_location_without_target_id_is_suppressed_for_building_kinds(self):
+        for kind in (18, 19):
+            for target in (0, 0xffffffff):
+                with self.subTest(kind=kind, target=target):
+                    self.setUp();self.localized[3585962803]='\u7279\u6b8a\u5730\u70b9';self.poll(0)
+                    self.mark(creator=1001,kind=kind,target=target,localization_key=3585962803)
+                    self.header(0,1);self.poll(1)
+                    self.assertEqual(self.events, [])
+
+    def test_drop_diagnostic_is_bounded_and_contains_only_sanitized_marker_fields(self):
+        self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(creator=1001,kind=18,target=0,localization_key=3585962803)
+        self.header(0,1);self.poll(1);self.poll(2)
+        self.assertEqual(len(self.diagnostics),1)
+        reason,kind,map_type,has_target,key,resource=self.diagnostics[0]
+        self.assertEqual(reason,'missing_target_or_generic_name')
+        self.assertEqual(kind,18)
+        self.assertIsNone(map_type)
+        self.assertFalse(has_target)
+        self.assertEqual(key,3585962803)
+        self.assertIsNone(resource)
+
+    def test_generic_native_location_cannot_turn_an_unknown_entity_into_a_building(self):
+        for kind in (18, 19):
+            with self.subTest(kind=kind):
+                self.setUp();self.target('DEADBEEFDEADBEEF')
+                self.localized[3585962803]='\u7279\u6b8a\u5730\u70b9';self.poll(0)
+                self.mark(creator=1001,kind=kind,localization_key=3585962803)
+                self.header(0,1);self.poll(1)
+                self.assertEqual(self.events, [])
+
+    def test_verified_ordinary_pickups_stay_suppressed_with_native_building_markers(self):
+        # A generic location label contains no identity, so known pickups use
+        # their reviewed fallback names and the supplies policy category.
+        for resource in ('79CCFFD281E3F3A9', 'B4CA4C5B922F7965', '97AF34FBF093409C'):
+            for kind in (18, 19):
+                with self.subTest(resource=resource, kind=kind):
+                    self.setUp();self.target(resource)
+                    self.localized[3585962803]='\u7279\u6b8a\u5730\u70b9';self.poll(0)
+                    self.mark(creator=1001,kind=kind,localization_key=3585962803)
+                    self.header(0,1);self.poll(1)
+                    event=self.events[0][0]
+                    self.assertEqual(event['category'],'supplies')
+                    self.assertIn(event['target'],('弹药盒','针剂盒','手雷包'))
+
+    def test_known_seaf_shell_resources_keep_exact_target_names_as_buildings(self):
+        rows = {
+            'DC19126D15692D04':'大炮 炸弹',
+            '6B7EE87FB2EC6455':'大炮 高爆弹',
+            'E09FCB5A280ACB1D':'大炮 迷你核弹',
+            'E4BE3FDF0C857B7F':'大炮 凝固汽油弹',
+            'F598598C47617605':'大炮 烟雾弹',
+            'C02C2623B6359BB3':'大炮 静电场',
+        }
+        for resource, expected in rows.items():
+            with self.subTest(resource=resource):
+                self.setUp();self.target(resource)
+                self.localized[3585962803]='特殊地点';self.poll(0)
+                self.mark(creator=1001,kind=18,localization_key=3585962803)
+                self.header(0,1);self.poll(1)
+                event=self.events[0][0]
+                self.assertEqual(event['category'],'building')
+                self.assertEqual(event['resource'],resource)
+                self.assertEqual(event['target'],expected)
+
+    def test_known_seaf_shell_target_name_uses_english_game_language(self):
+        self.setUp()
+        special_builder = self.lua.execute(SPECIAL_TARGETS.read_text(encoding='utf-8'))
+        constructor = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_ping_events')
+        self.adapter = constructor(self.lua.table_from({'base':lambda:self.base,'read':self.read,
+            'emit':self.emit,'session':lambda:self.session,'localize':lambda key:self.localized.get(int(key)),
+            'special_targets':special_builder(),'language':lambda:'en'}))
+        self.target('6B7EE87FB2EC6455');self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=3585962803)
+        self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'High-Yield Explosive (SEAF)')
+
+    def test_broken_language_getter_falls_back_without_aborting_event_classification(self):
+        self.setUp()
+        special_builder = self.lua.execute(SPECIAL_TARGETS.read_text(encoding='utf-8'))
+        constructor = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_ping_events')
+        def bad_language(): raise RuntimeError('language probe unavailable')
+        self.adapter = constructor(self.lua.table_from({'base':lambda:self.base,'read':self.read,
+            'emit':self.emit,'session':lambda:self.session,'localize':lambda key:self.localized.get(int(key)),
+            'special_targets':special_builder(),'language':bad_language}))
+        self.target('6B7EE87FB2EC6455');self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=3585962803)
+        self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'大炮 高爆弹')
+
+    def test_ambiguous_shell_only_passes_through_a_specific_native_name(self):
+        self.target('6C62E2E25E084083');self.localized[987]='SEAF shell';self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=987);self.header(0,1);self.poll(1)
         self.assertEqual(self.events[0][0]['category'],'building')
+        self.assertEqual(self.events[0][0]['target'],'SEAF shell')
+
+    def test_other_verified_supply_resource_requires_a_specific_native_name(self):
+        self.target('86F3CB87D97942B4');self.localized[987]='Ammo canister';self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=987);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['category'],'supplies')
+        self.assertEqual(self.events[0][0]['target'],'Ammo canister')
+        self.setUp();self.target('DEADBEEFDEADBEEF');self.localized[987]='Rare sample';self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=987);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['category'],'supplies')
+        self.assertEqual(self.events[0][0]['target'],'Rare sample')
+
+    def test_idless_specific_supply_names_use_supplies_category(self):
+        for name in ('普通样本','Rare sample','针剂盒','手雷盒','弹药盒'):
+            with self.subTest(name=name):
+                self.setUp();self.localized[987]=name;self.poll(0)
+                self.mark(creator=1001,kind=18,target=0,localization_key=987)
+                self.header(0,1);self.poll(1)
+                self.assertEqual(self.events[0][0]['category'],'supplies')
+                self.assertEqual(self.events[0][0]['target'],name)
+
+    def test_task_sample_box_identity_takes_precedence_over_supply_name_matching(self):
+        self.target('3E099DDF97ACF85F');self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['category'],'building')
+        self.assertEqual(self.events[0][0]['target'],'样本箱')
+
+    def test_generic_tactical_map_pins_and_empty_points_are_suppressed(self):
+        self.actors();self.poll(0)
+        self.map_pin(kind=2,network=0x7fff,position=(120,240,0))
+        self.map_pin(slot=1,kind=7,network=0x7fff,position=(300,400,0))
+        self.poll(1)
+        self.assertEqual(self.events, [])
+
+    def test_supported_mission_and_stratagem_keep_specific_names_with_generic_keys(self):
+        self.localized[3585962803]='\u7279\u6b8a\u5730\u70b9';self.target('57DB57121F3E7ED2');self.poll(0)
+        self.mark(creator=1001,kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'\u975e\u6cd5\u5e7f\u64ad\u5854')
+        self.setUp();self.localized[3585962803]='\u7279\u6b8a\u5730\u70b9';self.target('D54B9505C0F72873');self.poll(0)
+        self.mark(creator=1001,kind=20,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['category'],'stratagem')
+        self.assertEqual(self.events[0][0]['target'],'LAS-98 \u6fc0\u5149\u5927\u70ae')
 
     def test_ground_renewal_at_a_different_position_is_still_ignored(self):
         self.poll(0);self.mark(kind=0,target=0,position=(1,2,3));self.header(0,1);self.poll(1)
@@ -412,13 +561,17 @@ class PingEventsTests(unittest.TestCase):
         self.poll(2)
         self.assertEqual(len(self.events), 1)
 
-    def test_ordinary_supplies_stay_excluded_even_with_a_localized_special_marker_kind(self):
+    def test_generic_supply_label_uses_verified_supply_fallback(self):
         for resource in ('79CCFFD281E3F3A9', '86F3CB87D97942B4', '9D4935FA69B6B41A'):
             with self.subTest(resource=resource):
                 self.setUp(); self.target(resource); self.localized[123] = '普通物资'
                 self.poll(0); self.mark(kind=20, localization_key=123)
                 self.header(0, 1); self.poll(1)
-                self.assertEqual(self.events, [])
+                if resource == '79CCFFD281E3F3A9':
+                    self.assertEqual(self.events[0][0]['category'],'supplies')
+                    self.assertEqual(self.events[0][0]['target'],'弹药盒')
+                else:
+                    self.assertEqual(self.events, [])
 
     def test_native_objective_without_entity_retries_until_game_name_is_loaded(self):
         self.poll(0); self.mark(kind=18, target=0xffffffff, localization_key=123)
@@ -807,13 +960,16 @@ class PingEventsTests(unittest.TestCase):
         self.mark(age=.3); self.poll(3)
         self.assertEqual(len(self.events), 2)
 
-    def test_ordinary_pickup_resources_are_no_longer_announced(self):
+    def test_verified_supplies_use_supply_category_and_unknown_pickups_are_suppressed(self):
         for resource in ['79CCFFD281E3F3A9', 'B4CA4C5B922F7965', 'BD30758426ED2566', '9D4935FA69B6B41A']:
             with self.subTest(resource=resource):
                 self.setUp(); self.target(resource); self.poll(0)
                 self.mark(); self.header(0, 1); self.poll(1)
-                self.assertEqual(self.events, [])
-        self.assertIsNone(self.adapter.supported.small_items)
+                if resource in ('79CCFFD281E3F3A9','B4CA4C5B922F7965'):
+                    self.assertEqual(self.events[0][0]['category'],'supplies')
+                else:
+                    self.assertEqual(self.events, [])
+        self.assertTrue(self.adapter.supported.supplies)
 
     def test_known_spottable_objective_entities_use_mission_category(self):
         for resource in ['A3D5F183F8A2B768', 'B1D938C07E30C5DB', 'EAE962D85C0C2D4A']:

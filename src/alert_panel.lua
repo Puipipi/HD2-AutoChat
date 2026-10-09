@@ -1,9 +1,13 @@
 -- Dedicated configuration views using the existing Armory frame/input owner.
 -- No native reads here; catalog rows and safely bound icons come from the host.
-local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
+local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local C=canvas.palette
     local function say(cn,en) return chinese and cn or en end
     local function text(v,x,y,size,c,w) canvas.text(v,x,y,size or 14,c or C.TEXT,w) end
+    local function row_name(row)
+        if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
+        return row.debug_name or row.name or row.display_name or tostring(row.id)
+    end
     local function button(key,value,x,y,w,on)
         canvas.rect(x,y,w,32,on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
         canvas.border(x,y,w,32,on and C.YELLOW or C.LINE2,952)
@@ -29,12 +33,13 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         text(say('体型采用游戏内部 Small / Medium / Large / Massive。','SIZES FOLLOW THE GAME UNIT SIZE ENUM.'),22,278,12,C.MUTED,440)
         text(say('小型默认关闭；普通物资仍不提示。','SMALL IS OFF BY DEFAULT; NO ORDINARY SUPPLIES.'),22,303,12,C.MUTED,440)
     else
-        local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'}}
+        local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'},
+            {'mission','任务战备','MISSION STRATAGEMS'}}
         for i,v in ipairs(groups) do
             local y=237+(i-1)*38
             local total,enabled_count=0,0
             for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-                if row.group==v[1] then
+                if (v[1]=='mission' and row.family=='mission') or (v[1]~='mission' and row.group==v[1]) then
                     total=total+1
                     if a.rule('stratagem',row.id,role).enabled~=false then enabled_count=enabled_count+1 end
                 end
@@ -44,29 +49,34 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
             button('rules:bulk:'..v[1]..':off',say('全部关闭','DISABLE ALL'),266,y,112,false)
         end
         local x=22
-        for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},{'green','绿','GREEN'},{'other','任务等','OTHER'}}) do
-            button('rules:filter:'..v[1],say(v[2],v[3]),x,366,80,(p.rule_filter or 'all')==v[1]);x=x+86
+        for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},
+            {'green','绿','GREEN'},{'mission','任务','MISSION'}}) do
+            button('rules:filter:'..v[1],say(v[2],v[3]),x,390,80,(p.rule_filter or 'all')==v[1]);x=x+86
         end
-        canvas.rect(22,408,424,32,C.FIELD,951);canvas.border(22,408,424,32,C.LINE2,952)
+        canvas.rect(22,432,424,32,C.FIELD,951);canvas.border(22,432,424,32,C.LINE2,952)
         local search=p.edit_field=='rules:search' and p.edit_text or p.rule_search or ''
-        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,416,14,C.MUTED,408)
-        canvas.region('rules:search',22,408,424,32)
+        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,440,14,C.MUTED,408)
+        canvas.region('rules:search',22,432,424,32)
         local query=(p.rule_search or ''):lower()
         for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-            if ((p.rule_filter or 'all')=='all' or row.group==p.rule_filter)
-                and (query=='' or (row.display_name or row.name or row.debug_name):lower():find(query,1,true)
+            local filter=p.rule_filter or 'all'
+            local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
+                or (filter=='other' and row.group=='other' and row.family~='mission')
+                or (filter~='mission' and filter~='other' and row.group==filter)
+            if matches_filter
+                and (query=='' or row_name(row):lower():find(query,1,true)
                     or tostring(row.id):find(query,1,true)
                     or (row.debug_name or row.name or ''):lower():find(query,1,true)) then rows[#rows+1]=row end
         end
-        text(catalog.state.status,22,349,12,C.MUTED,424)
+        text(status_text and status_text(catalog.state.status) or catalog.state.status,22,472,12,C.MUTED,424)
     end
     local selected
     for _,row in ipairs(rows) do if tostring(row.id)==tostring(p.rule_selected) then selected=row end end
     selected=selected or rows[1];p.rule_selected=selected and selected.id or nil
-    local page_size=enemy and 5 or 10
+    local page_size=enemy and 5 or 9
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
-    local top=enemy and 356 or 456
+    local top=enemy and 356 or 480
     for i=(p.rule_page-1)*page_size+1,math.min(#rows,p.rule_page*page_size) do
         local row=rows[i];local y=top+(i-(p.rule_page-1)*page_size-1)*40
         local rule=a.rule(enemy and 'enemy' or 'stratagem',row.id,role)
@@ -75,7 +85,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         canvas.rect(22,y,424,36,row==selected and C.ROW_HI or C.PANEL,951)
         canvas.border(22,y,424,36,row==selected and C.YELLOW or C.LINE,952)
         if not enemy and canvas.icon then canvas.icon(row.icon,27,y+4,28) end
-        text(row.display_name or row.name or row.debug_name,enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
+        text(row_name(row),enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
         text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
         canvas.region(key,22,y,424,36)
     end
@@ -91,7 +101,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
         return
     end
     local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
-    text(selected.display_name or selected.name or selected.debug_name,486,262,20,C.TEXT,474)
+    text(row_name(selected),486,262,20,C.TEXT,474)
     if not enemy then
         text(say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s',486,296,12,C.MUTED,474)
         if selected.variant_ids and #selected.variant_ids>1 then
@@ -120,5 +130,5 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
     text('{目标} / {类别} / {动作} / {位置}',486,786,14,C.TEXT,474)
     text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,828,12,C.MUTED,474)
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
-    if p.hint then text(p.hint,486,919,12,C.YELLOW,474) end
+    if p.hint then text(status_text and status_text(p.hint) or p.hint,486,919,12,C.YELLOW,474) end
 end

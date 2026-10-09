@@ -1365,115 +1365,17 @@ class AutoChatProbeTest(unittest.TestCase):
         state = mod.debug_cursor_state()
         self.assertIn("taken", state)
 
-    # ------------------------------------------------------------ timed send
-    def test_a_refused_timed_send_records_why_for_the_panel(self):
-        """A refusal must leave a trace the PLAYER can see, not only a log line.
-
-        This is how "timed send does nothing" was reported: the timer was firing on
-        schedule and the send was being refused because the squad was empty -- correct
-        behaviour -- but the only record was a line in a log file nobody opens. The
-        panel prints this field, so the same situation now explains itself on screen.
-        """
-        lua, h = fresh_image(others=0)          # a session with nobody else in it
+    # ---------------------------------------------------------- retired timer
+    def test_legacy_quick_timer_runtime_is_inert_after_migration(self):
+        lua, h = fresh_image(others=1)
         mod = h.load(SOURCE)
-        cfg = mod.debug_cfg()
         automation = mod.debug_automation()
-        automation.state.active_role = 'host'
         automation.set('quick_timer_enabled', True, 'host')
         automation.set('quick_timer_interval', 5, 'host')
-        cfg.elapsed = 0
-        mod.debug_timed_send(6)                 # past the interval
-        last = mod.debug_last_send()
-        self.assertIsNotNone(last, "the attempt must be recorded")
-        self.assertFalse(last["ok"], "a solo session must refuse")
-        # The panel shows this text upper-cased, so compare without case.
-        self.assertIn("nobody else", str(last["why"]).lower(),
-                      "and the record must SAY why, in words the panel can show")
-
-    def test_a_successful_timed_send_records_how_many_players(self):
-        lua, h = fresh_image(others=2)
-        mod = h.load(SOURCE)
-        cfg = mod.debug_cfg()
-        automation = mod.debug_automation()
-        automation.state.active_role = 'host'
-        automation.set('quick_timer_enabled', True, 'host')
-        automation.set('quick_timer_interval', 5, 'host')
-        cfg.elapsed = 0
-        mod.debug_timed_send(6)
-        last = mod.debug_last_send()
-        self.assertIsNotNone(last, "the attempt must be recorded")
-        self.assertTrue(last["ok"], "with players present the send must go through")
-        self.assertIn("2", str(last["why"]),
-                      "and it must say how many players it reached")
-
-    def test_timed_send_does_nothing_until_the_interval_elapses(self):
-        lua, h = fresh_image(others=1)
-        mod = h.load(SOURCE)
-        cfg = mod.debug_cfg()
-        automation = mod.debug_automation()
-        automation.state.active_role = 'host'
-        automation.set('quick_timer_enabled', False, 'host')
         before = h.call_count()
-        mod.debug_timed_send(1000)
+        mod.debug_timed_send(60)
         self.assertEqual(before, h.call_count(),
-                         "with the timer off nothing may be sent even with peers present")
-
-    def test_timed_send_respects_the_peer_guard(self):
-        """The timer must NOT bypass the guard: solo means refused, with a reason.
-
-        The whole point of the peer guard is that broadcasting into a session with
-        nobody in it reaches nobody. A timed send that skipped it would fire on a
-        loop forever with no recipient, which is the failure this pins.
-        """
-        lua, h = fresh_image(others=0)
-        mod = h.load(SOURCE)
-        cfg = mod.debug_cfg()
-        automation = mod.debug_automation()
-        automation.state.active_role = 'host'
-        automation.set('quick_timer_enabled', True, 'host')
-        automation.set('quick_timer_interval', 10, 'host')
-        cfg.elapsed = 0
-        before = h.call_count()
-        mod.debug_timed_send(11)            # past the interval
-        self.assertEqual(before, h.call_count(),
-                         "a timed send into a session with nobody else in it must be "
-                         "refused; the timer is not a way around the peer guard")
-
-    def test_timed_send_uses_the_normal_path_when_peers_exist(self):
-        """With another player present the timer sends for real, through the same
-        verified call the manual trigger uses."""
-        lua, h = fresh_image(others=1)
-        mod = h.load(SOURCE)
-        cfg = mod.debug_cfg()
-        automation = mod.debug_automation()
-        automation.state.active_role = 'host'
-        automation.set('quick_timer_enabled', True, 'host')
-        automation.set('quick_timer_interval', 10, 'host')
-        cfg.elapsed = 0
-        before = h.call_count()
-        mod.debug_timed_send(11)
-        self.assertEqual(before + 1, h.call_count(),
-                         "with a peer present the timer must make exactly one send")
-
-    def test_timed_send_fires_once_per_interval_and_resets(self):
-        lua, h = fresh_image(others=1)
-        mod = h.load(SOURCE)
-        cfg = mod.debug_cfg()
-        automation = mod.debug_automation()
-        automation.state.active_role = 'host'
-        automation.set('quick_timer_enabled', True, 'host')
-        automation.set('quick_timer_interval', 10, 'host')
-        cfg.elapsed = 0
-        mod.debug_timed_send(4)
-        self.assertAlmostEqual(4, cfg["elapsed"], places=3,
-                               msg="elapsed must accumulate below the interval")
-        mod.debug_timed_send(4)
-        self.assertAlmostEqual(8, cfg["elapsed"], places=3)
-        # Crossing the interval resets the accumulator whether or not the send was
-        # accepted, so a refused send cannot pile up and then burst.
-        mod.debug_timed_send(4)
-        self.assertAlmostEqual(0, cfg["elapsed"], places=3,
-                               msg="crossing the interval must reset the accumulator")
+                         "legacy quick fields must never drive a hidden sender")
 
     # ------------------------------------------------------------ panel geometry
     def test_panel_stays_on_screen_at_every_common_resolution(self):
@@ -1980,6 +1882,38 @@ class AutoChatProbeTest(unittest.TestCase):
                        "createremotethread", "virtualprotectex"):
             self.assertNotIn(symbol, self.source.lower(),
                              "this is a read-only probe; %s must not appear" % symbol)
+
+    def test_runtime_event_and_reader_diagnostics_are_wired_sanitized_and_fifo_deduplicated(self):
+        self.assertIn('diagnostic = function(...) return M.record_event_diagnostic(...) end,', self.source)
+        self.assertIn('diagnostic = function(...) return M.record_ping_drop(...) end,', self.source)
+        lua,h,mod=self.fresh()
+        self.assertTrue(mod.record_event_diagnostic('stratagem','summon','stratagem_4119049995',
+            'rule-disabled','squad'))
+        self.assertFalse(mod.record_event_diagnostic('stratagem','summon','stratagem_4119049995',
+            'rule-disabled','squad'))
+        self.assertTrue(mod.record_ping_drop('unknown_target_or_generic_name',18,3,True,4234884333,
+            'DC19126D15692D04'))
+        self.assertFalse(mod.record_ping_drop('unknown_target_or_generic_name',18,3,True,4234884333,
+            'DC19126D15692D04'))
+        lines=[str(mod.debug_runtime_diagnostics()[i])
+               for i in range(1,len(mod.debug_runtime_diagnostics())+1)]
+        self.assertEqual(2,len(lines),lines)
+        self.assertIn('category=stratagem action=summon id=stratagem_4119049995 result=rule-disabled output=squad',lines[0])
+        self.assertIn('reason=unknown_target_or_generic_name kind=18 map=3 target=true key=4234884333 resource=DC19126D15692D04',lines[1])
+        for line in lines:
+            self.assertNotIn('Alice',line)
+            self.assertNotIn('message=',line)
+
+        self.assertTrue(mod.record_runtime_diagnostic('event','oldest','line-oldest'))
+        for i in range(1,65):
+            self.assertTrue(mod.record_runtime_diagnostic('event','unique-%d'%i,'line-%d'%i))
+        lines=[str(mod.debug_runtime_diagnostics()[i])
+               for i in range(1,len(mod.debug_runtime_diagnostics())+1)]
+        self.assertEqual(64,len(lines))
+        self.assertEqual('line-64',lines[-1])
+        self.assertTrue(mod.record_runtime_diagnostic('event','oldest','line-oldest-again'))
+        self.assertEqual(64,len(mod.debug_runtime_diagnostics()))
+        self.assertEqual('line-oldest-again',str(mod.debug_runtime_diagnostics()[64]))
 
 
 if __name__ == "__main__":

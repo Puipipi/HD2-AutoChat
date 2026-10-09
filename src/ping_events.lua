@@ -51,7 +51,8 @@ SOFTWARE.
 -- https://github.com/xypwn/filediver/blob/master/hashes/hashes.txt
 -- Enum: https://github.com/shalzuth/HelldiversData/blob/master/data/enums/HudMarkerType.json
 -- Historical HUD enum is corroborated by current DLL Map21 producer below.
--- Ordinary ammo, stims, grenades and samples are intentionally excluded.
+-- Resource pickups are classified separately so the main policy can keep them
+-- behind its supplies switch rather than mislabeling them as buildings.
 local EXCLUDED_SUPPLIES = {
     ['9D4935FA69B6B41A']=true, ['307E09E7698881BA']=true, ['4932CBF33CD47EF9']=true,
     ['4C63119F69165321']=true, ['5016EE397FDCFB6C']=true, ['64B49B9D8A445266']=true,
@@ -486,13 +487,69 @@ local PING_TARGETS = {
 -- Read-only verification: 3585962803=location, 689074879=enemy unit;
 -- Encyclopedia's common terminal key is 4234884333. Specific keys stay intact.
 local GENERIC_MISSION_NAMES = {[3585962803]=true, [689074879]=true, [4234884333]=true}
-
+-- Current data confirms these are ObjectiveShell entities, but not their shell
+-- variant. Never turn their generic catalogue fallback into a claimed type.
 local function build_ping_events(env)
     local ffi = require('ffi')
+    local classification = {
+        supply_targets = {
+            ['79CCFFD281E3F3A9'] = {name_zh='弹药盒', name_en='Ammo box'},
+            ['B4CA4C5B922F7965'] = {name_zh='针剂盒', name_en='Stim box'},
+            ['97AF34FBF093409C'] = {name_zh='手雷包', name_en='Grenade pack'},
+        },
+        ambiguous_shells = {['6C62E2E25E084083']=true, ['C8F9A2233048B836']=true},
+        generic_native_names = {['特殊地点']=true, ['special location']=true,
+            ['敌方单位']=true, ['enemy unit']=true, ['任务交互物']=true, ['objective terminal']=true,
+            ['普通物资']=true, ['supplies']=true},
+        exact_supply_names = {
+            ['弹药']=true, ['弹药盒']=true, ['针剂']=true, ['针剂盒']=true,
+            ['手雷']=true, ['手雷包']=true, ['手雷盒']=true,
+            ['样本']=true, ['样本瓶']=true, ['普通样本']=true, ['稀有样本']=true, ['超级样本']=true,
+            ['普通样本瓶']=true, ['稀有样本瓶']=true, ['超级样本瓶']=true,
+            ['ammo']=true, ['ammunition']=true, ['ammo box']=true, ['ammo canister']=true,
+            ['stim']=true, ['stims']=true, ['stim box']=true, ['stim case']=true,
+            ['grenade']=true, ['grenades']=true, ['grenade box']=true, ['grenade case']=true,
+            ['grenade pack']=true, ['sample']=true, ['samples']=true, ['common sample']=true,
+            ['rare sample']=true, ['super sample']=true, ['sample vial']=true,
+        },
+    }
     local state = {scene = nil, seen = {}, generation = 0, serial = 0, status = '等待标记数据'}
     local api = {state = state, supported = {small_enemy = true, flying_enemy = true,
         medium_enemy = true, large_enemy = true,
-        giant_enemy = true, building = true, stratagem = true, map = true}}
+        giant_enemy = true, building = true, supplies = true, stratagem = true, map = true}}
+    local function selected_name(row)
+        local language
+        if env.language then
+            local okay, value = pcall(env.language)
+            if okay then language = value end
+        end
+        if type(language) == 'string' and language:lower():match('^en') then
+            return row.name_en or row.name_zh
+        end
+        return row.name_zh or row.name_en
+    end
+    local function report_drop(reason, entry, resource)
+        if not env.diagnostic then return end
+        pcall(env.diagnostic, reason, entry.kind, entry.map_type,
+            entry.target_id ~= 0 and entry.target_id ~= 0xffffffff,
+            entry.localization_key, resource)
+    end
+    local function generic_name(name, key)
+        if type(name) == 'string' then
+            name = name:match('^%s*(.-)%s*$')
+            local lower = name:lower()
+            return GENERIC_MISSION_NAMES[key]
+                or classification.generic_native_names[name]
+                or classification.generic_native_names[lower] or false
+        end
+        return GENERIC_MISSION_NAMES[key] or false
+    end
+    local function exact_supply_name(name)
+        if type(name) ~= 'string' then return false end
+        name = name:match('^%s*(.-)%s*$')
+        return classification.exact_supply_names[name]
+            or classification.exact_supply_names[name:lower()] or false
+    end
     local function reset(reason)
         state.scene, state.session, state.seen = nil, nil, {}
         state.map_scene = nil
@@ -761,9 +818,17 @@ local function build_ping_events(env)
             -- accept otherwise unknown resources when the native UI label resolves.
             local native_category = (entry.kind==18 or entry.kind==19) and 'building'
                 or entry.kind==20 and 'stratagem' or nil
+            if native_category == 'building' and (entry.target_id==0 or entry.target_id==0xffffffff)
+                and exact_supply_name(localized) then
+                return {category='supplies',target=localized,position=entry.position,
+                    creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,action=action,source='native_marker'}
+            end
             if native_category and (entry.target_id==0 or entry.target_id==0xffffffff) then
-                if not localized then
-                    return nil, entry.localization_key > 0 and 'retry' or nil
+                if not localized and entry.localization_key > 0 then return nil, 'retry' end
+                if not localized or generic_name(localized, entry.localization_key) then
+                    report_drop('missing_target_or_generic_name', entry)
+                    return nil
                 end
                 return {category=native_category,target=localized,position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
@@ -778,16 +843,51 @@ local function build_ping_events(env)
             local identity = guarded(address, 24)
             if u32(identity, 8) ~= entry.target_id then return nil, 'retry' end
             local resource = hex64(identity, 0)
-            if EXCLUDED_SUPPLIES[resource] then return nil end
             local mission = MISSION_TARGETS[resource]
+            if not mission and exact_supply_name(localized) then
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                return {category='supplies',target=localized,target_id=entry.target_id,
+                    creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
+            if EXCLUDED_SUPPLIES[resource] then
+                local supply = classification.supply_targets[resource]
+                local label = supply and selected_name(supply)
+                    or (localized and not generic_name(localized, entry.localization_key) and localized)
+                if not label then
+                    report_drop('supply_without_specific_name', entry, resource)
+                    return nil
+                end
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                return {category='supplies',target=label,target_id=entry.target_id,
+                    creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
+            if classification.ambiguous_shells[resource] and (not localized
+                or generic_name(localized, entry.localization_key)) then
+                report_drop('ambiguous_shell_without_specific_name', entry, resource)
+                return nil
+            end
             -- A ground-style marker is meaningful only when its actual target
             -- identity is a reviewed task resource. Empty terrain still exits
             -- above, and arbitrary objects/enemies do not become locations.
             if entry.kind == 0 and not mission then return nil end
             local enemy = ENEMY_TARGETS[resource]
+            local special = env.special_targets and env.special_targets.resolve(resource,
+                entry.localization_key) or nil
             local info = mission or enemy or PING_TARGETS[resource]
-            if not info and not (native_category and localized) then
-                if native_category and entry.localization_key > 0 then return nil, 'retry' end
+            if special then
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                return {category='building',target=selected_name(special),target_id=entry.target_id,
+                    creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
+                    localization_key=entry.localization_key,position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
+            if not info and (not native_category or not localized
+                or generic_name(localized, entry.localization_key)) then
+                report_drop('unknown_target_or_generic_name', entry, resource)
                 return nil
             end
             if read(address, 24) ~= identity then return nil, 'retry' end
@@ -797,6 +897,10 @@ local function build_ping_events(env)
             -- keep specific native marker text when it is available.
             if (mission or enemy) and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
                 label = localized_name(info[3]) or info[2]
+            end
+            if info and native_category and not mission and not enemy
+                and generic_name(localized, entry.localization_key) then
+                label = info[2]
             end
             if info and info[2]:match('^TCS') and localized and not localized:find('TCS',1,true)
                 and not GENERIC_MISSION_NAMES[entry.localization_key] then
