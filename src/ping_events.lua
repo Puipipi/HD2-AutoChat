@@ -498,6 +498,12 @@ local function build_ping_events(env)
             end
             if read(address, 24) ~= identity then return nil, 'retry' end
             local label = localized or info and info[2]
+            -- The live mission flagpole has a real target ID but uses the same
+            -- generic key as ground locations. Its verified resource is specific.
+            if info and entry.localization_key == 3585962803
+                and (resource=='9A1F728716DA05B5' or resource=='9D3A7E11095E3355') then
+                label = info[2]
+            end
             if info and info[2]:match('^TCS') and localized and not localized:find('TCS',1,true) then
                 label = info[2] .. ' / ' .. localized
             end

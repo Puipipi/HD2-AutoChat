@@ -7,12 +7,12 @@
 
 游戏内按 **K** 呼出控制面板（打开时自动解除鼠标锁定，关闭时原样归还）。
 
-下载：[AutoChat 0.7.5 测试版](https://github.com/Puipipi/HD2-AutoChat/releases/tag/v0.7.5)。
+下载：[AutoChat 0.7.6 测试版](https://github.com/Puipipi/HD2-AutoChat/releases/tag/v0.7.6)。
 Release 附带可导入模组管理器的 ZIP；本版区分召唤与标记、过滤无意义空点，并补充任务旗杆识别。旗杆仍需实机验收。
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | 0.7.5（召唤消息、空点过滤、任务旗杆识别） |
+| 版本 | 0.7.6（召唤消息、空点过滤、任务旗杆识别） |
 | 资源名 | `mods/codex/auto_chat` |
 | GUID | `a1000000-0000-4000-8000-000000000022` |
 | 前置 | Bingus Shared Loader v15+ / API 1 |

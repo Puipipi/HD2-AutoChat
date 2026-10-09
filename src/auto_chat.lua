@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.7.5', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.7.6', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -1925,6 +1925,12 @@ local function build_ping_events(env)
             end
             if read(address, 24) ~= identity then return nil, 'retry' end
             local label = localized or info and info[2]
+            -- The live mission flagpole has a real target ID but uses the same
+            -- generic key as ground locations. Its verified resource is specific.
+            if info and entry.localization_key == 3585962803
+                and (resource=='9A1F728716DA05B5' or resource=='9D3A7E11095E3355') then
+                label = info[2]
+            end
             if info and info[2]:match('^TCS') and localized and not localized:find('TCS',1,true) then
                 label = info[2] .. ' / ' .. localized
             end
@@ -4308,7 +4314,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.7.5  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.7.6  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------

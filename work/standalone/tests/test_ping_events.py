@@ -203,6 +203,14 @@ class PingEventsTests(unittest.TestCase):
         self.mark(kind=0,target=0);self.header(0,1);self.map_pin(kind=7)
         self.poll(1);self.assertEqual(self.events,[])
 
+    def test_live_flagpole_identity_overrides_generic_special_location_label(self):
+        self.target('9A1F728716DA05B5');self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(kind=18,flags=0x1200,localization_key=3585962803)
+        self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['category'],'building')
+        self.assertEqual(self.events[0][0]['target'],'超级地球旗杆')
+        self.assertEqual(self.events[0][0]['action'],'mark')
+
     def test_captured_broadcast_location_uses_native_label_without_guessing_a_building(self):
         self.localized[3585962803]='特殊地点';self.poll(0)
         self.mark(creator=1001,kind=18,target=0,localization_key=3585962803,
