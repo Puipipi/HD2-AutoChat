@@ -48,6 +48,24 @@ Raw source SHA-256: 58e942286608d13c9c0c6cf952918b049428ef861d438b537ad23436690d
 Normalized source-entry SHA-256: b425cada6e571a19d739817a3019fbba7bac11710e17147c4f3f34220297b861
 ```
 
-No game startup was run for this candidate. The scan's bulk native localization
-calls are removed, but the reported crash remains unconfirmed until an actual
-startup or crash trace verifies the result.
+## Actual startup check
+
+On 2026-10-09, the 0.8.1 candidate was deployed to the user's normal default
+profile and started through Steam. The game remained responsive and reached the
+interactive ship bridge. The game initially showed a connection-error dialog;
+continuing past it reached the ship arrival sequence. This check validates game
+startup, not entry into an online lobby.
+
+The loader log recorded `Startup finished: 73 loaded, 0 failed` and `After
+startup: 4 callbacks run, 0 failed`. `AutoChat.log` recorded `AutoChat v0.8.1
+starting` at `2026-10-09T11:40:47Z`, then `stratagem catalog scan begin` and
+`stratagem catalog scan complete: 战备目录读取就绪（149）` at
+`2026-10-09T11:40:48Z`. The extracted deployed resource entry matched the
+candidate entry SHA-256 above. The process was still responsive at
+`2026-10-09T11:46:31Z`; the latest recorded heartbeat had 27,001 frames,
+117,930 reads, 8,421,693 bytes, and 0 errors. No startup crash was observed.
+
+The reported 0.8.0 crash was not reproduced with this candidate; these observations
+do not prove its cause. The ship bridge was reached, but short `K` and `Escape`
+keypresses sent through the desktop automation produced no visible response, so
+panel and native pause-menu behavior remain unverified.
