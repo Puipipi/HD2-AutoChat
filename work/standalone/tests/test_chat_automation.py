@@ -47,6 +47,27 @@ class AutomationTests(unittest.TestCase):
     def run_lua(self, code):
         return self.lua.execute("local h = ...; local a = h.a; " + code, self.h)
 
+    def test_task_execution_has_a_custom_persistent_template_and_obeys_call_switch(self):
+        self.run_lua("""
+            h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.push_ping({key='upload',category='stratagem',action='use',target='上传数据',creator_id=h.mine},1000))
+            assert(a.poll(1000));assert(h.sent[1]=='Alice正在开始上传数据',h.sent[1])
+            assert(a.set('task_stratagem_message','{缩写}：正在{动作}{目标}'))
+            local b=h.new(h.writes[#h.writes]);assert(b.options.task_stratagem_message=='{缩写}：正在{动作}{目标}')
+            assert(a.push_ping({key='upload2',category='stratagem',action='use',target='上传数据',creator_id=h.mine},1005))
+            assert(a.set('ping_summon',false));a.poll(1005);assert(#h.sent==1)
+            assert(a.push_ping({key='upload3',category='stratagem',action='use',target='上传数据'},1010)==false)
+        """)
+
+    def test_shared_task_call_never_impersonates_the_local_player(self):
+        self.run_lua("""
+            h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
+            assert(a.set('ping',true))
+            assert(a.push_ping({key='teamflag',category='stratagem',action='summon',target='超级地球旗帜',anonymous=true},1000))
+            assert(a.poll(1000));assert(h.sent[1]=='小队召唤了超级地球旗帜',h.sent[1])
+        """)
+
     def test_legacy_stock_template_shows_target_but_custom_templates_are_preserved(self):
         self.run_lua('''
             local b=h.new('ping=true\\nping_sender_prefix=false\\nping_message=队友标记了{类别}，请注意！\\n')

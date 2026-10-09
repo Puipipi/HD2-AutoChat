@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.7.7', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.7.8', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -726,10 +726,11 @@ local function build_chat_automation(env)
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
-        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}'}
+        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
+        task_stratagem_message = '{玩家名}正在开始{目标}'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
@@ -757,7 +758,7 @@ local function build_chat_automation(env)
                 or value ~= math.floor(value) then
                 return false, '请输入 0 到 ' .. limit .. ' 之间的整数秒数'
             end
-        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' then
+        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' or key == 'task_stratagem_message' then
             if type(value) ~= 'string' or #value == 0 or #value > 512
                 or value:find('%z') or not value:find('%S') then
                 return false, '消息须为非空文本，最多 512 字节'
@@ -925,15 +926,15 @@ local function build_chat_automation(env)
     end
     function api.has_peer(peer) return creator_present(peer,api.snapshot()) end
 
-    function api.format(template, peer, extra)
+    function api.format(template, peer, extra, anonymous)
         if type(template) ~= 'string' then return '' end
         if peer == nil then local s=api.snapshot();peer=s and s.mine end
         local identity = identity_for(peer)
-        local name = identity and plain(identity.name,96) or '队友'
-        local short = identity and plain(identity.short,16) or '队友'
+        local name = anonymous and '小队' or identity and plain(identity.name,96) or '队友'
+        local short = anonymous and '小队' or identity and plain(identity.short,16) or '队友'
         if name=='' then name='队友' end
         if short=='' then short='队友' end
-        local slot = identity and identity.color_index
+        local slot = not anonymous and identity and identity.color_index
         local number = type(slot)=='number' and slot%1==0 and slot>=0 and slot<=3 and tostring(slot+1) or '?'
         local values = {['{玩家名}']=name,['{名字}']=name,['{触发者}']=name,
             ['{缩写}']=short,['{编号}']=number}
@@ -1071,7 +1072,7 @@ local function build_chat_automation(env)
         return false, state.status, send_why
     end
     local function ping_enabled(category, action)
-        if action == 'summon' then return options.ping_summon end
+        if action == 'summon' or action == 'use' then return options.ping_summon end
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
@@ -1092,14 +1093,16 @@ local function build_chat_automation(env)
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
         local summoned = event.action == 'summon'
+        local executing = event.action == 'use'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and '召唤' or '标记',
+            ['{动作}']=summoned and '召唤' or executing and '开始' or '标记',
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
             ['{任务类型}']=objective_types[event.objective_kind] or label,
             ['{位置}']=position_text(event)}
-        local text = api.format(summoned and options.summon_message or options.ping_message,event.creator_id,replacements)
+        local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
+        local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
         local prefix = ''
-        if options.ping_sender_prefix and type(event.creator_id) == 'string' then
+        if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
             prefix = '[' .. short .. ']'
             if options.ping_sender_color and identity and type(identity.color) == 'string'
                 and (#identity.color==6 or #identity.color==8) and identity.color:match('^%x+$') then
@@ -1499,6 +1502,7 @@ local MISSION_TARGETS = {
     ['073270650F859DD0'] = {'building', '装有化学武器的背包', 3054644200},
     ['0801B6B3C5D12EBC'] = {'building', '地面全地形采集钻机', 3023900891},
     ['095686275A113614'] = {'building', '尖啸虫巢穴', 3496786382},
+    ['0A12D5A29CDF2D40'] = {'building', '撤离信标', 0},
     ['0DC9084E50C051F3'] = {'building', '铂金条', 2492072473},
     ['0DF874E208040D2F'] = {'building', '虫穴', 3277626454},
     ['0E88F182E83A4275'] = {'building', '任务交互物', 0},
@@ -1544,6 +1548,8 @@ local MISSION_TARGETS = {
     ['3E099DDF97ACF85F'] = {'building', '样本箱', 1332022394},
     ['3E993C23A25E6B88'] = {'building', '机器人任务数据', 714952129},
     ['3F2C34C69CFC94B2'] = {'building', '任务终端', 0},
+    ['3F70E3503A3293F9'] = {'building', '鹈鹕燃料运输机', 0},
+    ['3F8734AEC15B82AD'] = {'building', '鹈鹕飞船', 0},
     ['4012166966A9E6E9'] = {'building', 'SEAF 火炮弹药', 3660636186},
     ['4232EE48E2CFD24E'] = {'building', '机器人制造厂', 644365486},
     ['423FF97D57AB04F5'] = {'building', '地面全地形采集钻机', 3023900891},
@@ -1571,6 +1577,7 @@ local MISSION_TARGETS = {
     ['57DB57121F3E7ED2'] = {'building', '非法广播塔', 0},
     ['5852B7D2F865966C'] = {'building', '采油机', 0},
     ['5A14BF4098BF4259'] = {'building', '任务终端', 0},
+    ['5CF84155E60C6E4D'] = {'building', '机械虫洞', 3277626454},
     ['60544E51EE260967'] = {'building', '光能者城市巨炮', 0},
     ['62D2C45A8B9703CC'] = {'building', '中继塔', 1549126177},
     ['646F5AEBDFF603CB'] = {'building', '黑匣子交付点', 0},
@@ -1578,6 +1585,7 @@ local MISSION_TARGETS = {
     ['682871578A4E98EB'] = {'building', '空军基地控制塔', 0},
     ['6838D8C197CC9C78'] = {'building', '轨道炮', 0},
     ['6845B56D77E61B9F'] = {'building', '军事通信终端', 0},
+    ['688949109126ECE4'] = {'building', '机械虫洞', 3277626454},
     ['68BFAC3C8A03BB83'] = {'building', '战备干扰器终端', 0},
     ['6B7EE87FB2EC6455'] = {'building', '任务交互物', 0},
     ['6C62E2E25E084083'] = {'building', 'SEAF 火炮弹药', 0},
@@ -1586,7 +1594,9 @@ local MISSION_TARGETS = {
     ['6E499C5C95B019FC'] = {'building', '指挥碉堡', 245997106},
     ['6FDCD0D7F8EAF267'] = {'building', 'TCS 支柱', 0},
     ['705B0136A9A9D73A'] = {'building', '任务弹头', 3660636186},
+    ['75BE82ED8592A6B3'] = {'building', '鹈鹕运输机', 0},
     ['766E7B3BDF79452F'] = {'building', '任务终端', 0},
+    ['7B0F8449CA9D2DA0'] = {'building', '鹈鹕运输机', 0},
     ['7BDAA1BB44C3EE1C'] = {'building', '虫族战备干扰器', 0},
     ['7C81DE10F0023D08'] = {'building', '旗帜', 2728206271},
     ['7CA1B74B22C2EB9C'] = {'building', '任务交互物', 3660636186},
@@ -1594,6 +1604,7 @@ local MISSION_TARGETS = {
     ['7E4C6B45BCC45C3F'] = {'building', '虫穴', 3277626454},
     ['867FFD3B4EA22E05'] = {'building', '装配设施冷却管道', 0},
     ['888536AE851DCA05'] = {'building', '数据上传交互装置', 0},
+    ['888EAAFD58C03C75'] = {'building', '任务货运车', 581608860},
     ['8901F188DB366B4B'] = {'building', '虫穴', 3277626454},
     ['8A50B60B22186B9B'] = {'building', '巢穴世界采油阀门', 0},
     ['8AD7A3118BD48D1C'] = {'building', '黑匣子', 4046999266},
@@ -1629,6 +1640,7 @@ local MISSION_TARGETS = {
     ['A8B999A49716BF41'] = {'building', '光能者传送门', 0},
     ['AA28CAF964D05500'] = {'building', '孢子喷涌体', 3139947901},
     ['AC6E5FA7DB7FE621'] = {'building', '任务终端', 0},
+    ['ACC611541CD839DB'] = {'building', '撤离信标', 0},
     ['AEAEF7A1851E6C9D'] = {'building', '机器人防空炮阵地', 4042981686},
     ['AFC719AF96F10DC3'] = {'building', '受感染高塔', 3896690221},
     ['B127552416CE512E'] = {'building', '任务交互物', 0},
@@ -1688,6 +1700,7 @@ local MISSION_TARGETS = {
     ['E9929CB8800E1C8F'] = {'building', '巢穴世界管道疏通阀门', 0},
     ['EAE962D85C0C2D4A'] = {'building', '抽油任务钻机', 3477736393},
     ['EECB5C13AE48637B'] = {'building', '数据上传主终端', 0},
+    ['EF3A4136B21592CB'] = {'building', '鹈鹕飞船', 0},
     ['F08AE61266335A40'] = {'building', '非法科研站', 0},
     ['F0B98FB953B13960'] = {'building', '机器人制造厂', 3794527478},
     ['F1ADE19F87015997'] = {'building', '任务终端', 0},
@@ -2258,6 +2271,192 @@ local ping_events = build_ping_events({
 })
 function M.debug_ping_events() return ping_events end
 M.ping_status = '标记消息已关闭'
+
+-- BEGIN STRATAGEM EVENTS
+-- Read-only observer for non-thrown stratagem successes on Steam build 25480438.
+-- env.base enforces the game.dll fingerprint. The success-writer instructions
+-- below additionally pin the per-peer record layout; no native calls or writes.
+-- Stable IDs/name keys/call types: current StratagemInfo RawData, not build enums.
+-- https://github.com/Darctor/Helldivers2_RawData/tree/main/Data/settings
+-- Records +347CE50, stride1690, entries+1C0 x30, count+7C0; manager count+2D200.
+-- 135C5D0 writes start+10 and activation+20 only after confirmed success.
+-- 135C2C0 can also update start/cooldown on failure and mirrors shared cooldowns
+-- to other peers. Activation changes prove success; mirrored records do NOT
+-- prove which player called it, so ambiguous events explicitly name the squad.
+local function build_stratagem_events(env)
+    local catalog = {
+        [3837064536]={'重新武装“飞鹰”',2109771423,'use',3},
+        [2186648412]={'战术摄像机',2363192702,'summon',3},
+        [115737856]={'撤离信标',1171875332,'summon',2},
+        [1503060624]={'虫洞封堵装置',621653032,'summon',3},
+        [1606251952]={'货运集装箱',2486779978,'summon',3},
+        [2670122272]={'货运集装箱',2486779978,'summon',3},
+        [705279885]={'移动通信中继站',3593734022,'summon',3},
+        [3722314010]={'超级地球旗帜',2281165846,'summon',3},
+        [599201298]={'超级地球旗帜',2281165846,'summon',3},
+        [2720892179]={'虫族震动装置',1923094316,'summon',3},
+        [685210453]={'勘探钻机',2631236711,'summon',3},
+        [650447969]={'地震探测器',2198451684,'summon',3},
+        [871315230]={'撤离信标',822640880,'summon',3},
+        [509712523]={'紧急撤离信标',3901583393,'summon',3},
+        [716088572]={'紧急撤离信标',822640880,'summon',3},
+        [3300666223]={'上传数据',2087215146,'use',3},
+        [681028671]={'数据接口',1159822780,'summon',3},
+        [65564476]={'提取燃料',1360402559,'use',3},
+        [913592461]={'毒素钻机',966239659,'summon',3},
+        [101457192]={'装填高爆弹',2664466741,'use',3},
+        [3702563421]={'装填反坦克弹',3778618418,'use',3},
+        [4264661046]={'装填霰弹',527728115,'use',3},
+    }
+    local pins = {
+        {0x135c63c,string.char(0x45,0x84,0xc9,0x0f,0x84,0x1e,1,0,0)},
+        {0x135c69c,string.char(0x48,0x89,0x8c,0xfd,0xd0,1,0,0)},
+        {0x135c6f9,string.char(0x48,0x89,0x8c,0xfd,0xe0,1,0,0)},
+    }
+    local state = {status='等待任务战备数据', previous={}, seen={}}
+    local api = {state=state}
+    function api.reset()
+        state.scene,state.clock,state.previous,state.seen,state.last_poll=nil,nil,{},{},nil
+        state.status='等待任务战备数据'
+    end
+    local function word(s, at)
+        local a,b,c,d=s:byte(at+1,at+4);assert(d,'short task record')
+        return a+b*256+c*65536+d*16777216
+    end
+    local function number(s,at)
+        local n=word(s,at)+word(s,at+4)*4294967296
+        assert(n<2^53,'inexact task timestamp');return n
+    end
+    local function peer(s) return string.format('%08X%08X',word(s,4),word(s,0)) end
+    local function capture(base)
+        local guards,budget={},0
+        local function read(at,n)
+            assert(type(at)=='number' and at%1==0 and at>=65536 and at+n<2^47
+                and n>0 and n<=65536,'invalid task read bounds')
+            budget=budget+1;assert(budget<=2048,'task read budget')
+            local s=env.read(at,n);assert(type(s)=='string' and #s==n,'task data unreadable');return s
+        end
+        local function guard(at,n)
+            local s=read(at,n);guards[#guards+1]={at,s};return s
+        end
+        local function ptr(at,alignment)
+            local n=number(guard(at,8),0)
+            assert(n>=65536 and n%(alignment or 8)==0 and n<2^47,'invalid task pointer');return n
+        end
+        for _,pin in ipairs(pins) do assert(guard(base+pin[1],#pin[2])==pin[2],'task success signature changed') end
+        local session=env.session and env.session()
+        assert(session~=nil and session~=false,'task session unavailable')
+        local ctx,world,players,records,clock=ptr(base+0x347cef0),ptr(base+0x346bf98),
+            ptr(base+0x3326468),ptr(base+0x347ce50),ptr(base+0x3326348)
+        local own=peer(guard(ctx+0xb398,8))
+        local count=word(guard(players+0x84,4),0)
+        assert(count>=1 and count<=4,'invalid task roster')
+        local roster,roster_order={},{}
+        for i=0,count-1 do
+            local p=peer(guard(players+0x2c8+i*0x38,8))
+            assert(p~='0000000000000000' and not roster[p],'invalid task peer')
+            roster[p]=true;roster_order[#roster_order+1]=p
+        end
+        assert(roster[own],'local task peer absent')
+        local now=number(read(clock+0x18,8),0)
+        local record_count=word(guard(records+0x2d200,4),0)
+        assert(record_count<=32,'invalid task record count')
+        local entries,groups,found={},{},{}
+        for i=0,record_count-1 do
+            local at=records+i*0x1690
+            local p=peer(guard(at,8))
+            if roster[p] then
+                assert(not found[p],'duplicate task record peer');found[p]=true
+                local n=word(guard(at+0x7c0,4),0);assert(n<=16,'invalid task entry count')
+                if n>0 then
+                    local data=guard(at+0x1c0,n*0x30)
+                    for slot=0,n-1 do
+                        local offset=slot*0x30;local kind=word(data,offset)
+                        assert(kind<512,'invalid task type')
+                        -- Current Info structures contain 32-bit fields and are
+                        -- only 4-aligned; manager pointers above remain 8-aligned.
+                        local row=ptr(base+0x37cb600+kind*8,4)
+                        local info=guard(row,0x78);local id=word(info,4);local known=catalog[id]
+                        if known and word(info,0)==kind and word(info,0x74)==known[4] then
+                            local key=p..':'..id
+                            assert(not entries[key],'duplicate task slot')
+                            local item={peer=p,id=id,definition=known,name_key=word(info,0x2c),
+                                start=number(data,offset+0x10),activation=number(data,offset+0x20)}
+                            entries[key]=item
+                            local group=id..':'..string.format('%.0f',item.activation)
+                            groups[group]=groups[group] or {};groups[group][#groups[group]+1]=item
+                        end
+                    end
+                end
+            end
+        end
+        -- Commit a complete, consistent snapshot before publishing any event.
+        local function validate()
+            assert(env.base()==base and env.session()==session,'task session changed')
+            for _,g in ipairs(guards) do assert(read(g[1],#g[2])==g[2],'task observation changed') end
+        end
+        validate()
+        return {scene=table.concat({tostring(base),tostring(session),tostring(ctx),tostring(world),
+            tostring(records),own,table.concat(roster_order,','),tostring(record_count)},'|'),
+            clock=now,entries=entries,groups=groups,validate=validate}
+    end
+    function api.poll(now)
+        if type(now)~='number' or now~=now or math.abs(now)==math.huge then return 0,state.status end
+        if state.last_poll and now>=state.last_poll and now-state.last_poll<0.2 then return 0,state.status end
+        state.last_poll=now
+        local base=env.base()
+        if not base then api.reset();state.status='任务战备：不支持的游戏版本';return 0,state.status end
+        local ok,snapshot=pcall(capture,base)
+        if not ok then api.reset();state.last_poll=now;state.status='任务战备数据暂不可读';return 0,state.status end
+        local baseline=state.scene~=snapshot.scene or not state.clock or snapshot.clock<state.clock
+        local previous,previous_clock=state.previous,state.clock
+        state.scene,state.clock,state.previous=snapshot.scene,snapshot.clock,snapshot.entries
+        if baseline then state.seen={};state.status='任务战备读取就绪';return 0,state.status end
+        for key,expiry in pairs(state.seen) do if now>expiry then state.seen[key]=nil end end
+        local emitted=0
+        for key,item in pairs(snapshot.entries) do
+            local old=previous[key]
+            local token=item.id..':'..string.format('%.0f',item.activation)
+            -- Mission entries can unlock between polls. A new slot is fresh only
+            -- when its confirmed start is later than the previous game snapshot.
+            local changed=old and item.activation>old.activation
+                or not old and item.start>previous_clock and item.activation>0
+            if changed and item.start>0 and item.start<=snapshot.clock
+                and snapshot.clock-item.start<=15000000 and item.activation>=item.start
+                and item.activation<=snapshot.clock+120000000 and not state.seen[token] then
+                state.seen[token]=now+30
+                local localized,name=pcall(function() return env.localize and env.localize(item.name_key) end)
+                if not localized then name=nil end
+                if type(name)~='string' or name=='' or #name>200 or name:find('[%c<>]') then name=item.definition[1] end
+                local anonymous=#snapshot.groups[token]>1
+                local event={key='task:'..token,category='stratagem',action=item.definition[3],target=name,
+                    source='mission_stratagem',stratagem_id=item.id,localization_key=item.name_key,
+                    anonymous=anonymous,creator_id=not anonymous and item.peer or nil}
+                event.id=event.key
+                if not pcall(snapshot.validate) then api.reset();state.status='任务战备数据切换中';return emitted,state.status end
+                local delivered,accepted=pcall(env.emit,event,now)
+                if delivered and accepted==true then emitted=emitted+1 end
+            end
+        end
+        state.status='任务战备读取就绪'
+        return emitted,state.status
+    end
+    return api
+end
+-- END STRATAGEM EVENTS
+local stratagem_events = build_stratagem_events({
+    base = supported_game_base, read = read_at, session = session_token,
+    localize = function(key) return marker_localization.lookup(key) end,
+    emit = function(event, now)
+        event.type = 'ping'
+        local accepted = automation.push_ping(event, now)
+        local notified = REGISTRY and REGISTRY.publish(event) or 0
+        return accepted or notified > 0
+    end,
+})
+function M.debug_stratagem_events() return stratagem_events end
+M.task_stratagem_status = '等待任务战备数据'
+
 
 -- Tasks are data, never executable Lua. Percent escaping preserves UTF-8 and delimiters.
 M.tasks = {}
@@ -3393,6 +3592,7 @@ local function panel_signature()
         M.options and M.options.cooldown or '-', M.options and M.options.welcome_delay or '-',
         M.options and tostring(M.options.ping) or '-', M.options and M.options.ping_message or '-',
         M.options and tostring(M.options.ping_summon) or '-', M.options and M.options.summon_message or '-',
+        M.options and M.options.task_stratagem_message or '-', tostring(M.task_stratagem_status),
         M.options and tostring(M.options.ping_building) or '-', M.options and tostring(M.options.ping_stratagem) or '-', M.options and tostring(M.options.ping_medium_enemy) or '-',
         M.options and tostring(M.options.ping_large_enemy) or '-', M.options and tostring(M.options.ping_giant_enemy) or '-',
         M.options and tostring(M.options.ping_map) or '-', M.options and tostring(M.options.ping_sender_prefix) or '-',
@@ -3757,25 +3957,28 @@ local function draw_panel()
         local opts = M.options
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
-            {'ping_summon','战备召唤自动消息','STRATAGEM CALL-INS'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
+            {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
             {'ping_large_enemy','大型敌人','LARGE ENEMIES'}, {'ping_giant_enemy','巨型敌人','GIANT ENEMIES'},
             {'ping_map','地图任务 / 撤离区','MAP OBJECTIVES / EXTRACTION'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
             {'ping_sender_color','缩写使用队员颜色','PLAYER COLOR PREFIX'}}) do
             button('opt:' .. item[1], caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]'),
                    IX, y, IW, 30, true, opts[item[1]])
-            y = y + 38
+            y = y + 34
         end
         field('option:ping_message', caption('标记提示消息', 'PING MESSAGE'), opts.ping_message, y)
         y = y + 64
         field('option:summon_message', caption('召唤提示消息', 'CALL-IN MESSAGE'), opts.summon_message, y)
-        y = y + 64
-        text(caption('本人和队友均可触发', 'SELF + TEAMMATE PINGS'), IX, y, 12, C.YELLOW, IW)
+        y = y + 58
+        field('option:task_stratagem_message', caption('任务执行消息', 'TASK ACTION MESSAGE'), opts.task_stratagem_message, y)
+        y = y + 58
+        text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
         text(caption(M.ping_status or '等待标记数据', 'NATIVE READER: ' .. (opts.ping and 'ACTIVE' or 'OFF')), IX, y + 22, 12, C.MUTED, IW)
-        text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: CATEGORY / TARGET / POSITION / ACTION'), IX, y + 48, 12, C.MUTED, IW)
-        text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 70, 12, C.MUTED, IW)
-        text(caption('{玩家名} / {缩写} / {编号}', 'PLAYER NAME / SHORT / SLOT'), IX, y + 92, 12, C.MUTED, IW)
-        if PANEL.hint then text(PANEL.hint, IX, y + 114, 11, C.YELLOW, IW) end
+        text(caption(M.task_stratagem_status or '等待任务战备数据', 'TASK STRATAGEM READER'), IX, y + 40, 12, C.MUTED, IW)
+        text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: CATEGORY / TARGET / POSITION / ACTION'), IX, y + 62, 12, C.MUTED, IW)
+        text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 84, 12, C.MUTED, IW)
+        text(caption('{玩家名} / {缩写} / {编号}', 'PLAYER NAME / SHORT / SLOT'), IX, y + 106, 12, C.MUTED, IW)
+        if PANEL.hint then text(PANEL.hint, IX, y + 128, 11, C.YELLOW, IW) end
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = M.options
         local function toggle(key, zh, en)
@@ -4424,8 +4627,12 @@ local function tick()
             local _, status = ping_events.poll(now)
             if status ~= M.ping_status then note('ping reader: ' .. tostring(status)) end
             M.ping_status = status
+            local _, task_status = stratagem_events.poll(now)
+            M.task_stratagem_status = task_status
         else
             ping_events.reset()
+            stratagem_events.reset()
+            M.task_stratagem_status = '任务战备消息已关闭'
             M.ping_status = M.options.enabled and '标记消息已关闭' or '自动发送已关闭'
         end
         automation.poll(now)
@@ -4527,7 +4734,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.7.7  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.7.8  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -4582,9 +4789,9 @@ current-mission importance. Unknown targets without a verified name are skipped.
 New self and teammate marks are observed; first observations establish a baseline.
 Resupply pods/boxes and the M-103 Supply FRV are included as stratagem equipment.
 Empty ground and map pins are excluded; objective and extraction pins remain.
-Call-ins use a separate switch and template: {玩家名}召唤了{目标}.
-Manual equipment marks keep the mark template; {动作} resolves to 召唤 or 标记.
-Mission catalog: 210 current spottable resources (174 specific, 36 generic task widgets).
+Call-ins/task actions share a switch; separate templates: {玩家名}召唤了{目标}, {玩家名}正在开始{目标}.
+Manual equipment marks keep the mark template; {动作} resolves to 召唤, 开始 or 标记. Shared calls with ambiguous attribution say 小队.
+Mission/extraction catalog: 220 current spottable resources (184 specific, 36 generic task widgets).
 Includes radar, broadcast, research, SEAF, fuel/data/ICBM, faction sites and mission carry items.
 Generic location/terminal names use verified unit names; empty terrain remains excluded.
 Specific native names take priority; map objective names/importance remain dynamic.
@@ -4645,8 +4852,8 @@ Files / 文件位置
 地图图钉读取实际同步状态；任务图钉使用游戏地图名称，支持“获取发射代码”等主线前置目标。
 {目标}/{任务名}显示名称，{任务类型}读取当局主线、前置、支线或战术属性，不按名字猜；{位置}为世界XYZ。
 普通地面空点和地图空白点不发消息；地图任务与撤离区保留。
-召唤战备独立开关与模板，默认 {玩家名}召唤了{目标}；手动标记仍用标记模板。
-{动作} 按事件显示“召唤”或“标记”；任务地点目录覆盖210个资源：174个具体名称，36个仅确认任务终端/交互物。
+战备召唤/任务执行共用开关、分别自定义消息；默认 {玩家名}召唤了{目标} 或 {玩家名}正在开始{目标}。
+{动作} 按事件显示“召唤”“开始”或“标记”；共享战备无法确认触发者时显示“小队”。任务/撤离目录220个资源：184个具体名称、36个通用任务交互物。
 包含雷达、广播、科研、SEAF、燃料/数据/导弹和各阵营设施；泛地点/终端使用已核实资源名。
 任务携带物归任务建筑开关；普通物资与空地不发，不按最近坐标猜任务。
 游戏只返回“特殊地点”且无目标ID时使用原标签；地图任务图钉使用具体任务名。

@@ -75,7 +75,7 @@ from generate_mission_targets import render as render_mission_catalog
 if render_mission_catalog() not in ping_fragment:
     raise SystemExit('FAIL mission catalog differs from reviewed resource facts; regenerate it first')
 for fragment, marker in [('peer_identity', 'PEER IDENTITY'), ('plugin_registry', 'PLUGIN REGISTRY'),
-                         ('marker_localization', 'MARKER LOCALIZATION')]:
+                         ('marker_localization', 'MARKER LOCALIZATION'), ('stratagem_events', 'STRATAGEM EVENTS')]:
     content = Path(MOD_SOURCE).with_name(fragment + '.lua').read_text(encoding='utf-8').rstrip()
     if ('-- BEGIN ' + marker + '\n' + content + '\n-- END ' + marker) not in src:
         raise SystemExit('FAIL embedded ' + fragment + ' differs from independently tested source fragment')

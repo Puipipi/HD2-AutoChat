@@ -154,6 +154,16 @@ class PingEventsTests(unittest.TestCase):
         self.assertEqual(self.events,[])
         self.poll(2);self.assertEqual(self.events,[])
 
+    def test_pelican_resources_use_specific_names_instead_of_special_location(self):
+        for resource, name in [('3F8734AEC15B82AD','鹈鹕飞船'), ('EF3A4136B21592CB','鹈鹕飞船'),
+                ('7B0F8449CA9D2DA0','鹈鹕运输机'), ('75BE82ED8592A6B3','鹈鹕运输机'),
+                ('3F70E3503A3293F9','鹈鹕燃料运输机')]:
+            with self.subTest(resource=resource):
+                self.setUp();self.target(resource);self.localized[3585962803]='特殊地点';self.poll(0)
+                self.mark(kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+                self.assertEqual(len(self.events),1)
+                self.assertEqual(self.events[0][0]['target'],name)
+
     def test_live_extraction_pin_has_a_specific_name(self):
         self.actors();self.poll(0)
         self.map_pin(kind=6,network=221,position=(-10.2998686,5.5268564,0));self.poll(1)
@@ -238,6 +248,13 @@ class PingEventsTests(unittest.TestCase):
                 self.assertEqual(len(self.events),1)
                 self.assertEqual(self.events[0][0]['category'],'building')
                 self.assertEqual(self.events[0][0]['target'],name)
+
+    def test_physical_extraction_beacon_is_named_with_a_generic_location_marker(self):
+        self.target('ACC611541CD839DB');self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(kind=0,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(len(self.events),1)
+        self.assertEqual(self.events[0][0]['category'],'building')
+        self.assertEqual(self.events[0][0]['target'],'撤离信标')
 
     def test_ground_style_marker_requires_a_verified_mission_target(self):
         for resource,expected in [('57DB57121F3E7ED2','非法广播塔'),('DEADBEEFDEADBEEF',None),
@@ -572,6 +589,8 @@ class PingEventsTests(unittest.TestCase):
                                      ('542A14BA4D755F4E', 18, '雷达站终端'),
                                      ('AA28CAF964D05500', 1, '孢子喷涌体'),
                                      ('57DB57121F3E7ED2', 0, '非法广播塔'),
+                                     ('ACC611541CD839DB', 0, '撤离信标'),
+                                     ('3F8734AEC15B82AD', 18, '鹈鹕飞船'),
                                      ('D54B9505C0F72873', 21, '撤离区'),
                                      ('D54B9505C0F72873', 21, '获取发射代码')]:
             with self.subTest(label=label):

@@ -77,15 +77,16 @@ AutoChat 0.7.1起，可传入当前事件的完整16位hex `creator_id`，按该
 | `type` | `ping` |
 | `category` | `building / stratagem / medium_enemy / large_enemy / giant_enemy / map` |
 | `target` | 游戏名称或已核实资源名 |
-| `creator_id` | 完整16位大写十六进制peer ID；不要转Lua number |
+| `creator_id` | 完整16位大写十六进制peer ID；共享调用无法归属时缺省，检查anonymous；不要转Lua number |
 | `position` | `{x,y,z}` 世界坐标，可选 |
 | `key / id` | 本次标记唯一标识 |
-| `kind / source` | 原生类型及 `target / native_marker / tactical_map / map_objective / stratagem_call` |
-| `action` | 可选：`summon` 表示战备召唤，`mark` 或缺省表示标记；旧接口兼容 |
+| `kind / source` | 原生类型及 `target / native_marker / tactical_map / map_objective / stratagem_call / mission_stratagem` |
+| `action` | 可选：`summon` 表示战备召唤，`use` 表示原地执行任务战备，`mark` 或缺省表示标记；旧接口兼容 |
 | `objective_name / objective_kind / objective_importance` | 0.7.3地图任务可选字段：游戏名称；`primary / prerequisite / optional / tactical / unknown`；原生当局属性整数 |
+| `anonymous / stratagem_id` | 0.7.8任务战备字段：共享成功记录无法归属时anonymous=true；stratagem_id为稳定战备ID |
 | `resource / target_id / localization_key / slot` | 可选调查字段 |
 
-这是经过归属与会话检查的本人或队友新标记及战备召唤。普通物资、地面空点、地图空白点不发布，进入房间时已有标记只建基线。
+这是经过归属与会话检查的本人或队友新标记、战备召唤及任务执行。共享调用不能证明触发者时不提供creator_id，插件应显示“小队”，不可把缺省ID代入本机冒充调用者。普通物资、地面空点、地图空白点不发布，进入房间时已有标记只建基线。
 地图任务字段来自目标实体与当局任务记录，不按名称猜分类；撤离区没有任务字段。
 订阅者存在时，即使宿主自动消息关闭也读取并发布观察事件，但调用发送仍受总开关限制。
 每个插件接收独立的有界事件副本；某个插件改事件不会影响其他插件或自动消息。

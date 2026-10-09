@@ -1,0 +1,278 @@
+{
+  "game_version": "1.007.100",
+  "source": "https://github.com/Darctor/Helldivers2_RawData/blob/main/Data/settings/generated_stratagem_settings.json",
+  "notes": [
+    "Stable IDs identify calls; observed enum numbers are diagnostic only.",
+    "Action use means no spawned payload; summon means a payload is defined.",
+    "Tutorial call excluded. Runtime success record changes, not input codes, trigger messages."
+  ],
+  "stratagems": [
+    {
+      "stable_id": 3837064536,
+      "label": "重新武装“飞鹰”",
+      "action": "use",
+      "name_key": 2109771423,
+      "call_in_type": 3,
+      "observed_type": "49 <=> StratagemType_EagleRearm",
+      "debug_name": "EAGLE. REARM",
+      "payload": []
+    },
+    {
+      "stable_id": 2186648412,
+      "label": "战术摄像机",
+      "action": "summon",
+      "name_key": 2363192702,
+      "call_in_type": 3,
+      "observed_type": "78 <=> StratagemType_ShoulderMountedCamera",
+      "debug_name": "MISSIONS. SHOULDER MOUNTED CAMERA",
+      "payload": [
+        "11376870716921492798",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 115737856,
+      "label": "撤离信标",
+      "action": "summon",
+      "name_key": 1171875332,
+      "call_in_type": 2,
+      "observed_type": "148 <=> StratagemType_ExtractBeacon",
+      "debug_name": "MISSIONS. EXTRACTION",
+      "payload": [
+        "17238162226885792459"
+      ]
+    },
+    {
+      "stable_id": 1503060624,
+      "label": "虫洞封堵装置",
+      "action": "summon",
+      "name_key": 621653032,
+      "call_in_type": 3,
+      "observed_type": "72 <=> StratagemType_DropoffBugPlug",
+      "debug_name": "MISSIONS. BUG PLUG",
+      "payload": [
+        "16085819457051082660",
+        "8484362704672433843"
+      ]
+    },
+    {
+      "stable_id": 1606251952,
+      "label": "货运集装箱",
+      "action": "summon",
+      "name_key": 2486779978,
+      "call_in_type": 3,
+      "observed_type": "71 <=> StratagemType_DropoffCargoContainer",
+      "debug_name": "MISSIONS. CARGO CONTAINER",
+      "payload": [
+        "15805795754758043311",
+        "8484362704672433843"
+      ]
+    },
+    {
+      "stable_id": 2670122272,
+      "label": "货运集装箱",
+      "action": "summon",
+      "name_key": 2486779978,
+      "call_in_type": 3,
+      "observed_type": "138 <=> StratagemType_CargoContainer",
+      "debug_name": "MISSIONS. CARGO CONTAINER",
+      "payload": [
+        "3013086132913930527",
+        "8484362704672433843"
+      ]
+    },
+    {
+      "stable_id": 705279885,
+      "label": "移动通信中继站",
+      "action": "summon",
+      "name_key": 3593734022,
+      "call_in_type": 3,
+      "observed_type": "102 <=> StratagemType_MobileCommsRelay",
+      "debug_name": "MISSIONS. MOBILE COMMS RELAY",
+      "payload": [
+        "2335895616757348607",
+        "8484362704672433843"
+      ]
+    },
+    {
+      "stable_id": 3722314010,
+      "label": "超级地球旗帜",
+      "action": "summon",
+      "name_key": 2281165846,
+      "call_in_type": 3,
+      "observed_type": "11 <=> StratagemType_RaiseFlag",
+      "debug_name": "MISSIONS. RAISE FLAG",
+      "payload": [
+        "11105721130648470965",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 599201298,
+      "label": "超级地球旗帜",
+      "action": "summon",
+      "name_key": 2281165846,
+      "call_in_type": 3,
+      "observed_type": "85 <=> StratagemType_SuperEarthFlag",
+      "debug_name": "MISSIONS. RAISE FLAG NO CLEAR AREA",
+      "payload": [
+        "11105721130648470965",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 2720892179,
+      "label": "虫族震动装置",
+      "action": "summon",
+      "name_key": 1923094316,
+      "call_in_type": 3,
+      "observed_type": "17 <=> StratagemType_BugThumper",
+      "debug_name": "MISSIONS. BUG THUMPER",
+      "payload": [
+        "14394260739264934509",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 685210453,
+      "label": "勘探钻机",
+      "action": "summon",
+      "name_key": 2631236711,
+      "call_in_type": 3,
+      "observed_type": "70 <=> StratagemType_ProspectingDrill",
+      "debug_name": "MISSIONS. PROSPECTING DRILL",
+      "payload": [
+        "16116574862830205005",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 650447969,
+      "label": "地震探测器",
+      "action": "summon",
+      "name_key": 2198451684,
+      "call_in_type": 3,
+      "observed_type": "19 <=> StratagemType_SeismicProbe",
+      "debug_name": "MISSIONS. SEISMIC PROBE",
+      "payload": [
+        "12424973596508546593",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 871315230,
+      "label": "撤离信标",
+      "action": "summon",
+      "name_key": 822640880,
+      "call_in_type": 3,
+      "observed_type": "7 <=> StratagemType_ExtractionBeacon",
+      "debug_name": "MISSIONS. EXTRACTION BEACON",
+      "payload": [
+        "12449657272871172571",
+        "8317828693784264770"
+      ]
+    },
+    {
+      "stable_id": 509712523,
+      "label": "紧急撤离信标",
+      "action": "summon",
+      "name_key": 3901583393,
+      "call_in_type": 3,
+      "observed_type": "111 <=> StratagemType_ImmediateExtractionBeacon",
+      "debug_name": "MISSIONS. IMMEDIATE EXTRACTION BEACON",
+      "payload": [
+        "725877384353361216",
+        "8317828693784264770"
+      ]
+    },
+    {
+      "stable_id": 716088572,
+      "label": "紧急撤离信标",
+      "action": "summon",
+      "name_key": 822640880,
+      "call_in_type": 3,
+      "observed_type": "98 <=> StratagemType_EmergencyExtractionBeacon",
+      "debug_name": "MISSIONS. EMERGENCY EXTRACTION BEACON",
+      "payload": [
+        "6280200573229258796",
+        "8317828693784264770"
+      ]
+    },
+    {
+      "stable_id": 3300666223,
+      "label": "上传数据",
+      "action": "use",
+      "name_key": 2087215146,
+      "call_in_type": 3,
+      "observed_type": "128 <=> StratagemType_UploadDiscovery",
+      "debug_name": "MISSIONS. Upload Discovery",
+      "payload": []
+    },
+    {
+      "stable_id": 681028671,
+      "label": "数据接口",
+      "action": "summon",
+      "name_key": 1159822780,
+      "call_in_type": 3,
+      "observed_type": "48 <=> StratagemType_MissionDataJack",
+      "debug_name": "MISSIONS. DATA JACK",
+      "payload": [
+        "1537696249448617261",
+        "8356509974227907605"
+      ]
+    },
+    {
+      "stable_id": 65564476,
+      "label": "提取燃料",
+      "action": "use",
+      "name_key": 1360402559,
+      "call_in_type": 3,
+      "observed_type": "36 <=> StratagemType_OilRigExtract",
+      "debug_name": "MISSIONS. OIL RIG EXTRACT",
+      "payload": []
+    },
+    {
+      "stable_id": 913592461,
+      "label": "毒素钻机",
+      "action": "summon",
+      "name_key": 966239659,
+      "call_in_type": 3,
+      "observed_type": "94 <=> StratagemType_Posion_Drill",
+      "debug_name": "MISSIONS. POISON DRILL",
+      "payload": [
+        "12902940357999748154",
+        "8484362704672433843"
+      ]
+    },
+    {
+      "stable_id": 101457192,
+      "label": "装填高爆弹",
+      "action": "use",
+      "name_key": 2664466741,
+      "call_in_type": 3,
+      "observed_type": "47 <=> StratagemType_Tank_Reload_HE",
+      "debug_name": "TANK. TANK RELOAD HE",
+      "payload": []
+    },
+    {
+      "stable_id": 3702563421,
+      "label": "装填反坦克弹",
+      "action": "use",
+      "name_key": 3778618418,
+      "call_in_type": 3,
+      "observed_type": "95 <=> StratagemType_Tank_Reload_AT",
+      "debug_name": "TANK. TANK RELOAD AT",
+      "payload": []
+    },
+    {
+      "stable_id": 4264661046,
+      "label": "装填霰弹",
+      "action": "use",
+      "name_key": 527728115,
+      "call_in_type": 3,
+      "observed_type": "60 <=> StratagemType_Tank_Reload_Canister",
+      "debug_name": "TANK. TANK RELOAD CANISTER",
+      "payload": []
+    }
+  ]
+}

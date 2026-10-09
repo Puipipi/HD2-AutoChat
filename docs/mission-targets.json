@@ -113,6 +113,17 @@
       ]
     },
     {
+      "resource": "0A12D5A29CDF2D40",
+      "path": null,
+      "label": "撤离信标",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
       "resource": "0DC9084E50C051F3",
       "path": null,
       "label": "铂金条",
@@ -661,6 +672,28 @@
       ]
     },
     {
+      "resource": "3F70E3503A3293F9",
+      "path": "content/fac_helldivers/vehicles/shuttle_tanker/shuttle_tanker",
+      "label": "鹈鹕燃料运输机",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "3F8734AEC15B82AD",
+      "path": "content/fac_helldivers/vehicles/shuttle",
+      "label": "鹈鹕飞船",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
       "resource": "4012166966A9E6E9",
       "path": "content/objectives/obj_common/seaf_artillery/seaf_shell",
       "label": "SEAF 火炮弹药",
@@ -984,6 +1017,18 @@
       ]
     },
     {
+      "resource": "5CF84155E60C6E4D",
+      "path": "content/env_super_earth/military_base/mechanical_bughole/mechanical_bughole_scavenger",
+      "label": "机械虫洞",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
       "resource": "60544E51EE260967",
       "path": "content/objectives/obj_illuminate/il_mothership/il_city_cannon",
       "label": "光能者城市巨炮",
@@ -1063,6 +1108,18 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "688949109126ECE4",
+      "path": "content/env_super_earth/military_base/mechanical_bughole/mechanical_bughole",
+      "label": "机械虫洞",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
       ]
     },
     {
@@ -1163,6 +1220,17 @@
       ]
     },
     {
+      "resource": "75BE82ED8592A6B3",
+      "path": "content/fac_helldivers/vehicles/shuttle_transport/shuttle_transport",
+      "label": "鹈鹕运输机",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
       "resource": "766E7B3BDF79452F",
       "path": null,
       "label": "任务终端",
@@ -1172,6 +1240,17 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "7B0F8449CA9D2DA0",
+      "path": "content/fac_helldivers/vehicles/shuttle_gunship/shuttle_dropship",
+      "label": "鹈鹕运输机",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
       ]
     },
     {
@@ -1254,6 +1333,18 @@
       "group": "site",
       "specific": true,
       "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "888EAAFD58C03C75",
+      "path": "content/fac_super_earth/vehicles/cargo_car/cargo_car",
+      "label": "任务货运车",
+      "name_key": 581608860,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveDeliverableVehicleComponentData",
         "SpottableComponentData"
       ]
     },
@@ -1678,6 +1769,18 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "ACC611541CD839DB",
+      "path": "content/fac_helldivers/hellpod/landingzone_beacon/landingzone_beacon",
+      "label": "撤离信标",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
       ]
     },
     {
@@ -2384,6 +2487,17 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "EF3A4136B21592CB",
+      "path": "content/fac_helldivers/vehicles/shuttle_gunship/shuttle_gunship",
+      "label": "鹈鹕飞船",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
       ]
     },
     {

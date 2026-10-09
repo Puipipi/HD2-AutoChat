@@ -6,10 +6,11 @@ local function build_chat_automation(env)
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
-        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}'}
+        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
+        task_stratagem_message = '{玩家名}正在开始{目标}'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
@@ -37,7 +38,7 @@ local function build_chat_automation(env)
                 or value ~= math.floor(value) then
                 return false, '请输入 0 到 ' .. limit .. ' 之间的整数秒数'
             end
-        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' then
+        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' or key == 'task_stratagem_message' then
             if type(value) ~= 'string' or #value == 0 or #value > 512
                 or value:find('%z') or not value:find('%S') then
                 return false, '消息须为非空文本，最多 512 字节'
@@ -205,15 +206,15 @@ local function build_chat_automation(env)
     end
     function api.has_peer(peer) return creator_present(peer,api.snapshot()) end
 
-    function api.format(template, peer, extra)
+    function api.format(template, peer, extra, anonymous)
         if type(template) ~= 'string' then return '' end
         if peer == nil then local s=api.snapshot();peer=s and s.mine end
         local identity = identity_for(peer)
-        local name = identity and plain(identity.name,96) or '队友'
-        local short = identity and plain(identity.short,16) or '队友'
+        local name = anonymous and '小队' or identity and plain(identity.name,96) or '队友'
+        local short = anonymous and '小队' or identity and plain(identity.short,16) or '队友'
         if name=='' then name='队友' end
         if short=='' then short='队友' end
-        local slot = identity and identity.color_index
+        local slot = not anonymous and identity and identity.color_index
         local number = type(slot)=='number' and slot%1==0 and slot>=0 and slot<=3 and tostring(slot+1) or '?'
         local values = {['{玩家名}']=name,['{名字}']=name,['{触发者}']=name,
             ['{缩写}']=short,['{编号}']=number}
@@ -351,7 +352,7 @@ local function build_chat_automation(env)
         return false, state.status, send_why
     end
     local function ping_enabled(category, action)
-        if action == 'summon' then return options.ping_summon end
+        if action == 'summon' or action == 'use' then return options.ping_summon end
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
@@ -372,14 +373,16 @@ local function build_chat_automation(env)
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
         local summoned = event.action == 'summon'
+        local executing = event.action == 'use'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and '召唤' or '标记',
+            ['{动作}']=summoned and '召唤' or executing and '开始' or '标记',
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
             ['{任务类型}']=objective_types[event.objective_kind] or label,
             ['{位置}']=position_text(event)}
-        local text = api.format(summoned and options.summon_message or options.ping_message,event.creator_id,replacements)
+        local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
+        local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
         local prefix = ''
-        if options.ping_sender_prefix and type(event.creator_id) == 'string' then
+        if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
             prefix = '[' .. short .. ']'
             if options.ping_sender_color and identity and type(identity.color) == 'string'
                 and (#identity.color==6 or #identity.color==8) and identity.color:match('^%x+$') then
