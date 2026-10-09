@@ -59,6 +59,41 @@ class AutomationTests(unittest.TestCase):
             assert(d.options.ping_message=='队友标记了{类别}，请注意！','explicitly saved v2 template must round trip')
         ''')
 
+    def test_summons_use_a_named_separate_template_and_do_not_relabel_manual_pings(self):
+        self.run_lua('''
+            h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给',creator_id=h.mine},1000))
+            assert(a.poll(1000));assert(h.sent[1]=='Alice召唤了重新补给',h.sent[1])
+            assert(a.push_ping({key='mark',category='stratagem',action='mark',target='重新补给',creator_id=h.mine},1005))
+            assert(a.poll(1005));assert(h.sent[2]=='标记了重新补给（战备提示）',h.sent[2])
+            assert(a.set('summon_message','{缩写}{动作}了{目标}'))
+            local b=h.new(h.writes[#h.writes]);assert(b.options.summon_message=='{缩写}{动作}了{目标}')
+            assert(a.push_ping({key='call2',category='stratagem',action='summon',target='激光大炮',creator_id=h.mine},1010))
+            assert(a.poll(1010));assert(h.sent[3]=='A1召唤了激光大炮')
+        ''')
+
+    def test_summon_switch_and_equipment_mark_switch_are_independent(self):
+        self.run_lua('''
+            assert(a.set('ping',true));assert(a.set('ping_stratagem',false))
+            assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给'},1000))
+            assert(a.push_ping({key='mark',category='stratagem',action='mark',target='重新补给'},1000)==false)
+            assert(a.poll(1000));assert(h.sent[1]:find('召唤了重新补给',1,true))
+            assert(a.set('ping_summon',false));assert(a.set('ping_stratagem',true))
+            assert(a.push_ping({key='call2',category='stratagem',action='summon',target='重新补给'},1001)==false)
+            assert(a.push_ping({key='mark2',category='stratagem',action='mark',target='重新补给'},1001))
+        ''')
+
+    def test_switching_off_summons_cancels_queued_call_in_only(self):
+        self.run_lua('''
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给'},1000))
+            assert(a.push_ping({key='mark',category='stratagem',target='激光大炮'},1000))
+            assert(a.set('ping_summon',false));assert(a.poll(1000))
+            assert(#h.sent==1 and h.sent[1]=='标记了激光大炮（战备提示）')
+            assert(not a.poll(1010));assert(#h.sent==1)
+        ''')
+
     def test_defaults_and_unknown_host_policy(self):
         self.run_lua("""
             assert(a.options.enabled and a.options.allow_solo and not a.options.welcome)

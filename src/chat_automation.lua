@@ -5,15 +5,15 @@ local function build_chat_automation(env)
         welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
-        ping_large_enemy = true, ping_giant_enemy = true,
-        ping_message = '标记了{目标}（{类别}）'}
+        ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
+        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
-        ping_giant_enemy=true}
+        ping_giant_enemy=true, ping_summon=true}
     local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil, status = '等待会话'}
     local api = {options = options, state = state}
 
@@ -37,7 +37,7 @@ local function build_chat_automation(env)
                 or value ~= math.floor(value) then
                 return false, '请输入 0 到 ' .. limit .. ' 之间的整数秒数'
             end
-        elseif key == 'welcome_message' or key == 'ping_message' then
+        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' then
             if type(value) ~= 'string' or #value == 0 or #value > 512
                 or value:find('%z') or not value:find('%S') then
                 return false, '消息须为非空文本，最多 512 字节'
@@ -350,11 +350,15 @@ local function build_chat_automation(env)
         state.status = '等待：欢迎语暂未发送（5 秒后重试）'
         return false, state.status, send_why
     end
+    local function ping_enabled(category, action)
+        if action == 'summon' then return options.ping_summon end
+        return options['ping_' .. category]
+    end
     function api.push_ping(event, now)
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then return false end
-        if not options.enabled or not options.ping or not options['ping_' .. event.category] then return false end
+        if not options.enabled or not options.ping or not ping_enabled(event.category,event.action) then return false end
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
         if state.ping_seen[event.key] or #state.pings >= 16 then return false end
         local snapshot = api.snapshot()
@@ -367,11 +371,13 @@ local function build_chat_automation(env)
         if short == '' then short = '队友' end
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
+        local summoned = event.action == 'summon'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
+            ['{动作}']=summoned and '召唤' or '标记',
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
             ['{任务类型}']=objective_types[event.objective_kind] or label,
             ['{位置}']=position_text(event)}
-        local text = api.format(options.ping_message,event.creator_id,replacements)
+        local text = api.format(summoned and options.summon_message or options.ping_message,event.creator_id,replacements)
         local prefix = ''
         if options.ping_sender_prefix and type(event.creator_id) == 'string' then
             prefix = '[' .. short .. ']'
@@ -382,7 +388,7 @@ local function build_chat_automation(env)
             prefix = prefix .. ' '
         end
         text = prefix .. clipped(text, math.max(0, 512 - #prefix))
-        state.pings[#state.pings+1] = {key=event.key, category=event.category, text=text, expires=now+15, retry=now,
+        state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil}
         state.ping_seen[event.key] = now + 30
@@ -396,7 +402,7 @@ local function build_chat_automation(env)
         for i=#state.pings,1,-1 do
             local p = state.pings[i]
             if now > p.expires or not creator_present(p.creator_id, snapshot)
-                or not options['ping_' .. p.category]
+                or not ping_enabled(p.category,p.action)
                 or p.context ~= context or p.session ~= (snapshot and snapshot.session)
                 or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then
                 table.remove(state.pings,i)

@@ -109,6 +109,9 @@ local PING_TARGETS = {
     ['BF908A82B8E787AC'] = {'building', "TCS 支撑建筑"},
     ['C3D9B291BD97B935'] = {'building', "TCS 支撑建筑"},
     ['6FDCD0D7F8EAF267'] = {'building', "TCS 支柱"},
+    -- Spottable objective units, not the CQC-1 flag weapon or map-only areas.
+    ['9A1F728716DA05B5'] = {'building', '超级地球旗杆'},
+    ['9D3A7E11095E3355'] = {'building', '任务旗帜'},
 
     ['3A28A51BAA029E1A'] = {'building', '抽油任务钻机'},
     ['A3D5F183F8A2B768'] = {'building', 'SEAF 火炮装填架'},
@@ -365,7 +368,8 @@ local function build_ping_events(env)
         assert(header:byte(1) == 1 or map_scene, 'ping UI inactive')
         local function token(bytes)
             return bytes:sub(1,4)..bytes:sub(17,20)..bytes:sub(25,28)..bytes:sub(33,36)
-                .. ((u32(bytes,0)==21 or u32(bytes,0)==0) and bytes:sub(5,16) or '')
+                .. string.char(math.floor(u32(bytes,0x1c)/0x2000)%2)
+                .. (u32(bytes,0)==21 and bytes:sub(5,16) or '')
         end
         for step = 0, (header:byte(1) == 1 and (tail-head)%128 or 0)-1 do
             local slot = (head+step)%128
@@ -376,6 +380,7 @@ local function build_ping_events(env)
                 and age == age and age >= 0 and age < duration then
                 local kind, creator, target = u32(bytes, 0), u32(bytes, 0x18), u32(bytes, 0x20)
                 entries[#entries+1] = {slot = slot, age = age, kind = kind, creator = creator,
+                    duration = duration, native_flags = u32(bytes,0x1c),
                     creator_id = creators[creator], target_id = target,
                     position = {x=float(bytes,4),y=float(bytes,8),z=float(bytes,12)},
                     localization_key=u32(bytes,0x34), token = token(bytes)}
@@ -429,16 +434,11 @@ local function build_ping_events(env)
                 objective_importance=importance, objective_name=name}
         end
         local function target(entry)
-            if entry.kind == 24 or not entry.creator_id then return nil end
-            if entry.kind == 0 then
-                for _, value in pairs(entry.position) do
-                    if value ~= value or math.abs(value)>1000000 then return nil end
-                end
-                return {category='map',target='地点标记',position=entry.position,
-                    creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
-                    source='ground_ping',localization_key=entry.localization_key}
-            end
+            if entry.kind == 24 or entry.kind == 0 or not entry.creator_id then return nil end
             if entry.kind == 21 then
+                -- Empty map pins (7) and untyped HUD records carry no useful target.
+                -- Only replicated objectives (1) and extraction (6) are supported.
+                if entry.map_type ~= 1 and entry.map_type ~= 6 then return nil end
                 for _, value in pairs(entry.position) do
                     if value ~= value or math.abs(value)>1000000 then return nil end
                 end
@@ -462,6 +462,12 @@ local function build_ping_events(env)
                 end
                 return event
             end
+            -- Captured call-ins use the persistent Stratagem marker. The current
+            -- receiver sets 0x2000 only after resolving the stratagem manager;
+            -- neither the category nor the displayed name alone proves a summon.
+            local summoned = entry.kind == 20 and entry.duration == 9999
+                and math.floor(entry.native_flags/0x2000)%2 == 1
+            local action = summoned and 'summon' or 'mark'
             local localized = localized_name(entry.localization_key)
             -- The game selects these through Spottable.marker_type/override. Only
             -- accept otherwise unknown resources when the native UI label resolves.
@@ -473,7 +479,8 @@ local function build_ping_events(env)
                 end
                 return {category=native_category,target=localized,position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
-                    localization_key=entry.localization_key,source='native_marker'}
+                    localization_key=entry.localization_key,action=action,
+                    source=summoned and 'stratagem_call' or 'native_marker'}
             end
             if entry.target_id == 0 or entry.target_id == 0xffffffff
                 or entry.target_id == entry.creator then return nil end
@@ -497,7 +504,8 @@ local function build_ping_events(env)
             return {category = info and (categories[info[1]] or info[1]) or native_category,
                 target = label, target_id = entry.target_id,
                 creator_id = entry.creator_id, resource = resource, kind = entry.kind, slot = entry.slot,
-                localization_key=entry.localization_key, position=entry.position, source='target'}
+                localization_key=entry.localization_key, position=entry.position, action=action,
+                source=summoned and 'stratagem_call' or 'target'}
         end
         local function validate()
             -- Recheck after target reads as well: a leaving/reordered teammate

@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.7.4', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.7.5', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -725,15 +725,15 @@ local function build_chat_automation(env)
         welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
-        ping_large_enemy = true, ping_giant_enemy = true,
-        ping_message = '标记了{目标}（{类别}）'}
+        ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
+        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
-        ping_giant_enemy=true}
+        ping_giant_enemy=true, ping_summon=true}
     local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil, status = '等待会话'}
     local api = {options = options, state = state}
 
@@ -757,7 +757,7 @@ local function build_chat_automation(env)
                 or value ~= math.floor(value) then
                 return false, '请输入 0 到 ' .. limit .. ' 之间的整数秒数'
             end
-        elseif key == 'welcome_message' or key == 'ping_message' then
+        elseif key == 'welcome_message' or key == 'ping_message' or key == 'summon_message' then
             if type(value) ~= 'string' or #value == 0 or #value > 512
                 or value:find('%z') or not value:find('%S') then
                 return false, '消息须为非空文本，最多 512 字节'
@@ -1070,11 +1070,15 @@ local function build_chat_automation(env)
         state.status = '等待：欢迎语暂未发送（5 秒后重试）'
         return false, state.status, send_why
     end
+    local function ping_enabled(category, action)
+        if action == 'summon' then return options.ping_summon end
+        return options['ping_' .. category]
+    end
     function api.push_ping(event, now)
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then return false end
-        if not options.enabled or not options.ping or not options['ping_' .. event.category] then return false end
+        if not options.enabled or not options.ping or not ping_enabled(event.category,event.action) then return false end
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
         if state.ping_seen[event.key] or #state.pings >= 16 then return false end
         local snapshot = api.snapshot()
@@ -1087,11 +1091,13 @@ local function build_chat_automation(env)
         if short == '' then short = '队友' end
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
+        local summoned = event.action == 'summon'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
+            ['{动作}']=summoned and '召唤' or '标记',
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
             ['{任务类型}']=objective_types[event.objective_kind] or label,
             ['{位置}']=position_text(event)}
-        local text = api.format(options.ping_message,event.creator_id,replacements)
+        local text = api.format(summoned and options.summon_message or options.ping_message,event.creator_id,replacements)
         local prefix = ''
         if options.ping_sender_prefix and type(event.creator_id) == 'string' then
             prefix = '[' .. short .. ']'
@@ -1102,7 +1108,7 @@ local function build_chat_automation(env)
             prefix = prefix .. ' '
         end
         text = prefix .. clipped(text, math.max(0, 512 - #prefix))
-        state.pings[#state.pings+1] = {key=event.key, category=event.category, text=text, expires=now+15, retry=now,
+        state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil}
         state.ping_seen[event.key] = now + 30
@@ -1116,7 +1122,7 @@ local function build_chat_automation(env)
         for i=#state.pings,1,-1 do
             local p = state.pings[i]
             if now > p.expires or not creator_present(p.creator_id, snapshot)
-                or not options['ping_' .. p.category]
+                or not ping_enabled(p.category,p.action)
                 or p.context ~= context or p.session ~= (snapshot and snapshot.session)
                 or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then
                 table.remove(state.pings,i)
@@ -1530,6 +1536,9 @@ local PING_TARGETS = {
     ['BF908A82B8E787AC'] = {'building', "TCS 支撑建筑"},
     ['C3D9B291BD97B935'] = {'building', "TCS 支撑建筑"},
     ['6FDCD0D7F8EAF267'] = {'building', "TCS 支柱"},
+    -- Spottable objective units, not the CQC-1 flag weapon or map-only areas.
+    ['9A1F728716DA05B5'] = {'building', '超级地球旗杆'},
+    ['9D3A7E11095E3355'] = {'building', '任务旗帜'},
 
     ['3A28A51BAA029E1A'] = {'building', '抽油任务钻机'},
     ['A3D5F183F8A2B768'] = {'building', 'SEAF 火炮装填架'},
@@ -1786,7 +1795,8 @@ local function build_ping_events(env)
         assert(header:byte(1) == 1 or map_scene, 'ping UI inactive')
         local function token(bytes)
             return bytes:sub(1,4)..bytes:sub(17,20)..bytes:sub(25,28)..bytes:sub(33,36)
-                .. ((u32(bytes,0)==21 or u32(bytes,0)==0) and bytes:sub(5,16) or '')
+                .. string.char(math.floor(u32(bytes,0x1c)/0x2000)%2)
+                .. (u32(bytes,0)==21 and bytes:sub(5,16) or '')
         end
         for step = 0, (header:byte(1) == 1 and (tail-head)%128 or 0)-1 do
             local slot = (head+step)%128
@@ -1797,6 +1807,7 @@ local function build_ping_events(env)
                 and age == age and age >= 0 and age < duration then
                 local kind, creator, target = u32(bytes, 0), u32(bytes, 0x18), u32(bytes, 0x20)
                 entries[#entries+1] = {slot = slot, age = age, kind = kind, creator = creator,
+                    duration = duration, native_flags = u32(bytes,0x1c),
                     creator_id = creators[creator], target_id = target,
                     position = {x=float(bytes,4),y=float(bytes,8),z=float(bytes,12)},
                     localization_key=u32(bytes,0x34), token = token(bytes)}
@@ -1850,16 +1861,11 @@ local function build_ping_events(env)
                 objective_importance=importance, objective_name=name}
         end
         local function target(entry)
-            if entry.kind == 24 or not entry.creator_id then return nil end
-            if entry.kind == 0 then
-                for _, value in pairs(entry.position) do
-                    if value ~= value or math.abs(value)>1000000 then return nil end
-                end
-                return {category='map',target='地点标记',position=entry.position,
-                    creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
-                    source='ground_ping',localization_key=entry.localization_key}
-            end
+            if entry.kind == 24 or entry.kind == 0 or not entry.creator_id then return nil end
             if entry.kind == 21 then
+                -- Empty map pins (7) and untyped HUD records carry no useful target.
+                -- Only replicated objectives (1) and extraction (6) are supported.
+                if entry.map_type ~= 1 and entry.map_type ~= 6 then return nil end
                 for _, value in pairs(entry.position) do
                     if value ~= value or math.abs(value)>1000000 then return nil end
                 end
@@ -1883,6 +1889,12 @@ local function build_ping_events(env)
                 end
                 return event
             end
+            -- Captured call-ins use the persistent Stratagem marker. The current
+            -- receiver sets 0x2000 only after resolving the stratagem manager;
+            -- neither the category nor the displayed name alone proves a summon.
+            local summoned = entry.kind == 20 and entry.duration == 9999
+                and math.floor(entry.native_flags/0x2000)%2 == 1
+            local action = summoned and 'summon' or 'mark'
             local localized = localized_name(entry.localization_key)
             -- The game selects these through Spottable.marker_type/override. Only
             -- accept otherwise unknown resources when the native UI label resolves.
@@ -1894,7 +1906,8 @@ local function build_ping_events(env)
                 end
                 return {category=native_category,target=localized,position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
-                    localization_key=entry.localization_key,source='native_marker'}
+                    localization_key=entry.localization_key,action=action,
+                    source=summoned and 'stratagem_call' or 'native_marker'}
             end
             if entry.target_id == 0 or entry.target_id == 0xffffffff
                 or entry.target_id == entry.creator then return nil end
@@ -1918,7 +1931,8 @@ local function build_ping_events(env)
             return {category = info and (categories[info[1]] or info[1]) or native_category,
                 target = label, target_id = entry.target_id,
                 creator_id = entry.creator_id, resource = resource, kind = entry.kind, slot = entry.slot,
-                localization_key=entry.localization_key, position=entry.position, source='target'}
+                localization_key=entry.localization_key, position=entry.position, action=action,
+                source=summoned and 'stratagem_call' or 'target'}
         end
         local function validate()
             -- Recheck after target reads as well: a leaving/reordered teammate
@@ -3159,6 +3173,7 @@ local function panel_signature()
         M.options and tostring(M.options.welcome) or '-', M.options and M.options.welcome_message or '-',
         M.options and M.options.cooldown or '-', M.options and M.options.welcome_delay or '-',
         M.options and tostring(M.options.ping) or '-', M.options and M.options.ping_message or '-',
+        M.options and tostring(M.options.ping_summon) or '-', M.options and M.options.summon_message or '-',
         M.options and tostring(M.options.ping_building) or '-', M.options and tostring(M.options.ping_stratagem) or '-', M.options and tostring(M.options.ping_medium_enemy) or '-',
         M.options and tostring(M.options.ping_large_enemy) or '-', M.options and tostring(M.options.ping_giant_enemy) or '-',
         M.options and tostring(M.options.ping_map) or '-', M.options and tostring(M.options.ping_sender_prefix) or '-',
@@ -3522,9 +3537,10 @@ local function draw_panel()
     if PANEL.settings_view == 'pings' and M.options then
         local opts = M.options
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
-            {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备提示','STRATAGEM EQUIPMENT'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
+            {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
+            {'ping_summon','战备召唤自动消息','STRATAGEM CALL-INS'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
             {'ping_large_enemy','大型敌人','LARGE ENEMIES'}, {'ping_giant_enemy','巨型敌人','GIANT ENEMIES'},
-            {'ping_map','地图 / 地点标记','MAP / GROUND PINS'},
+            {'ping_map','地图任务 / 撤离区','MAP OBJECTIVES / EXTRACTION'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
             {'ping_sender_color','缩写使用队员颜色','PLAYER COLOR PREFIX'}}) do
             button('opt:' .. item[1], caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]'),
@@ -3533,9 +3549,11 @@ local function draw_panel()
         end
         field('option:ping_message', caption('标记提示消息', 'PING MESSAGE'), opts.ping_message, y)
         y = y + 64
+        field('option:summon_message', caption('召唤提示消息', 'CALL-IN MESSAGE'), opts.summon_message, y)
+        y = y + 64
         text(caption('本人和队友均可触发', 'SELF + TEAMMATE PINGS'), IX, y, 12, C.YELLOW, IW)
         text(caption(M.ping_status or '等待标记数据', 'NATIVE READER: ' .. (opts.ping and 'ACTIVE' or 'OFF')), IX, y + 22, 12, C.MUTED, IW)
-        text(caption('变量：{类别} / {目标} / {位置}', 'TOKENS: CATEGORY / TARGET / POSITION'), IX, y + 48, 12, C.MUTED, IW)
+        text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: CATEGORY / TARGET / POSITION / ACTION'), IX, y + 48, 12, C.MUTED, IW)
         text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 70, 12, C.MUTED, IW)
         text(caption('{玩家名} / {缩写} / {编号}', 'PLAYER NAME / SHORT / SLOT'), IX, y + 92, 12, C.MUTED, IW)
         if PANEL.hint then text(PANEL.hint, IX, y + 114, 11, C.YELLOW, IW) end
@@ -4290,7 +4308,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.7.4  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.7.5  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -4331,12 +4349,12 @@ Countdown deadlines persist across restarts; overdue tasks attempt once on launc
 Unavailable chat, role restrictions and cooldown leave tasks pending with a reason.
 An enabled legacy timer is migrated to a visible task. Oldest deadlines get priority
 so short repeat tasks cannot starve countdowns. The AUTO MESSAGES section has a master
-switch, host-only / host+client scope, allow-solo switch, shared cooldown, newcomer
+switch, host-only / host+client scope, allow-solo switch, per-player cooldown, newcomer
 welcome switch, custom welcome text and welcome delay. Defaults: enabled, all roles,
 solo allowed, 5s cooldown, welcomes off, 2s welcome delay. Existing peers are not
 welcomed when enabling the feature or entering another lobby.
 PING has independent task-building, stratagem, medium/large/giant-enemy and tactical
-map switches. Ordinary ammo, grenades, stims and samples are excluded. 130 static
+map switches. Ordinary ammo, grenades, stims and samples are excluded. Static
 resources include TCS structures, LAS-98 and Bastion; native special-marker names
 are resolved through the verified main-EXE lookup dispatched to by game.dll.
 Replicated actor map pins
@@ -4344,7 +4362,10 @@ provide world XYZ coordinates; objective pins resolve their actual map name and
 current-mission importance. Unknown targets without a verified name are skipped.
 New self and teammate marks are observed; first observations establish a baseline.
 Resupply pods/boxes and the M-103 Supply FRV are included as stratagem equipment.
-Ground/location pings use the map switch; extraction pins are named explicitly.
+Empty ground and map pins are excluded; objective and extraction pins remain.
+Call-ins use a separate switch and template: {玩家名}召唤了{目标}.
+Manual equipment marks keep the mark template; {动作} resolves to 召唤 or 标记.
+Mission flagpole/carry-flag resources have building fallbacks (live check pending).
 The exact old stock category-only template is upgraded to include {目标}.
 Custom templates remain unchanged. A generic native location label does not
 identify a specific building; objective map pins provide the actual task name.
@@ -4396,12 +4417,14 @@ Files / 文件位置
 自动消息：总开关、仅主机/主机和客机、无人房间允许发送、自动消息最短间隔、新人欢迎及自定义欢迎语/延迟。
 默认允许主客机及单人发送，冷却5秒，新人欢迎关闭，欢迎延迟2秒；启用时不欢迎已有队友。
 标记消息：任务建筑、战备提示、中型/大型/巨型敌人、地图标记分别开关；不再提示普通弹药、针剂、手雷、样本。
-130种静态资源包含 TCS、LAS-98激光大炮、堡垒坦克、重新补给和M-103补给车；特殊标记优先读取游戏本地化名称（需校验当前DLL）。
+静态资源包含 TCS、LAS-98激光大炮、堡垒坦克、重新补给和M-103补给车；特殊标记优先读取游戏本地化名称（需校验当前DLL）。
 本人和队友的新标记均可触发；本人标记与本机定时任务共用本人的消息间隔。
 非法广播等不在目录内的目标要求游戏提供特殊类型与可读名称，名称未加载会在标记有效期内重试。
 地图图钉读取实际同步状态；任务图钉使用游戏地图名称，支持“获取发射代码”等主线前置目标。
 {目标}/{任务名}显示名称，{任务类型}读取当局主线、前置、支线或战术属性，不按名字猜；{位置}为世界XYZ。
-普通地面点标记使用“地图 / 地点标记”开关，撤离区图钉显示“撤离区”。
+普通地面空点和地图空白点不发消息；地图任务与撤离区保留。
+召唤战备独立开关与模板，默认 {玩家名}召唤了{目标}；手动标记仍用标记模板。
+{动作} 按事件显示“召唤”或“标记”；任务旗杆/任务旗帜新增建筑兜底，仍需实机验收。
 游戏只返回“特殊地点”且无目标ID时使用原标签；地图任务图钉使用具体任务名。
 默认标记功能关闭，开启后响应本人和队友的新标记；消息支持 {类别}/{目标}/{触发者}/{位置}。
 地图任务另支持 {任务名}/{任务类型}，变量提示在“标记消息”面板显示。旧默认模板自动加入 {目标}；其他自定义模板保留。

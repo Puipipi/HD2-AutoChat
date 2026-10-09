@@ -81,13 +81,14 @@ class PingEventsTests(unittest.TestCase):
     def header(self, head, tail, active=1):
         self.put(RING, '<IIII', active, 0, head, tail)
 
-    def mark(self, slot=0, creator=1002, target=2001, age=0.1, kind=1, duration=8, position=(0, 0, 0), localization_key=0):
+    def mark(self, slot=0, creator=1002, target=2001, age=0.1, kind=1, duration=8, position=(0, 0, 0), localization_key=0, flags=0):
         address = RING + 16 + slot * 0x58
         self.raw(address, bytes(0x58))
         self.put(address, '<I', kind)
         self.put(address + 4, '<fff', *position)
         self.put(address + 0x10, '<ff', duration, age)
         self.put(address + 0x18, '<I', creator)
+        self.put(address + 0x1c, '<I', flags)
         self.put(address + 0x20, '<I', target)
         self.put(address + 0x34, '<I', localization_key)
 
@@ -104,7 +105,7 @@ class PingEventsTests(unittest.TestCase):
             self.put(descriptor + 8, '<I', entity)
             self.raw(self.actor_base + 0x547830 + slot * 0x78, bytes(0x64))
 
-    def map_pin(self, slot=0, active=True, kind=7, network=0x7fff, position=(100, 200, 0)):
+    def map_pin(self, slot=0, active=True, kind=6, network=0x7fff, position=(100, 200, 0)):
         address = self.actor_base + 0x547830 + slot * 0x78
         self.put(address, '<I', 4 if active else 0)
         self.put(address + 0x50, '<fffII', *position, kind, network)
@@ -145,16 +146,12 @@ class PingEventsTests(unittest.TestCase):
         self.map_pin(slot=0); self.poll(4)
         self.assertEqual(len(self.events), 3, 'cancel then re-mark is a new event')
 
-    def test_live_ground_ping_is_sent_as_a_location_without_target_identity(self):
+    def test_live_ground_ping_is_ignored_even_with_a_generic_native_label(self):
         self.poll(0)
         self.mark(kind=0,target=0,creator=1001,position=(159.2373,-5.3057,1.14987),localization_key=3585962803)
         self.header(0,1);self.poll(1)
-        self.assertEqual(len(self.events),1)
-        event=self.events[0][0]
-        self.assertEqual(event['category'],'map')
-        self.assertEqual(event['target'],'地点标记')
-        self.assertEqual(event['creator_id'],'0110000100000011')
-        self.poll(2);self.assertEqual(len(self.events),1)
+        self.assertEqual(self.events,[])
+        self.poll(2);self.assertEqual(self.events,[])
 
     def test_live_extraction_pin_has_a_specific_name(self):
         self.actors();self.poll(0)
@@ -173,6 +170,39 @@ class PingEventsTests(unittest.TestCase):
                 self.assertEqual(self.events[0][0]['target'],name)
                 self.assertEqual(self.events[0][0]['category'],'medium_enemy' if kind==1 else 'stratagem')
 
+    def test_captured_persistent_call_in_is_distinct_from_a_manual_equipment_ping(self):
+        self.target('16F397CA5F51F271');self.localized[1263463686]='重新补给';self.poll(0)
+        self.mark(kind=20,duration=9999,flags=0x2200,localization_key=1263463686)
+        self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0].get('action'),'summon')
+        self.assertEqual(self.events[0][0]['source'],'stratagem_call')
+        self.target('5052EC6A928CCF1A')
+        self.mark(slot=1,kind=10,duration=8,flags=0x600,localization_key=1263463686)
+        self.header(0,2);self.poll(2)
+        self.assertEqual(self.events[1][0].get('action'),'mark')
+        self.poll(3);self.assertEqual(len(self.events),2)
+
+    def test_manual_stratagem_kind_without_call_in_evidence_keeps_mark_action(self):
+        for duration,flags in [(8,0x2200),(9999,0x200)]:
+            with self.subTest(duration=duration,flags=flags):
+                self.setUp();self.target('D54B9505C0F72873');self.poll(0)
+                self.mark(kind=20,duration=duration,flags=flags);self.header(0,1);self.poll(1)
+                self.assertEqual(self.events[0][0].get('action'),'mark')
+
+    def test_mission_flag_resources_are_buildings_even_without_a_native_name(self):
+        for resource,name in [('9A1F728716DA05B5','超级地球旗杆'),('9D3A7E11095E3355','任务旗帜')]:
+            with self.subTest(resource=resource):
+                self.setUp();self.target(resource);self.poll(0)
+                self.mark(kind=18);self.header(0,1);self.poll(1)
+                self.assertEqual(len(self.events),1)
+                self.assertEqual(self.events[0][0]['category'],'building')
+                self.assertEqual(self.events[0][0]['target'],name)
+
+    def test_empty_ground_and_map_points_do_not_generate_messages(self):
+        self.actors();self.poll(0)
+        self.mark(kind=0,target=0);self.header(0,1);self.map_pin(kind=7)
+        self.poll(1);self.assertEqual(self.events,[])
+
     def test_captured_broadcast_location_uses_native_label_without_guessing_a_building(self):
         self.localized[3585962803]='特殊地点';self.poll(0)
         self.mark(creator=1001,kind=18,target=0,localization_key=3585962803,
@@ -180,10 +210,10 @@ class PingEventsTests(unittest.TestCase):
         self.assertEqual(self.events[0][0]['target'],'特殊地点')
         self.assertEqual(self.events[0][0]['category'],'building')
 
-    def test_ground_renewal_at_a_different_position_is_a_new_mark(self):
+    def test_ground_renewal_at_a_different_position_is_still_ignored(self):
         self.poll(0);self.mark(kind=0,target=0,position=(1,2,3));self.header(0,1);self.poll(1)
         self.mark(kind=0,target=0,position=(10,20,30),age=1);self.poll(2)
-        self.assertEqual(len(self.events),2)
+        self.assertEqual(self.events,[])
 
     def test_real_map_state_works_when_hud_ring_is_inactive(self):
         self.actors(); self.header(0, 0, active=0); self.poll(0)
@@ -408,29 +438,39 @@ class PingEventsTests(unittest.TestCase):
         self.put(ROOT + 0xf1aeb0 + 8, '<I', 7)
         self.poll(1); self.assertEqual(self.events, [])
 
-    def test_tactical_map_kind_21_emits_coordinates_without_target_entity(self):
+    def test_untyped_hud_map_record_is_ignored(self):
         self.poll(0)
         self.mark(kind=21, target=0xffffffff, position=(123, 456, 7), duration=9999)
         self.header(0, 1); self.poll(1)
-        self.assertEqual(self.events[0][0]['category'], 'map')
-        self.assertEqual(dict(self.events[0][0]['position']), {'x': 123, 'y': 456, 'z': 7})
-        self.poll(2); self.assertEqual(len(self.events), 1)
+        self.assertEqual(self.events, [])
+        self.poll(2); self.assertEqual(self.events, [])
         self.mark(kind=21, target=0xffffffff, position=(150, 456, 7), age=1.5)
-        self.poll(3); self.assertEqual(len(self.events), 2, 'new position is a new map mark')
+        self.poll(3); self.assertEqual(self.events, [])
+
+    def test_extraction_pin_emits_coordinates_and_a_moved_pin_is_new(self):
+        self.actors(); self.poll(0)
+        self.map_pin(position=(123,456,7)); self.poll(1)
+        self.assertEqual(dict(self.events[0][0]['position']), {'x':123,'y':456,'z':7})
+        self.poll(2); self.assertEqual(len(self.events),1)
+        self.map_pin(position=(150,456,7)); self.poll(3)
+        self.assertEqual(len(self.events),2)
 
     def test_map_invalid_positions_are_ignored(self):
         for kwargs in [dict(position=(float('nan'), 0, 0)), dict(position=(float('inf'), 0, 0)),
                        dict(position=(1000001, 0, 0))]:
-            self.setUp(); self.poll(0)
-            self.mark(kind=21, target=0xffffffff, **kwargs); self.header(0, 1); self.poll(1)
+            self.setUp(); self.actors(); self.poll(0)
+            self.map_pin(**kwargs); self.poll(1)
             self.assertEqual(self.events, [])
 
     def test_own_laser_cannon_and_map_mark_are_emitted_once_with_local_peer(self):
         for kwargs, category in [(dict(kind=20), 'stratagem'),
                                  (dict(kind=21, target=0xffffffff, duration=9999), 'map')]:
             with self.subTest(category=category):
-                self.setUp(); self.target('D54B9505C0F72873'); self.poll(0)
-                self.mark(creator=1001, **kwargs); self.header(0, 1)
+                self.setUp(); self.target('D54B9505C0F72873')
+                if category == 'map': self.actors()
+                self.poll(0)
+                if category == 'map': self.map_pin()
+                else: self.mark(creator=1001, **kwargs); self.header(0, 1)
                 self.assertEqual(self.poll(1)[0], 1)
                 self.assertEqual(self.events[0][0]['category'], category)
                 self.assertEqual(self.events[0][0]['creator_id'], '0110000100000011')
@@ -452,13 +492,13 @@ class PingEventsTests(unittest.TestCase):
         for resource, kind, label in [('D54B9505C0F72873', 20, 'LAS-98 激光大炮'),
                                      ('5052EC6A928CCF1A', 10, '重新补给'),
                                      ('9B2140378640432E', 13, 'M-103 补给车'),
-                                     ('D54B9505C0F72873', 21, '地图标记'),
+                                     ('D54B9505C0F72873', 21, '撤离区'),
                                      ('D54B9505C0F72873', 21, '获取发射代码')]:
             with self.subTest(label=label):
                 self.setUp(); self.target(resource)
                 if kind == 21:
                     self.actors()
-                    if label != '地图标记': self.objective(label)
+                    if label != '撤离区': self.objective(label)
                 controller_source = SOURCE.with_name('chat_automation.lua').read_text(encoding='utf-8')
                 sent = []
                 # Use a real policy controller with a captured transport, not a mocked push_ping.
@@ -478,8 +518,8 @@ class PingEventsTests(unittest.TestCase):
                     'emit': lambda event, now: automation.push_ping(event, now)}))
                 self.poll(0)
                 if kind == 21:
-                    self.map_pin(kind=1 if label != '地图标记' else 7,
-                                 network=12 if label != '地图标记' else 0x7fff)
+                    self.map_pin(kind=1 if label != '撤离区' else 6,
+                                 network=12 if label != '撤离区' else 0x7fff)
                 else:
                     self.mark(creator=1001, kind=kind); self.header(0, 1)
                 self.assertEqual(self.poll(1)[0], 1)

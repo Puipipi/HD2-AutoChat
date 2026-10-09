@@ -161,12 +161,18 @@ class PanelInteractionTest(unittest.TestCase):
             h.user32.set_key(1, True); lua.eval('update()')
             h.user32.set_key(1, False); lua.eval('update()')
         click('view:pings')
-        for option in ('ping_building','ping_stratagem','ping_map','ping_medium_enemy','ping_large_enemy','ping_giant_enemy','ping_sender_prefix','ping_sender_color'):
+        for option in ('ping_building','ping_stratagem','ping_summon','ping_map','ping_medium_enemy','ping_large_enemy','ping_giant_enemy','ping_sender_prefix','ping_sender_color'):
             self.assertTrue(mod.options[option])
             click('opt:'+option)
             self.assertFalse(mod.options[option])
         self.point(h, mod, 'opt:ping')
         self.point(h, mod, 'option:ping_message')
+        click('option:summon_message')
+        mod.debug_set_edit_buffer('{缩写}{动作}了{目标}')
+        h.user32.set_key(0x0D, True); lua.eval('update()')
+        h.user32.set_key(0x0D, False); lua.eval('update()')
+        self.assertEqual('{缩写}{动作}了{目标}', mod.options['summon_message'])
+        self.assertTrue(any('settings.txt' in h.written()[i]['path'] for i in range(1,len(h.written())+1)))
 
     def test_all_settings_pages_have_visible_nonoverlapping_hit_regions(self):
         for rw, rh in ((1280,720), (1920,1080), (3840,2160)):
