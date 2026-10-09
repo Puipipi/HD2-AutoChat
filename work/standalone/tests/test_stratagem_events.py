@@ -219,6 +219,9 @@ class StratagemEventsTests(unittest.TestCase):
                         write_file=function() return true end,send=function(text) return send(text) end})
                 """,lambda text:sent.append(text) or True)
                 controller.set('ping',True);controller.set('ping_sender_prefix',False)
+                controller.set('message_language','zh')
+                controller.set('summon_message','{玩家名}召唤了{目标}')
+                controller.set('task_stratagem_message','{玩家名}正在开始{目标}')
                 constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
                 self.reader=constructor(self.f.lua.table_from({'base':lambda:BASE,'read':self.f.read,
                     'session':lambda:self.f.session,'emit':lambda e,t:controller.push_ping(e,t)}))

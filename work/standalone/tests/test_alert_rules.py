@@ -39,6 +39,7 @@ class AlertRuleTests(unittest.TestCase):
 
     def test_independent_rule_timer_per_player_and_other_rules(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
             h.peers={h.mine,'76561198000000002'}
             assert(a.set('ping',true));assert(a.set('cooldown',3600))
             assert(a.set_rule('enemy','medium_enemy','cooldown',10))
@@ -53,7 +54,9 @@ class AlertRuleTests(unittest.TestCase):
 
     def test_disable_bulk_and_blank_inheritance_keep_default_template(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
             assert(a.set('ping',true));assert(a.set('cooldown',0))
+            assert(a.set('ping_message','标记了{目标}（{类别}）'))
             assert(a.set_rules('stratagem',{1,2},false))
             assert(not a.push_ping({key='no',category='stratagem',stratagem_id=1},1000))
             assert(a.set_rule('stratagem',1,'enabled',true))
@@ -75,20 +78,30 @@ class AlertRuleTests(unittest.TestCase):
             assert(not a.push_ping({key='air2',category='flying_enemy'},1000))
         ''')
 
-    def test_high_risk_defaults_can_be_cleared_and_do_not_return_after_save(self):
+    def test_factory_has_no_zero_cooldown_rules_and_user_zero_survives_save(self):
         self.run_lua('''
-            assert(a.rule('stratagem',4119049995).cooldown==0)
-            assert(a.rule('stratagem',2902516083,'client').cooldown==0)
+            assert(a.rule('stratagem',4119049995).cooldown==nil)
+            assert(a.rule('stratagem',2902516083,'client').cooldown==nil)
+            assert(a.set_rule('stratagem',4119049995,'cooldown',0,'host'))
+            assert(a.set_rule('stratagem',2902516083,'cooldown',0,'client'))
+            local hp=a.export_profile('host');local cp=a.export_profile('client')
+            local b=h.new();assert(b.import_profile(hp,'host'));assert(b.import_profile(cp,'client'))
+            assert(b.rule('stratagem',4119049995,'host').cooldown==0)
+            assert(b.rule('stratagem',2902516083,'client').cooldown==0)
             assert(a.set_rule('stratagem',4119049995,'cooldown',''))
-            local b=h.new(h.writes[#h.writes])
-            assert(b.rule('stratagem',4119049995).cooldown==nil)
-            assert(b.rule('stratagem',2902516083).cooldown==0)
+            local cleared=a.export_profile('host');local c=h.new();assert(c.import_profile(cleared,'host'));assert(c.import_profile(cp,'client'))
+            assert(c.rule('stratagem',4119049995,'host').cooldown==nil)
+            assert(c.rule('stratagem',2902516083,'client').cooldown==0)
         ''')
 
     def test_urgent_alert_survives_full_blocked_queue_and_welcome(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
+            assert(a.set('summon_message','{玩家名}召唤了{目标}'))
+            assert(a.set('welcome_message','欢迎加入小队！'))
             assert(a.set('ping',true));assert(a.set('welcome',true));assert(a.set('welcome_delay',0))
             assert(a.set('cooldown',3600));a.poll(1000);a.record(1000)
+            assert(a.set_rule('stratagem',4119049995,'cooldown',0))
             for i=1,16 do assert(a.push_ping({key='blocked'..i,category='map'},1001)) end
             h.peers={h.mine,'76561198000000002'}
             assert(a.push_ping({key='bomb',category='stratagem',stratagem_id=4119049995,action='summon',target='500kg'},1001))

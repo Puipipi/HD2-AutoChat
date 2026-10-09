@@ -228,7 +228,7 @@ def publish_release(tag, name, body, prerelease, draft, assets, token):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tag", required=True, help="e.g. v1.0.0")
+    parser.add_argument("--tag", required=True, help="e.g. v1.0.0 or v1.0.0-build.2")
     parser.add_argument("--name", default=None, help="release title")
     parser.add_argument("--notes-file", default=None)
     parser.add_argument("--prerelease", action="store_true")
@@ -246,7 +246,9 @@ def main():
         assets = collect_assets(zip_path, args.asset)
         version = version_from(zip_path)
         tag_version = args.tag[1:] if args.tag.startswith("v") else args.tag
-        if not version or tag_version != version:
+        is_build_tag = bool(version and re.fullmatch(
+            re.escape(version) + r"-build\.[1-9][0-9]*", tag_version))
+        if not version or (tag_version != version and not is_build_tag):
             raise ReleaseError("tag version %s does not match main ZIP version %s" %
                                (tag_version, version or "unknown"))
 

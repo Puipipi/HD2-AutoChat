@@ -154,12 +154,12 @@ class PluginRegistryTests(unittest.TestCase):
             local ok,why=r.send('source_mod','hello'); assert(not ok and why=='sender failed')
             assert(h.notes[#h.notes]:find('source_mod',1,true))''')
 
-    def test_v2_revision3_settings_snapshot_and_old_handshake(self):
-        self.check('''assert(r.version==2 and r.api_version==2 and r.api_revision==3)
+    def test_v2_revision4_settings_snapshot_and_old_handshake(self):
+        self.check('''assert(r.version==2 and r.api_version==2 and r.api_revision==4)
             assert(r.capabilities.independent_send and r.capabilities.settings)
             local callback
             r.register{id='legacy',draw=function() end,on_click=function(_,api)
-                assert(api.version==2 and api.api_version==2 and api.api_revision==3)
+                assert(api.version==2 and api.api_version==2 and api.api_revision==4)
                 assert(api.capabilities.settings and api.capabilities.independent_send)
                 callback=api
             end}
@@ -243,6 +243,119 @@ class PluginRegistryTests(unittest.TestCase):
             for i=1,16385 do h.settings_value.large[i]='value' end
             local snapshot,why=r.settings('large')
             assert(snapshot==nil and why=='settings snapshot too large')''')
+
+    def test_preset_hooks_are_all_or_none_and_capture_preserves_unknown_data(self):
+        self.check('''local calls={capture=0,validate=0,apply=0,restore=0}
+            local incomplete={capture=function() return 'x' end}
+            assert(r.register{id='incomplete',draw=function() end,preset=incomplete}==nil)
+            assert(#r.plugins==0)
+            assert(r.capabilities.plugin_presets and r.api_revision==4)
+            assert(r.register{id='plain',draw=function() end})
+            local previous={not_loaded='opaque',plain='leave-me'}
+            assert(r.register{id='optin',draw=function() end,preset={
+                capture=function(role) calls.capture=calls.capture+1;assert(role=='host');return 'fresh' end,
+                validate=function(data,role) calls.validate=calls.validate+1;assert(role=='host');return data=='fresh' or data=='old' end,
+                apply=function() calls.apply=calls.apply+1;return true end,
+                restore=function() calls.restore=calls.restore+1;return true end}})
+            local blobs=assert(r.capture_presets('host',previous))
+            assert(blobs.not_loaded=='opaque' and blobs.plain=='leave-me' and blobs.optin=='fresh')
+            blobs.optin='mutated';assert(previous.optin==nil and previous.not_loaded=='opaque')
+            assert(calls.capture==1 and calls.validate==1 and calls.apply==0 and calls.restore==0)
+            assert(r.capture_presets('bad-role')==nil)
+        ''')
+
+    def test_preset_preflight_validation_and_snapshot_failures_apply_nothing(self):
+        self.check('''local state={apply=0,capture=0}
+            local function hook(id,fail_validate,fail_capture)
+                return {capture=function(role) state.capture=state.capture+1
+                        if fail_capture then return nil,'capture denied' end;return 'old-'..id end,
+                    validate=function(data,role) if fail_validate and data=='bad' then return false,'bad payload' end;return true end,
+                    apply=function() state.apply=state.apply+1;return true end,
+                    restore=function() return true end}
+            end
+            assert(r.register{id='a',draw=function() end,preset=hook('a',false,false)})
+            assert(r.register{id='b',draw=function() end,preset=hook('b',true,false)})
+            local tx,why=r.prepare_presets({a='good',b='bad'},'host')
+            assert(tx==nil and why:find('b',1,true) and state.apply==0 and state.capture==0)
+            r.unregister('b');assert(r.register{id='b',draw=function() end,preset=hook('b',false,true)})
+            tx,why=r.prepare_presets({a='good',b='good'},'host')
+            assert(tx==nil and why:find('b',1,true) and state.apply==0)
+            assert(r.prepare_presets({a='good'},'host')==nil or state.apply==0)
+        ''')
+
+    def test_preset_prepare_aborts_if_validate_unregisters_later_plugin(self):
+        self.check('''local applied=0
+            local function hook(id,validate)
+                return {capture=function() return 'old-'..id end,
+                    validate=validate or function() return true end,
+                    apply=function() applied=applied+1;return true end,
+                    restore=function() return true end}
+            end
+            assert(r.register{id='a',draw=function() end,preset=hook('a',function()
+                r.unregister('b');return true end)})
+            assert(r.register{id='b',draw=function() end,preset=hook('b')})
+            local ok,tx,why=pcall(r.prepare_presets,{a='new-a',b='new-b'},'host')
+            assert(ok and tx==nil and why and why:find('b',1,true) and applied==0)
+        ''')
+
+    def test_preset_prepare_aborts_if_capture_unregisters_itself(self):
+        self.check('''local applied=0
+            assert(r.register{id='a',draw=function() end,preset={
+                validate=function() return true end,
+                capture=function() r.unregister('a');return 'old-a' end,
+                apply=function() applied=applied+1;return true end,
+                restore=function() return true end}})
+            local ok,tx,why=pcall(r.prepare_presets,{a='new-a'},'host')
+            assert(ok and tx==nil and why and why:find('a',1,true) and applied==0)
+        ''')
+
+    def test_preset_partial_apply_rolls_back_attempts_in_reverse_including_failed_plugin(self):
+        self.check('''local order={}
+            local function hook(id,fail_apply)
+                return {capture=function() return 'old-'..id end,
+                    validate=function() return true end,
+                    apply=function() order[#order+1]='apply:'..id
+                        if fail_apply then return false,'partial failure' end;return true end,
+                    restore=function(data,role) order[#order+1]='restore:'..id..':'..data;return true end}
+            end
+            assert(r.register{id='a',draw=function() end,preset=hook('a',false)})
+            assert(r.register{id='b',draw=function() end,preset=hook('b',true)})
+            assert(r.register{id='c',draw=function() end,preset=hook('c',false)})
+            local tx=assert(r.prepare_presets({c='new-c',b='new-b',a='new-a'},'host'))
+            local ok,why=tx.commit();assert(not ok and why:find('b',1,true))
+            assert(table.concat(order,',')=='apply:a,apply:b')
+            assert(tx.commit()==false, 'commit must be one-shot')
+            assert(tx.rollback())
+            assert(table.concat(order,',')=='apply:a,apply:b,restore:b:old-b,restore:a:old-a')
+            assert(tx.rollback()==false, 'rollback must be one-shot')
+        ''')
+
+    def test_preset_rollback_continues_and_reports_all_restore_failures(self):
+        self.check('''local order={}
+            local function hook(id,fail_restore)
+                return {capture=function() return 'old' end,validate=function() return true end,
+                    apply=function() return true end,
+                    restore=function() order[#order+1]=id
+                        if fail_restore then error('restore broke') end;return true end}
+            end
+            assert(r.register{id='a',draw=function() end,preset=hook('a',true)})
+            assert(r.register{id='b',draw=function() end,preset=hook('b',false)})
+            local tx=assert(r.prepare_presets({a='new',b='new'},'host'))
+            assert(tx.commit())
+            local ok,why=tx.rollback()
+            assert(not ok and why:find('a',1,true) and table.concat(order,',')=='b,a')
+        ''')
+
+    def test_preset_payload_validation_no_hooks_or_missing_blob_have_no_side_effect(self):
+        self.check('''local calls=0
+            assert(r.register{id='plain',draw=function() end})
+            assert(r.capture_presets('host',{})[1]==nil)
+            local tx=assert(r.prepare_presets({},'host'));assert(tx.commit());assert(tx.rollback())
+            assert(calls==0)
+            assert(r.capture_presets('host',{['bad id']='x'})==nil)
+            assert(r.prepare_presets({plain=string.rep('x',1048577)},'host')==nil)
+            assert(r.capture_presets('host',{x={}})==nil)
+        ''')
 
     def test_demo_late_load_registers_immediately_and_remains_passive(self):
         self.lua.globals().HD2AutoChatPlugins = self.h.r

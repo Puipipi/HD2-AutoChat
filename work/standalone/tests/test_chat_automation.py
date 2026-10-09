@@ -108,8 +108,10 @@ class AutomationTests(unittest.TestCase):
 
     def test_stratagem_event_diagnostic_covers_rule_gate_queue_and_send(self):
         self.run_lua('''
+            a.set('message_language','zh')
             a.set('ping',true)
             a.set('ping_sender_prefix',false)
+            a.set('summon_message','{玩家名}召唤了{目标}')
             a.set_rule('stratagem',4119049995,'enabled',false)
             local disabled={key='event-disabled',category='stratagem',action='summon',
                 stratagem_id=4119049995,creator_id=h.mine}
@@ -196,6 +198,8 @@ class AutomationTests(unittest.TestCase):
 
     def test_task_execution_has_a_custom_persistent_template_and_obeys_call_switch(self):
         self.run_lua("""
+            assert(a.set('message_language','zh'))
+            assert(a.set('task_stratagem_message','{玩家名}正在开始{目标}'))
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
             assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='upload',category='stratagem',action='use',target='上传数据',creator_id=h.mine},1000))
@@ -209,6 +213,8 @@ class AutomationTests(unittest.TestCase):
 
     def test_shared_task_call_never_impersonates_the_local_player(self):
         self.run_lua("""
+            assert(a.set('message_language','zh'))
+            assert(a.set('summon_message','{玩家名}召唤了{目标}'))
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
             assert(a.set('ping',true))
             assert(a.push_ping({key='teamflag',category='stratagem',action='summon',target='超级地球旗帜',anonymous=true},1000))
@@ -238,6 +244,9 @@ class AutomationTests(unittest.TestCase):
 
     def test_summons_use_a_named_separate_template_and_do_not_relabel_manual_pings(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
+            assert(a.set('summon_message','{玩家名}召唤了{目标}'))
+            assert(a.set('ping_message','标记了{目标}（{类别}）'))
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
             assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给',creator_id=h.mine},1000))
@@ -252,6 +261,9 @@ class AutomationTests(unittest.TestCase):
 
     def test_summon_switch_and_equipment_mark_switch_are_independent(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
+            assert(a.set('summon_message','{玩家名}召唤了{目标}'))
+            assert(a.set('ping_message','标记了{目标}（{类别}）'))
             assert(a.set('ping',true));assert(a.set('ping_stratagem',false))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给'},1000))
             assert(a.push_ping({key='mark',category='stratagem',action='mark',target='重新补给'},1000)==false)
@@ -263,6 +275,9 @@ class AutomationTests(unittest.TestCase):
 
     def test_switching_off_summons_cancels_queued_call_in_only(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
+            assert(a.set('summon_message','{玩家名}召唤了{目标}'))
+            assert(a.set('ping_message','标记了{目标}（{类别}）'))
             assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给'},1000))
             assert(a.push_ping({key='mark',category='stratagem',target='激光大炮'},1000))
@@ -403,6 +418,7 @@ class AutomationTests(unittest.TestCase):
 
     def test_objective_templates_use_runtime_category_and_localized_name(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
             assert(a.set('ping',true)); assert(a.set('ping_sender_prefix',false))
             assert(a.set('ping_message','{任务类型}：{任务名} / {目标}'))
             for n,kind in ipairs({'primary','prerequisite','optional','tactical','unknown'}) do
@@ -420,6 +436,7 @@ class AutomationTests(unittest.TestCase):
     def test_trigger_identity_and_position_templates_are_plain_and_prefix_is_optional(self):
         self.run_lua('''
             assert(a.set('ping',true)); assert(a.set('ping_sender_color',false))
+            assert(a.set('message_language','zh'))
             assert(a.set('ping_message','{触发者}：{目标} {位置}'))
             h.identities.friend={peer_id='friend',name='Alice',short='AL',color='FF0000'}
             assert(a.push_ping({key='map1',category='map',creator_id='friend',target='地图标记',
@@ -479,6 +496,30 @@ class AutomationTests(unittest.TestCase):
             assert(#h.sent[1]<=512 and #h.sent[1]:sub(30)%3==0)
         ''')
 
+    def test_rule_field_batch_is_atomic_role_scoped_and_deduplicated(self):
+        self.run_lua('''
+            local before=#h.writes
+            assert(a.set_rule_field_batch('stratagem',{101,101,102},'cooldown',0,'host'))
+            assert(#h.writes==before+1)
+            assert(a.rule('stratagem',101,'host').cooldown==0)
+            assert(a.rule('stratagem',102,'host').cooldown==0)
+            assert(a.rule('stratagem',101,'client').cooldown==nil)
+            assert(a.set_rule('stratagem',101,'enabled',true,'host'))
+            local saved=#h.writes
+            assert(not a.set_rule_field_batch('stratagem',{103,'bad-id'},'cooldown',4,'host'))
+            assert(not a.set_rule_field_batch('stratagem',{103},'unknown',4,'host'))
+            assert(not a.set_rule_field_batch('stratagem',{103},'cooldown',3601,'host'))
+            assert(not a.set_rule_field_batch('stratagem',{},'cooldown',4,'host'))
+            assert(#h.writes==saved and a.rule('stratagem',103,'host').cooldown==nil)
+            h.write_ok=false
+            assert(not a.set_rule_field_batch('stratagem',{101,102},'mark_message','changed','host'))
+            assert(a.rule('stratagem',101,'host').mark_message==nil)
+            h.write_ok=true
+            assert(a.set_rule_field_batch('stratagem',{101},'cooldown',nil,'host'))
+            assert(a.rule('stratagem',101,'host').cooldown==nil)
+            assert(a.rule('stratagem',101,'host').enabled==true)
+        ''')
+
     def test_ping_category_preferences_are_independent_and_persisted(self):
         self.run_lua('''
             assert(a.set('ping', true))
@@ -498,6 +539,7 @@ class AutomationTests(unittest.TestCase):
 
     def test_classified_ping_uses_category_mask_template_and_shared_cooldown(self):
         self.run_lua('''
+            assert(a.set('message_language','zh'))
             assert(a.set('ping', true))
             assert(a.set('ping_message', '{类别}：{目标}'))
             assert(a.push_ping({key='1',category='large_enemy',target='重型目标'},1000))
@@ -738,6 +780,56 @@ class AutomationTests(unittest.TestCase):
             assert(#a.format(string.rep('中',200),'friend')<=512)
         ''')
 
+    def test_fixed_message_locale_selects_known_bilingual_target_and_safe_fallbacks(self):
+        self.run_lua(r'''
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.set('ping_supplies',true))
+            assert(a.set('ping_message','{玩家名}|{目标}|{类别}|{位置}'))
+            assert(a.set('message_language','en'))
+            assert(a.push_ping({key='en-target',category='supplies',creator_id=h.mine,
+                target='针剂盒',target_names={zh='针剂盒',en='Stim box'}},1000))
+            assert(a.poll(1000));assert(h.sent[1]=='Teammate|Stim box|SUPPLIES|Unknown position')
+            assert(a.set('message_language','zh'));assert(a.set('cooldown',0))
+            assert(a.push_ping({key='zh-target',category='supplies',creator_id=h.mine,
+                target='Stim box',target_names={zh='针剂盒',en='Stim box'}},1001))
+            assert(a.poll(1001));assert(h.sent[2]=='队友|针剂盒|普通物资|未知位置')
+            assert(a.format('{玩家名}|{缩写}',h.mine,nil,false,false,'en')=='Teammate|Teammate')
+            assert(a.format('{玩家名}|{缩写}',h.mine,nil,true,true,'en')=='Squad|Squad')
+        ''')
+
+    def test_full_player_name_aliases_use_verified_color_and_keep_reset_within_utf8_limit(self):
+        self.run_lua(r'''
+            h.identities.friend={peer_id='friend',name='张三%{编号}<tag>',short='Z2',color_index=1,color='81ACFE'}
+            local plain=a.format('{玩家名}|{名字}|{触发者}','friend')
+            assert(plain=='张三%{编号}tag|张三%{编号}tag|张三%{编号}tag')
+            local colored=a.format('{玩家名}|{名字}|{触发者}','friend',nil,false,true)
+            local name='<c=FF81ACFE>张三%{编号}tag<c=FFFFFFFF>'
+            assert(colored==name..'|'..name..'|'..name)
+            assert(a.format('{玩家名}','friend',nil,true,true)=='小队')
+            h.identities.friend.color='not-a-color'
+            assert(a.format('{玩家名}','friend',nil,false,true)=='张三%{编号}tag')
+            h.identities.friend.color='81ACFE'
+            h.identities.friend.name=string.rep('中',96)
+            local clipped=a.format(string.rep('x',400)..'{玩家名}','friend',nil,false,true)
+            assert(#clipped<=512 and clipped:sub(-12)=='<c=FFFFFFFF>')
+            assert(select(2,clipped:gsub('<c=',''))==2,'colored output must contain one opening and one closing tag')
+        ''')
+
+    def test_welcome_full_name_obeys_the_existing_player_color_switch(self):
+        self.run_lua(r'''
+            h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0,color='81ACFE'}
+            assert(a.set('welcome',true));assert(a.set('welcome_message','Welcome {玩家名}'))
+            assert(a.set('ping_sender_color',true));a.poll(0)
+            h.peers={h.mine,'friend'};h.identities.friend={peer_id='friend',name='Bob',short='B2',color_index=1,color='FF0000'}
+            a.poll(1);assert(a.poll(3))
+            assert(h.sent[1]=='Welcome <c=FFFF0000>Bob<c=FFFFFFFF>')
+            assert(a.set('welcome_message','Welcome {名字}'))
+            assert(a.set('ping_sender_color',false));a.poll(4)
+            h.peers={h.mine,'friend','other'};h.identities.other={peer_id='other',name='Eve',short='E3',color_index=2,color='00FF00'}
+            a.poll(5);assert(a.poll(7))
+            assert(h.sent[2]=='Welcome Eve')
+        ''')
+
     def test_welcome_resolves_native_profile_from_session_uint64_without_guessing_slot(self):
         self.run_lua('''
             local ffi=require('ffi');local id=ffi.new('uint64_t',0x0110000100000000)+0x22
@@ -793,6 +885,24 @@ class AutomationTests(unittest.TestCase):
             assert(a.set('welcome', false) == false and a.options.welcome == true)
             a.poll(3); assert(#h.sent == 1)
         """)
+
+    def test_existing_saved_legacy_profile_uses_auto_without_overwriting_messages(self):
+        self.run_lua(r'''
+            local legacy=h.new('# AutoChat automation settings v3\nwelcome_message=Custom%20old\n')
+            assert(legacy.profile('host').message_language=='auto')
+            assert(legacy.profile('host').welcome_message=='Custom old')
+            assert(legacy.profile('client').message_language=='auto')
+        ''')
+
+    def test_factory_rules_are_empty_but_saved_zero_cooldown_rule_roundtrips(self):
+        self.run_lua(r'''
+            assert(next(a.profile('host').rules)==nil)
+            assert(next(a.profile('client').rules)==nil)
+            assert(a.set_rule('stratagem',4119049995,'cooldown',0,'host'))
+            local b=h.new(h.writes[#h.writes])
+            assert(b.rule('stratagem',4119049995,'host').cooldown==0)
+            assert(b.profile('host').rules.stratagem_4119049995.cooldown==0)
+        ''')
 
 
 if __name__ == '__main__':

@@ -22,6 +22,7 @@ class InterfaceDemoTests(unittest.TestCase):
         self.sent = []
         self.specs = {}
         self.language = 'zh'
+        self.settings_role = 'client'
         self.settings_enabled = False
         self.lua.globals().capture_plugin = self._register
         self.lua.execute('HD2AutoChatPlugins = {register=function(spec) return capture_plugin(spec) end}')
@@ -33,7 +34,7 @@ class InterfaceDemoTests(unittest.TestCase):
 
     def _api(self):
         settings = self.lua.table_from({
-            'enabled': self.settings_enabled, 'cooldown': 7, 'output': 'local', 'role': 'client',
+            'enabled': self.settings_enabled, 'cooldown': 7, 'output': 'local', 'role': self.settings_role,
             'language': self.language,
         })
 
@@ -43,8 +44,8 @@ class InterfaceDemoTests(unittest.TestCase):
 
         self.lua.globals().demo_send = send
         self.lua.globals().demo_settings = lambda: settings
-        return self.lua.execute('return {version=2, api_version=2, api_revision=3, '
-                                'capabilities={independent_send=true,settings=true}, '
+        return self.lua.execute('return {version=2, api_version=2, api_revision=4, '
+                                'capabilities={independent_send=true,settings=true,plugin_presets=true}, '
                                 'send=function(...) return demo_send(...) end, '
                                 'settings=function() return demo_settings() end}')
 
@@ -70,7 +71,7 @@ class InterfaceDemoTests(unittest.TestCase):
         self.assertEqual(str(self.spec.name_en), 'API Demo')
         self.assertIsNone(self.spec.on_event)
         zh = self._draw()
-        self.assertIn('跨模组发送接口示例（API v2 revision 3）',
+        self.assertIn('跨模组发送接口示例（API v2 revision 4）',
                       [str(args[0]) for args in zh['text']])
         self.assertEqual(self.sent, [])
 
@@ -83,7 +84,7 @@ class InterfaceDemoTests(unittest.TestCase):
         en = self._draw()
         en_text = '\n'.join(str(args[0]) for args in en['text'])
         en_buttons = '\n'.join(label for _, label in en['buttons'])
-        self.assertIn('Cross-mod send API demo (API v2 revision 3)', en_text)
+        self.assertIn('Cross-mod send API demo (API v2 revision 4)', en_text)
         self.assertIn('Host settings: off / cooldown 7s / local / client', en_text)
         self.assertIn('Mode: independent; independent send: on; cooldown: 5s; output: local', en_text)
         self.assertIn('Send mode: independent', en_buttons)
@@ -156,6 +157,51 @@ class InterfaceDemoTests(unittest.TestCase):
         self.assertEqual(len(self.sent[-1]), 3)
         self.assertIsNone(self.sent[-1][2], 'inherit path must use backwards-compatible default send')
 
+    def test_plugin_preset_hooks_roundtrip_only_durable_demo_options_by_role(self):
+        self.assertIsNotNone(self.spec.preset)
+        self.assertTrue(self.spec.preset.capture)
+        self.assertTrue(self.spec.preset.validate)
+        self.assertTrue(self.spec.preset.apply)
+        self.assertTrue(self.spec.preset.restore)
+        self.settings_enabled = True
+        self.settings_role = 'host'
+        api = self._api()
+
+        a = self.spec.preset.capture('host')
+        self.spec.on_click('mode', api)
+        self.spec.on_click('enabled', api)
+        self.spec.on_click('cooldown', api)
+        self.spec.on_click('output', api)
+        self.spec.on_click('template', api)
+        b = self.spec.preset.capture('host')
+        self.assertNotEqual(a, b)
+
+        self.assertTrue(self.spec.preset.validate(a, 'host'))
+        self.assertFalse(self.spec.preset.validate(a + 'junk', 'host')[0])
+        self.assertFalse(self.spec.preset.validate(a, 'other')[0])
+        self.assertTrue(self.spec.preset.apply(a, 'host'))
+        after_a = self._draw()
+        text_a = '\n'.join(str(args[0]) for args in after_a['text'])
+        buttons_a = '\n'.join(label for _, label in after_a['buttons'])
+        self.assertIn('模式：继承主设置；独立发送：开；冷却：0秒；输出：继承主设置', text_a)
+        self.assertIn('消息预览：AutoChat 接口示例：自定义消息 Alpha', text_a)
+        self.assertIn('独立冷却：0秒', buttons_a)
+        self.assertEqual(self.sent, [], 'preset callbacks must never send')
+
+        self.assertTrue(self.spec.preset.apply(b, 'host'))
+        after_b = self._draw()
+        text_b = '\n'.join(str(args[0]) for args in after_b['text'])
+        self.assertIn('模式：独立；独立发送：关；冷却：5秒；输出：仅自己', text_b)
+        self.assertIn('消息预览：AutoChat 接口示例：自定义消息 Beta', text_b)
+        self.assertEqual(self.sent, [], 'applying addon state must not send')
+
+        client = self.spec.preset.capture('client')
+        self.assertTrue(self.spec.preset.validate(client, 'client'))
+        self.assertTrue(self.spec.preset.apply(a, 'client'))
+        self.assertEqual(self.spec.preset.capture('client'), a)
+        self.assertEqual(self.spec.preset.capture('host'), b,
+                         'applying client state must not alter host state')
+
     def test_sample_preview_is_manual_and_icon_only_uses_host_loaded_resource(self):
         api = self._api()
         self.spec.on_click('sample', api)
@@ -192,7 +238,7 @@ class InterfaceDemoTests(unittest.TestCase):
         self.assertEqual(str(ui.language), 'en')
         self.spec.draw(ui, ctx, self._api())
         self.assertEqual(calls[0][0], 'text')
-        self.assertEqual(calls[0][1][0], 'Cross-mod send API demo (API v2 revision 3)')
+        self.assertEqual(calls[0][1][0], 'Cross-mod send API demo (API v2 revision 4)')
 
         line_rects = [args for name, args in calls if name == 'rect' and args[-1] == 953]
         self.assertEqual(len(line_rects), 1, 'horizontal line should be one rectangle')

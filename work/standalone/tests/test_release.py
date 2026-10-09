@@ -144,6 +144,66 @@ class ReleaseTests(unittest.TestCase):
             request.assert_not_called()
             self.assertIn('does not match', output.getvalue())
 
+    def test_positive_build_tag_accepts_stable_versioned_zip_in_dry_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            zip_path = Path(directory) / 'AutoChat-1.0.0.zip'
+            zip_path.write_bytes(b'zip')
+            with patch.object(release, 'token_from_git') as token, \
+                 patch.object(release, 'ensure_tag_pushed') as push, \
+                 patch.object(release, 'request') as request:
+                output = io.StringIO()
+                with redirect_stdout(output), patch('sys.argv', [
+                    'release.py', '--tag', 'v1.0.0-build.2', '--zip', str(zip_path), '--dry-run']):
+                    result = release.main()
+            self.assertEqual(result, 0)
+            self.assertIn('tag       : v1.0.0-build.2', output.getvalue())
+            self.assertIn('AutoChat 1.0.0', output.getvalue())
+            token.assert_not_called()
+            push.assert_not_called()
+            request.assert_not_called()
+
+    def test_build_suffix_requires_canonical_positive_integer(self):
+        invalid_tags = ('v1.0.0-build.0', 'v1.0.0-build.02',
+                        'v1.0.0-build.two', 'v1.0.0-build.2.1')
+        with tempfile.TemporaryDirectory() as directory:
+            zip_path = Path(directory) / 'AutoChat-1.0.0.zip'
+            zip_path.write_bytes(b'zip')
+            for tag in invalid_tags:
+                with self.subTest(tag=tag), \
+                     patch.object(release, 'token_from_git') as token, \
+                     patch.object(release, 'ensure_tag_pushed') as push, \
+                     patch.object(release, 'request') as request:
+                    output = io.StringIO()
+                    with redirect_stdout(output), redirect_stderr(output), patch('sys.argv', [
+                        'release.py', '--tag', tag, '--zip', str(zip_path),
+                        '--credential-user', 'YC426']):
+                        with self.assertRaises(SystemExit) as raised:
+                            release.main()
+                    self.assertEqual(raised.exception.code, 1)
+                    token.assert_not_called()
+                    push.assert_not_called()
+                    request.assert_not_called()
+                    self.assertIn('does not match', output.getvalue())
+
+    def test_different_core_build_tag_mismatch_stops_before_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            zip_path = Path(directory) / 'AutoChat-1.0.0.zip'
+            zip_path.write_bytes(b'zip')
+            with patch.object(release, 'token_from_git') as token, \
+                 patch.object(release, 'ensure_tag_pushed') as push, \
+                 patch.object(release, 'request') as request:
+                output = io.StringIO()
+                with redirect_stdout(output), redirect_stderr(output), patch('sys.argv', [
+                    'release.py', '--tag', 'v1.0.1-build.2', '--zip', str(zip_path),
+                    '--credential-user', 'YC426']):
+                    with self.assertRaises(SystemExit) as raised:
+                        release.main()
+            self.assertEqual(raised.exception.code, 1)
+            token.assert_not_called()
+            push.assert_not_called()
+            request.assert_not_called()
+            self.assertIn('does not match', output.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

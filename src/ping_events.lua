@@ -847,7 +847,9 @@ local function build_ping_events(env)
             local mission = MISSION_TARGETS[resource]
             if not mission and exact_supply_name(localized) then
                 if read(address, 24) ~= identity then return nil, 'retry' end
+                local known_supply=classification.supply_targets[resource]
                 return {category='supplies',target=localized,target_id=entry.target_id,
+                    target_names=known_supply and {zh=known_supply.name_zh,en=known_supply.name_en} or nil,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -862,6 +864,7 @@ local function build_ping_events(env)
                 end
                 if read(address, 24) ~= identity then return nil, 'retry' end
                 return {category='supplies',target=label,target_id=entry.target_id,
+                    target_names=supply and {zh=supply.name_zh,en=supply.name_en} or nil,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -884,6 +887,7 @@ local function build_ping_events(env)
                 local target = localized and not generic_name(localized, entry.localization_key)
                     and localized or selected_name(special)
                 return {category='building',target=target,target_id=entry.target_id,
+                    target_names={zh=special.name_zh,en=special.name_en},
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}

@@ -45,6 +45,42 @@ class ScheduledTasksTest(unittest.TestCase):
             self.assertTrue(why)
         self.assertEqual(0, len(mod.tasks))
 
+    def test_more_than_32_tasks_roundtrip_without_truncation(self):
+        lua, h, mod = self.fresh()
+        for i in range(33):
+            task = mod.add_task(f"Task {i}", "repeat", str(5 + i), f"Message {i}", 1000, "host")
+            self.assertIsNotNone(task, f"task {i} was rejected")
+        serialized = mod.debug_serialize_tasks()
+        self.assertTrue(mod.debug_restore_tasks(serialized))
+        self.assertEqual(33, len(mod.tasks))
+        for i in range(1, 34):
+            self.assertEqual((f"Task {i-1}", f"Message {i-1}", 5+i-1),
+                             (mod.tasks[i].name, mod.tasks[i].message, mod.tasks[i].seconds))
+        path = "C:/fake/CowboyBingus/Helldivers2/AutoChat/tasks.txt"
+        h.virtual_files[path] = serialized
+        restarted_lua, restarted_h = fresh_image()
+        restarted_h.virtual_files[path] = serialized
+        restarted = restarted_h.load(SOURCE)
+        self.assertEqual(33, len(restarted.tasks), "file startup must restore every task")
+        self.assertEqual("Message 32", restarted.tasks[33].message)
+
+    def test_task_startup_reads_complete_file_above_old_65k_limit(self):
+        lua, h = fresh_image()
+        rows = ["AutoChatTasks1"]
+        message = "x" * 200
+        for i in range(1, 301):
+            rows.append(f"{i}\trepeat\t5\t1\t0\t1005\t-\tTask {i}\t{message}\thost")
+        serialized = ("\n".join(rows) + "\n").encode("ascii").decode("ascii")
+        self.assertGreater(len(serialized), 65536)
+        path = "C:/fake/CowboyBingus/Helldivers2/AutoChat/tasks.txt"
+        h.virtual_files[path] = serialized
+        mod = h.load(SOURCE)
+        self.assertEqual(300, len(mod.tasks))
+        self.assertEqual("Task 300", mod.tasks[300].name)
+        self.assertEqual(message, mod.tasks[300].message)
+        exported = mod.debug_automation().export_profile("host", mod.profile_tasks("host"))
+        self.assertIn("task_count=300", exported)
+
     def test_scheduled_message_formats_local_player_variables_at_send_time(self):
         lua,h,mod = self.fresh()
         lua.globals().test_identity = mod.debug_identity()
@@ -252,6 +288,21 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertEqual(3, h.call_count())
         self.assertEqual(1230, repeat["due"])
 
+    def test_scheduled_full_player_name_uses_profile_color_switch(self):
+        lua, h, mod = self.fresh()
+        lua.execute("local identity=...; identity.lookup=function(peer) return {peer_id=peer,name='Alice',short='A1',color='FF81ACFE',color_index=0} end",
+                    mod.debug_identity())
+        automation = mod.debug_automation()
+        self.assertTrue(automation.set("ping_sender_color", True, "host")[0])
+        colored = mod.add_task("Colored", "once", "5", "Hi {玩家名}", 1000, "host")
+        mod.debug_run_tasks(1005)
+        self.assertEqual("Hi <c=FF81ACFE>Alice<c=FFFFFFFF>\0", h.last_call()["arg3_text"])
+        self.assertTrue(automation.set("ping_sender_color", False, "host")[0])
+        plain = mod.add_task("Plain", "once", "5", "Hi {名字}", 1010, "host")
+        mod.debug_run_tasks(1015)
+        self.assertEqual("Hi Alice\0", h.last_call()["arg3_text"])
+        self.assertTrue(colored["done"] and plain["done"])
+
     def test_daily_runs_once_per_local_calendar_day(self):
         lua, h, mod = self.fresh()
         lua.execute("""
@@ -405,7 +456,8 @@ class ScheduledTasksTest(unittest.TestCase):
     def test_corrupt_saved_tasks_do_not_replace_good_tasks(self):
         _, _, mod = self.fresh()
         mod.add_task("Keep", "repeat", "30", "message", 1000)
-        self.assertFalse(mod.debug_restore_tasks("AutoChatTasks1\nbroken\n"))
+        result=mod.debug_restore_tasks("AutoChatTasks1\nbroken\n")
+        self.assertFalse(result[0] if isinstance(result,tuple) else result)
         self.assertEqual("Keep", mod.tasks[1]["name"])
 
     def test_live_update_uses_elapsed_wall_time_not_frame_count(self):

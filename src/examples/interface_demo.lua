@@ -18,7 +18,7 @@ local messages = {
 }
 local copy = {
     zh = {
-        title = '跨模组发送接口示例（API v2 revision 3）',
+        title = '跨模组发送接口示例（API v2 revision 4）',
         settings_unavailable = '主设置：当前接口不提供设置快照',
         settings_error = '主设置：暂不可用', settings_unknown = '未知',
         on = '开', off = '关', local_output = '仅自己', squad = '小队',
@@ -41,7 +41,7 @@ local copy = {
         sample_message = 'AutoChat 接口示例：本地示例事件 #%d（%s）',
     },
     en = {
-        title = 'Cross-mod send API demo (API v2 revision 3)',
+        title = 'Cross-mod send API demo (API v2 revision 4)',
         settings_unavailable = 'Host settings: settings snapshots unavailable in this API',
         settings_error = 'Host settings: temporarily unavailable', settings_unknown = 'unknown',
         on = 'on', off = 'off', local_output = 'local', squad = 'squad',
@@ -79,14 +79,80 @@ local state = {
     independent_enabled = true,
     cooldown = 0,
     output = 'inherit',
+    active_role = 'host',
 }
+
+local function default_preset_state()
+    return {policy='inherit',independent_enabled=true,cooldown=0,output='inherit',message_index=1}
+end
+local profile_states = {host=default_preset_state(),client=default_preset_state()}
+
+local function save_active_preset_state()
+    local role=state.active_role
+    if role~='host' and role~='client' then return end
+    profile_states[role]={policy=state.policy,independent_enabled=state.independent_enabled,
+        cooldown=state.cooldown,output=state.output,message_index=state.message_index}
+end
+
+local function load_preset_state(role)
+    local saved=profile_states[role] or default_preset_state()
+    state.active_role=role
+    state.policy=saved.policy
+    state.independent_enabled=saved.independent_enabled
+    state.cooldown=saved.cooldown
+    state.output=saved.output
+    state.message_index=saved.message_index
+    state.preview=messages[state.message_index][state.language]
+    state.preview_kind='stock'
+    state.result_kind='unsent'
+    state.result_reason=nil
+end
 
 local function changed()
     state.revision = state.revision + 1
+    save_active_preset_state()
+end
+
+local function activate_role(role)
+    if (role~='host' and role~='client') or role==state.active_role then return end
+    save_active_preset_state()
+    load_preset_state(role)
+    changed()
 end
 
 local function language(value)
     return value == 'en' and 'en' or 'zh'
+end
+
+local PRESET_MAGIC='AutoChatInterfaceDemoPreset1'
+local function parse_preset_state(data,role)
+    if role~='host' and role~='client' then return nil,'invalid preset role' end
+    if type(data)~='string' or #data>256 or data:sub(-1)~='\n' then
+        return nil,'invalid demo preset data'
+    end
+    local lines={}
+    for line in data:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
+    if #lines~=6 or lines[1]~=PRESET_MAGIC then return nil,'invalid demo preset format' end
+    local policy=lines[2]:match('^policy=(.*)$')
+    local enabled=lines[3]:match('^enabled=(.*)$')
+    local cooldown=lines[4]:match('^cooldown=(.*)$')
+    local output=lines[5]:match('^output=(.*)$')
+    local index=lines[6]:match('^message_index=(.*)$')
+    if (policy~='inherit' and policy~='independent')
+        or (enabled~='true' and enabled~='false')
+        or (cooldown~='0' and cooldown~='5')
+        or (output~='inherit' and output~='local')
+        or (index~='1' and index~='2') then return nil,'invalid demo preset values' end
+    return {policy=policy,independent_enabled=enabled=='true',cooldown=tonumber(cooldown),
+        output=output,message_index=tonumber(index)}
+end
+
+local function encode_preset_state(values)
+    return PRESET_MAGIC..'\npolicy='..values.policy
+        ..'\nenabled='..tostring(values.independent_enabled)
+        ..'\ncooldown='..tostring(values.cooldown)
+        ..'\noutput='..values.output
+        ..'\nmessage_index='..tostring(values.message_index)..'\n'
 end
 
 local function read_settings(api)
@@ -116,7 +182,10 @@ end
 
 local function current_language(api)
     local settings = read_settings(api)
-    if settings and settings.language then sync_language(settings.language) end
+    if settings then
+        activate_role(settings.role)
+        if settings.language then sync_language(settings.language) end
+    end
     return state.language
 end
 
@@ -190,10 +259,35 @@ local function settings_summary(locale)
 end
 
 local spec = {id = 'auto_chat_demo', name = '接口示例', name_en = 'API Demo'}
+spec.preset = {
+    capture = function(role)
+        if role~='host' and role~='client' then return nil,'invalid preset role' end
+        if role==state.active_role then save_active_preset_state() end
+        return encode_preset_state(profile_states[role] or default_preset_state())
+    end,
+    validate = function(data,role)
+        local parsed,why=parse_preset_state(data,role)
+        return parsed~=nil,why
+    end,
+    apply = function(data,role)
+        local parsed,why=parse_preset_state(data,role)
+        if not parsed then return false,why end
+        profile_states[role]=parsed
+        if role==state.active_role then
+            load_preset_state(role)
+            changed()
+        end
+        return true
+    end,
+    restore = function(data,role)
+        return spec.preset.apply(data,role)
+    end,
+}
 spec.draw = function(u, ctx, api)
     ctx = type(ctx) == 'table' and ctx or {}
     local locale = language(ctx.language or (type(u) == 'table' and u.language))
     local settings = read_settings(api)
+    if settings then activate_role(settings.role) end
     if settings and not ctx.language and not (type(u) == 'table' and u.language) then
         locale = language(settings.language)
     end

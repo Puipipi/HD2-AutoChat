@@ -34,7 +34,7 @@ rawset(_G, KEY, M)
 -- its reader is not in scope there and the name silently becomes a global read.
 local game, game_base, send_fn = nil, nil, nil
 local automation, preset_library, peer_identity, REGISTRY
-local apply_preset_snapshot
+local apply_preset_snapshot, apply_host_preset_snapshot
 local chat_buffer = nil
 local verified, verify_reason = false, 'not run'
 local sr, Gui, Vector3, Vector2, Color = nil, nil, nil, nil, nil
@@ -896,11 +896,9 @@ M.build_language = function(env)
         ['预设长度无效']='Preset length is invalid',
         ['预设名称重复或无效']='Preset name is duplicated or invalid',
         ['库内预设数据无效']='Preset data in the library is invalid',
-        ['单角色预设数量超过32']='This role has more than 32 presets',
         ['预设库含有多余数据或无效序号']='Preset library contains trailing data or an invalid serial',
         ['旧版预设无法安全复制到客机预设池']='Legacy presets cannot be safely copied to the client preset pool',
         ['预设角色无效']='Preset role is invalid',
-        ['每个角色最多保存32个预设']='Each role can have at most 32 presets',
         ['预设库超过大小限制']='Preset library exceeds the size limit',
         ['保存预设库失败']='Failed to save preset library',
         ['读取预设库失败']='Failed to read preset library',
@@ -926,7 +924,6 @@ M.build_language = function(env)
         ['预设转义无效']='Preset escaping is invalid',
         ['预设包含无效 UTF-8']='Preset contains invalid UTF-8',
         ['定时任务数量无效']='Scheduled task count is invalid',
-        ['预设最多包含32个定时任务']='A preset can contain at most 32 scheduled tasks',
         ['定时任务字段无效']='Scheduled task field is invalid',
         ['定时任务编号无效']='Scheduled task index is invalid',
         ['定时任务开关无效']='Scheduled task switch is invalid',
@@ -947,10 +944,8 @@ M.build_language = function(env)
         ['定时任务时间无效']='Scheduled task time is invalid',
         ['定时任务类型无效']='Scheduled task type is invalid',
         ['定时任务数量不匹配']='Scheduled task count does not match the data',
-        ['规则数量超过 512']='Preset contains more than 512 rules',
         ['未知预设']='Unknown preset',
         ['任务编号已用尽']='Task ID range is exhausted',
-        ['应用后任务总数超过32']='Applying this preset would exceed 32 tasks',
         ['保存定时任务失败；原任务已恢复']='Failed to save scheduled tasks; previous tasks were restored',
         ['快捷定时迁移失败；预设未应用']='Quick timer migration failed; preset was not applied',
         ['请输入事件名称']='Enter an event name',
@@ -998,9 +993,10 @@ M.build_language = function(env)
         if state.locale=='zh' then return tostring(chinese or english or '') end
         return tostring(english or chinese or '')
     end
-    function M.phrase(key)
+    function M.phrase(key, locale)
         local row=phrases[key]
-        return row and row[state.locale] or tostring(key or '')
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        return row and row[selected] or tostring(key or '')
     end
     function M.status(value)
         if type(value)~='string' or state.locale=='zh' then return value end
@@ -1017,9 +1013,11 @@ M.build_language = function(env)
         end
         return value
     end
-    function M.stock_template(value)
+    function M.stock_template(value, locale)
         if type(value)~='string' then return value end
-        if state.locale=='zh' then
+        if locale=='zh' or locale=='en' then return value end
+        local selected=state.locale
+        if selected=='zh' then
             for zh,en in pairs(stock) do if value==en then return zh end end
             return value
         end
@@ -1267,18 +1265,18 @@ end
 -- Session API provenance: P2P-Ping 0.1.34 scope() / update_peer_labels().
 local function build_chat_automation(env)
     local options = {enabled = true, allow_solo = true,
-        welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
-        welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
+        welcome = false, welcome_message = 'Welcome to the squad!', cooldown = 5,
+        welcome_delay = 2, message_language = 'en', ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_supplies = false,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
-        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
-        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad',
+        ping_message = 'Marked {目标} ({类别})', summon_message = '{玩家名} called in {目标}',
+        task_stratagem_message = '{玩家名} started {目标}', output = 'squad',
         quick_timer_enabled = false, quick_timer_interval = 30,
         quick_timer_message = 'HELLO FROM AUTOCHAT'}
     local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
-        'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_supplies', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
+        'cooldown', 'welcome_delay', 'message_language', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_supplies', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
         'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output',
         'quick_timer_enabled', 'quick_timer_interval', 'quick_timer_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true, quick_timer_enabled=true,
@@ -1303,6 +1301,8 @@ local function build_chat_automation(env)
             if type(value) ~= 'boolean' then return false, '开关只能设为开启或关闭' end
         elseif key == 'output' then
             if value ~= 'squad' and value ~= 'local' then return false, '请选择小队公屏或仅自己可见' end
+        elseif key == 'message_language' then
+            if value ~= 'auto' and value ~= 'zh' and value ~= 'en' then return false, '消息语言无效' end
         elseif key == 'cooldown' or key == 'welcome_delay' or key == 'quick_timer_interval' then
             local minimum = key == 'quick_timer_interval' and 5 or 0
             local limit = (key == 'cooldown' or key == 'quick_timer_interval') and 3600 or 60
@@ -1361,6 +1361,8 @@ local function build_chat_automation(env)
         end
         return result
     end
+    local factory_profiles = {host=copy(options),client=copy(options)}
+    factory_profiles.client.welcome, factory_profiles.client.output = false, 'local'
     local enemy_rules = {small_enemy=true,medium_enemy=true,large_enemy=true,giant_enemy=true,flying_enemy=true}
     local rule_fields = {enabled=true,mark_message=true,call_message=true,cooldown=true}
     local function rule_key(kind,id)
@@ -1370,6 +1372,8 @@ local function build_chat_automation(env)
             return 'stratagem_'..string.format('%.0f',id)
         end
     end
+    factory_profiles.host.rules={}
+    factory_profiles.client.rules={}
     local function rule_value(field,value)
         if not rule_fields[field] then return false end
         if value==nil or value=='' then return true,nil end
@@ -1444,7 +1448,7 @@ local function build_chat_automation(env)
     state.legacy_quick_timer_missing = (saved_version or 1)<5
     for _, role in ipairs({'host','client'}) do
         for _, key in ipairs({'quick_timer_enabled','quick_timer_interval','quick_timer_message'}) do
-            if role_values[role][key] == nil then state.legacy_quick_timer_missing = true end
+                if role_values[role][key] == nil then state.legacy_quick_timer_missing = true end
         end
     end
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
@@ -1454,15 +1458,10 @@ local function build_chat_automation(env)
     profiles.client.welcome, profiles.client.output = false, 'local'
     for _, role in ipairs({'host','client'}) do
         for key,value in pairs(role_values[role]) do profiles[role][key] = value end
-        profiles[role].rules=saved_rules[role]
-        if (saved_version or 1)<4 then
-            -- First upgrade seeds the requested high-TK-risk alerts only. Once
-            -- v4 is saved, clearing these fields really restores global timing.
-            for _,id in ipairs({4119049995,2902516083}) do
-                local key=rule_key('stratagem',id)
-                profiles[role].rules[key]=profiles[role].rules[key] or {cooldown=0}
-            end
+        if role_values[role].message_language==nil and not saved_keys.message_language and saved~=nil then
+            profiles[role].message_language='auto'
         end
+        profiles[role].rules=saved_rules[role]
     end
     for _,key in ipairs(keys) do options[key] = profiles.host[key] end
     state.active_role = 'host'
@@ -1487,10 +1486,8 @@ local function build_chat_automation(env)
     end
 
     -- Portable named-profile format is deliberately data-only and parsed strictly.
-    function api.export_profile(role, tasks)
-        local source=profiles[role]
-        if not source then return nil,'未知预设' end
-        local lines={'# AutoChat profile v4'}
+    local function encode_profile(source,tasks,plugin_blobs)
+        local lines={'# AutoChat profile v5'}
         for _,key in ipairs(keys) do
             if not key:match('^quick_timer_') then lines[#lines+1]=key..'='..escape(tostring(source[key])) end
         end
@@ -1502,7 +1499,6 @@ local function build_chat_automation(env)
             end
         end
         tasks=type(tasks)=='table' and tasks or {}
-        if #tasks>32 then return nil,'预设最多包含32个定时任务' end
         lines[#lines+1]='task_count='..tostring(#tasks)
         for i,task in ipairs(tasks) do
             if type(task)~='table' then return nil,'定时任务无效' end
@@ -1514,36 +1510,74 @@ local function build_chat_automation(env)
                 lines[#lines+1]='task_'..i..'.'..field..'='..escape(value)
             end
         end
+        if plugin_blobs~=nil and type(plugin_blobs)~='table' then return nil,'插件预设数据无效' end
+        plugin_blobs=plugin_blobs or {}
+        local plugin_ids={}
+        for id,blob in pairs(plugin_blobs) do
+            if type(id)~='string' or #id<1 or #id>64 or not id:match('^[%w_.%-]+$')
+                or type(blob)~='string' then return nil,'插件预设数据无效' end
+            plugin_ids[#plugin_ids+1]=id
+        end
+        table.sort(plugin_ids)
+        lines[#lines+1]='plugin_count='..tostring(#plugin_ids)
+        for _,id in ipairs(plugin_ids) do lines[#lines+1]='plugin.'..id..'='..escape(plugin_blobs[id]) end
         local payload=table.concat(lines,'\n')..'\n'
         if #payload>1048576 then return nil,'预设超过 1 MiB' end
         return payload
+    end
+    function api.export_profile(role, tasks, plugin_blobs)
+        local source=profiles[role]
+        if not source then return nil,'未知预设' end
+        return encode_profile(source,tasks,plugin_blobs)
+    end
+    function api.export_default_profile(role, language, templates)
+        local source=factory_profiles[role]
+        if not source then return nil,'未知预设' end
+        if language~='zh' and language~='en' then return nil,'消息语言无效' end
+        source=copy(source)
+        source.message_language=language
+        for key,value in pairs(type(templates)=='table' and templates or {}) do
+            if key=='welcome_message' or key=='ping_message' or key=='summon_message'
+                or key=='task_stratagem_message' or key=='quick_timer_message' then
+                source[key]=value
+            end
+        end
+        return encode_profile(source,{}, {})
     end
     function api.validate_profile(payload)
         if type(payload)~='string' or #payload>1048576 then return false,'预设格式无效或超过 1 MiB' end
         if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
         local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
         local version=tonumber(lines[1]:match('^# AutoChat profile v(%d+)$'))
-        if version~=1 and version~=2 and version~=3 and version~=4 then return false,'预设版本无效' end
-        local values,rules,seen,tasks_by_id={}, {}, {}, {}
-        local task_count
+        if version~=1 and version~=2 and version~=3 and version~=4 and version~=5 then return false,'预设版本无效' end
+        local values,rules,seen,tasks_by_id,plugin_blobs={}, {}, {}, {}, {}
+        local task_count,plugin_count
         local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
         for i=2,#lines do
-            local key,raw=lines[i]:match('^([%w_%.]+)=(.*)$')
+            local key,raw=lines[i]:match('^([%w_%.%-]+)=(.*)$')
             if not key or key=='' or seen[key] then return false,'预设包含空白、重复或无效行' end
             seen[key]=true
             local value=unescape(raw)
             if value==nil or escape(value)~=raw then return false,'预设转义无效' end
-            if not valid_utf8(value) then return false,'预设包含无效 UTF-8' end
+            local plugin_id=key:match('^plugin%.([%w_.%-]+)$')
+            if not valid_utf8(value) and not plugin_id then return false,'预设包含无效 UTF-8' end
             local task_index,task_field=key:match('^task_(%d+)%.([%a_]+)$')
-            if key=='task_count' then
+            if key=='plugin_count' then
+                if version<5 or not value:match('^%d+$') then return false,'插件数据数量无效' end
+                plugin_count=tonumber(value)
+                if plugin_count>#lines then return false,'插件数据数量与文件长度不符' end
+            elseif plugin_id then
+                if version<5 or #plugin_id>64 then return false,'插件数据编号无效' end
+                plugin_blobs[plugin_id]=value
+            elseif key=='task_count' then
                 if version<2 or not value:match('^%d+$') then return false,'定时任务数量无效' end
                 task_count=tonumber(value)
-                if task_count>32 then return false,'预设最多包含32个定时任务' end
+                if task_count>#lines then return false,'定时任务数量与文件长度不符' end
             elseif task_index then
                 local fields={name=true,mode=true,time=true,message=true,enabled=true}
                 if version<2 or not fields[task_field] then return false,'定时任务字段无效' end
                 local index=tonumber(task_index)
-                if not index or index<1 or index>32 or index%1~=0 then return false,'定时任务编号无效' end
+                if not index or index<1 or index%1~=0 then return false,'定时任务编号无效' end
                 if task_field=='enabled' then
                     if value=='true' then value=true elseif value=='false' then value=false else return false,'定时任务开关无效' end
                 end
@@ -1589,6 +1623,7 @@ local function build_chat_automation(env)
                 elseif (version<3 or version>=4) and key=='quick_timer_enabled' then values[key]=false
                 elseif (version<3 or version>=4) and key=='quick_timer_interval' then values[key]=30
                 elseif (version<3 or version>=4) and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
+                elseif key=='message_language' then values[key]='auto'
                 else return false,'缺少设置：'..key end
             end
         end
@@ -1618,9 +1653,13 @@ local function build_chat_automation(env)
             end
             for i in pairs(tasks_by_id) do if i>task_count then return false,'定时任务数量不匹配' end end
         end
-        local count=0;for _ in pairs(rules) do count=count+1 end
-        if count>512 then return false,'规则数量超过 512' end
-        return true,{values=values,rules=rules,tasks=task_list,version=version}
+        if version>=5 then
+            if plugin_count==nil then return false,'缺少插件数据数量' end
+            local actual=0;for _ in pairs(plugin_blobs) do actual=actual+1 end
+            if actual~=plugin_count then return false,'插件数据数量不匹配' end
+        end
+        return true,{values=values,rules=rules,tasks=task_list,
+            plugins=version>=5 and plugin_blobs or nil,version=version}
     end
     function api.import_profile(payload,role)
         if role~='host' and role~='client' then return false,'未知预设' end
@@ -1732,18 +1771,28 @@ local function build_chat_automation(env)
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
         supplies='普通物资',
         small_enemy='小型敌人', flying_enemy='飞行敌人', medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
-    function api.category_label(category)
-        local ok,value=pcall(env.category_label or function() return nil end,category)
+    local categories_en = {building='OBJECTIVE BUILDING',stratagem='STRATAGEM',map='MAP MARKER',
+        supplies='SUPPLIES',small_enemy='SMALL ENEMY',flying_enemy='FLYING ENEMY',
+        medium_enemy='MEDIUM ENEMY',large_enemy='LARGE ENEMY',giant_enemy='GIANT ENEMY'}
+    function api.category_label(category,language)
+        local ok,value=pcall(env.category_label or function() return nil end,category,language)
         if ok and type(value)=='string' and value~='' then return value end
-        return categories[category] or '未知'
+        return language=='en' and (categories_en[category] or 'UNKNOWN') or categories[category] or '未知'
     end
-    function api.phrase(key,fallback)
-        local ok,value=pcall(env.phrase or function() return nil end,key)
+    function api.phrase(key,fallback,language)
+        local ok,value=pcall(env.phrase or function() return nil end,key,language)
         if ok and type(value)=='string' and value~='' and value~=key then return value end
+        if language=='en' then
+            local english={['action.mark']='marked',['action.summon']='called in',['action.start']='started',
+                ['objective.primary']='PRIMARY OBJECTIVE',['objective.prerequisite']='PREREQUISITE',
+                ['objective.optional']='OPTIONAL OBJECTIVE',['objective.tactical']='TACTICAL OBJECTIVE',
+                ['objective.unknown']='OBJECTIVE'}
+            return english[key] or fallback
+        end
         return fallback
     end
-    function api.stock_template(value)
-        local ok,result=pcall(env.stock_template or function() return value end,value)
+    function api.stock_template(value,language)
+        local ok,result=pcall(env.stock_template or function() return value end,value,language)
         return ok and type(result)=='string' and result or value
     end
     local function clipped(value, limit)
@@ -1754,6 +1803,42 @@ local function build_chat_automation(env)
     end
     local function plain(value, limit)
         return clipped(tostring(value or ''):gsub('[%c<>]', ''), limit)
+    end
+    local function clip_color_markup(value,limit)
+        local reset='<c=FFFFFFFF>'
+        local out,used,at,active={},0,1,false
+        while at<=#value do
+            local start_pos,end_pos,hex=value:find('<c=([%x]+)>',at)
+            if not start_pos then
+                local tail=value:sub(at)
+                local budget=math.max(0,limit-used-(active and #reset or 0))
+                if #tail>budget then tail=clipped(tail,budget) end
+                out[#out+1]=tail
+                used=used+#tail
+                if active then out[#out+1]=reset;active=false end
+                break
+            end
+            local prefix=value:sub(at,start_pos-1)
+            local prefix_budget=math.max(0,limit-used-(active and #reset or 0))
+            if #prefix>prefix_budget then
+                prefix=clipped(prefix,prefix_budget)
+                out[#out+1]=prefix;used=used+#prefix
+                if active then out[#out+1]=reset end
+                return table.concat(out)
+            end
+            out[#out+1]=prefix;used=used+#prefix
+            local token=value:sub(start_pos,end_pos)
+            local closing=hex:upper()=='FFFFFFFF'
+            if used+#token>limit or not closing and used+#token+#reset>limit then
+                if active and used+#reset<=limit then out[#out+1]=reset end
+                return table.concat(out)
+            end
+            out[#out+1]=token;used=used+#token
+            active=not closing
+            at=end_pos+1
+        end
+        if active and used+#reset<=limit then out[#out+1]=reset end
+        return table.concat(out)
     end
     local session_peer_hex
     local function identity_for(peer)
@@ -1799,12 +1884,13 @@ local function build_chat_automation(env)
         end
         return false
     end
-    local function position_text(event)
+    local function position_text(event,language)
         local p = event.position
-        if type(p) ~= 'table' then return '未知位置' end
+        local unknown=language=='en' and 'Unknown position' or '未知位置'
+        if type(p) ~= 'table' then return unknown end
         for _, key in ipairs({'x','y','z'}) do
             local n=p[key]
-            if type(n) ~= 'number' or n ~= n or math.abs(n) > 1000000 then return '未知位置' end
+            if type(n) ~= 'number' or n ~= n or math.abs(n) > 1000000 then return unknown end
         end
         return string.format('(%.0f, %.0f, %.0f)', p.x, p.y, p.z)
     end
@@ -1815,14 +1901,21 @@ local function build_chat_automation(env)
         return session_peer_hex(peer or snapshot.mine)
     end
 
-    function api.format(template, peer, extra, anonymous)
+    function api.format(template, peer, extra, anonymous, color_player_names, language)
         if type(template) ~= 'string' then return '' end
         if peer == nil then local s=api.snapshot();peer=s and s.mine end
         local identity = identity_for(peer)
-        local name = anonymous and '小队' or identity and plain(identity.name,96) or '队友'
-        local short = anonymous and '小队' or identity and plain(identity.short,16) or '队友'
-        if name=='' then name='队友' end
-        if short=='' then short='队友' end
+        local group,teammate=language=='en' and 'Squad' or '小队',language=='en' and 'Teammate' or '队友'
+        local name = anonymous and group or identity and plain(identity.name,96) or teammate
+        local short = anonymous and group or identity and plain(identity.short,16) or teammate
+        if name=='' then name=teammate end
+        if short=='' then short=teammate end
+        if color_player_names and not anonymous and identity and type(identity.color)=='string'
+            and (#identity.color==6 or #identity.color==8) and identity.color:match('^%x+$') then
+            local color=identity.color:upper()
+            if #color==6 then color='FF'..color end
+            name='<c='..color..'>'..name..'<c=FFFFFFFF>'
+        end
         local slot = not anonymous and identity and identity.color_index
         local number = type(slot)=='number' and slot%1==0 and slot>=0 and slot<=3 and tostring(slot+1) or '?'
         local values = {['{玩家名}']=name,['{名字}']=name,['{触发者}']=name,
@@ -1835,7 +1928,8 @@ local function build_chat_automation(env)
             end
         end
         -- Function replacement keeps '%' and nested braces in player names literal.
-        return clipped(template:gsub('{[^{}]+}',function(key)return values[key] or key end),512)
+        local formatted=template:gsub('{[^{}]+}',function(key)return values[key] or key end)
+        return color_player_names and clip_color_markup(formatted,512) or clipped(formatted,512)
     end
     local function bucket(peer, snapshot)
         local key = peer or snapshot and snapshot.mine
@@ -1943,6 +2037,36 @@ local function build_chat_automation(env)
         end
         return save_rules(candidate,role)
     end
+    function api.set_rule_field_batch(kind,ids,field,value,role)
+        api.sync();role=role or state.active_role
+        if not profiles[role] or type(ids)~='table' or #ids==0
+            or (field~='cooldown' and field~='mark_message' and field~='call_message') then
+            return false,'无效批量规则设置'
+        end
+        local removing=value==nil or value==''
+        local valid,converted=rule_value(field,value)
+        if not valid then return false,'无效规则字段值' end
+        local keys_by_id,unique={},{}
+        for _,id in ipairs(ids) do
+            local key=rule_key(kind,id)
+            if not key then return false,'无效战备 ID' end
+            if not unique[key] then unique[key]=true;keys_by_id[#keys_by_id+1]=key end
+        end
+        if #keys_by_id==0 then return false,'没有可更新的规则' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        for _,key in ipairs(keys_by_id) do
+            local rule=candidate[role].rules[key]
+            if removing then
+                if rule then
+                    rule[field]=nil
+                    if not next(rule) then candidate[role].rules[key]=nil end
+                end
+            else
+                rule=rule or {};candidate[role].rules[key]=rule;rule[field]=converted
+            end
+        end
+        return save_rules(candidate,role)
+    end
     function api.reset_rule(kind,id,role)
         api.sync();role=role or state.active_role
         local key=rule_key(kind,id)
@@ -2011,7 +2135,8 @@ local function build_chat_automation(env)
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
         local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
         if not allowed then state.status = reason; return false, reason end
-        local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message),candidate), state.active_role)
+        local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message, options.message_language),candidate,nil,nil,
+            options.ping_sender_color==true,options.message_language), state.active_role)
         if sent == true then
             state.pending[candidate] = nil; api.record(now,candidate)
             state.status = '已发送新人欢迎'; return true, state.status
@@ -2050,27 +2175,34 @@ local function build_chat_automation(env)
             end
             if normal_count>=16 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
         end
-        local label = api.category_label(event.category)
+        local message_language=options.message_language
+        local label = api.category_label(event.category,message_language)
         local raw_target=type(event.display_name)=='string' and event.display_name or event.target
+        if type(event.target_names)=='table' then
+            local selected=event.target_names[message_language]
+            if type(selected)=='string' and selected~='' then raw_target=selected end
+        end
         local target = type(raw_target) == 'string' and plain(raw_target,200) or label
         local identity = identity_for(event.creator_id)
-        local short = identity and plain(identity.short, 16) or '队友'
-        if short == '' then short = '队友' end
+        local fallback_teammate=message_language=='en' and 'Teammate' or '队友'
+        local short = identity and plain(identity.short, 16) or fallback_teammate
+        if short == '' then short = fallback_teammate end
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
         local objective_kind=tostring(event.objective_kind or 'unknown')
-        local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label)
+        local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label,message_language)
         local summoned = event.action == 'summon'
         local executing = event.action == 'use'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and api.phrase('action.summon','召唤') or executing and api.phrase('action.start','开始') or api.phrase('action.mark','标记'),
+            ['{动作}']=summoned and api.phrase('action.summon','召唤',message_language) or executing and api.phrase('action.start','开始',message_language) or api.phrase('action.mark','标记',message_language),
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
             ['{任务类型}']=objective_type or label,
-            ['{位置}']=position_text(event)}
+            ['{位置}']=position_text(event,message_language)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
         template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
-        template=api.stock_template(template)
-        local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
+        template=api.stock_template(template,message_language)
+        local text = api.format(template,event.creator_id,replacements,event.anonymous==true,
+            options.ping_sender_color==true,message_language)
         local prefix = ''
         if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
             prefix = '[' .. short .. ']'
@@ -2080,7 +2212,8 @@ local function build_chat_automation(env)
             end
             prefix = prefix .. ' '
         end
-        text = prefix .. clipped(text, math.max(0, 512 - #prefix))
+        text = prefix .. (options.ping_sender_color and clip_color_markup(text, math.max(0, 512 - #prefix))
+            or clipped(text, math.max(0, 512 - #prefix)))
         state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, rule_id=rule_id, cooldown=rule.cooldown, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
@@ -2167,14 +2300,14 @@ end
 -- BEGIN PRESET LIBRARY
 -- Data-only preset storage. All game/config semantics are supplied by env.
 local function build_preset_library(env)
-    local MAX_PRESETS, MAX_NAME, MAX_PAYLOAD, MAX_SERIAL = 32, 96, 1024 * 1024, 99999999
-    local MAX_LIBRARY_PRESETS = MAX_PRESETS * 2
+    local MAX_NAME, MAX_PAYLOAD, MAX_SERIAL = 96, 1024 * 1024, 9007199254740991
     local MAX_LIBRARY = 16 * 1024 * 1024
     local LIB_MAGIC_V1 = "# AutoChat preset library v1\n"
     local LIB_MAGIC = "# AutoChat preset library v2\n"
     local FILE_MAGIC = "# AutoChat preset v1\n"
     local state = {error = nil, revision = 0}
     local entries, serial = {}, 0
+    local builtins = {host={},client={}}
 
     local function utf8_valid(s)
         if type(s) ~= "string" then return false end
@@ -2211,6 +2344,16 @@ local function build_preset_library(env)
         if valid ~= true then return false, why or "预设数据无效" end
         return true
     end
+    for _, role in ipairs({'host','client'}) do
+        local source=type(env.builtins)=='table' and env.builtins[role] or nil
+        for _,item in ipairs(type(source)=='table' and source or {}) do
+            if type(item)=='table' and type(item.id)=='string' and item.id:match('^builtin%-[%w%-]+$')
+                and type(item.name)=='string' and type(item.payload)=='string' then
+                local valid=validate_payload(item.payload)
+                if valid then builtins[role][#builtins[role]+1]={id=item.id,role=role,name=item.name,payload=item.payload,builtin=true} end
+            end
+        end
+    end
     local function fail(reason) return false, reason end
     local function call(fn, ...)
         if fn == nil then return false, "预设操作不可用" end
@@ -2226,7 +2369,15 @@ local function build_preset_library(env)
         for i = 1, #entries do
             if i ~= except and entries[i].role == role and entries[i].name == name then return true end
         end
+        for _,item in ipairs(builtins[role] or {}) do if item.name==name then return true end end
         return false
+    end
+    local function find_builtin(id,role)
+        for _,candidate in ipairs(role and {role} or {'host','client'}) do
+            for _,item in ipairs(builtins[candidate] or {}) do
+                if item.id==id then return item end
+            end
+        end
     end
     local function encode_library(items, next_serial)
         local out = {LIB_MAGIC, tostring(next_serial), "\n", tostring(#items), "\n"}
@@ -2239,7 +2390,7 @@ local function build_preset_library(env)
     end
     local function parse_uint_line(data, pos, max)
         local e = data:find("\n", pos, true)
-        if not e or e == pos or e - pos > 10 then return nil end
+        if not e or e == pos or e - pos > 16 then return nil end
         local text = data:sub(pos, e - 1)
         if not text:match("^%d+$") or (#text > 1 and text:sub(1, 1) == "0") then return nil end
         local value = tonumber(text)
@@ -2254,14 +2405,14 @@ local function build_preset_library(env)
         local pos = #magic + 1
         local saved_serial; saved_serial, pos = parse_uint_line(data, pos, MAX_SERIAL)
         if not saved_serial then return nil, nil, "预设库序号无效" end
-        local count; count, pos = parse_uint_line(data, pos, legacy and MAX_PRESETS or MAX_LIBRARY_PRESETS)
+        local count; count, pos = parse_uint_line(data, pos, MAX_LIBRARY)
         if count == nil then return nil, nil, "预设库数量无效" end
-        local result, ids, names, highest, role_counts = {}, {}, {}, 0, {host=0,client=0}
+        local result, ids, names, highest = {}, {}, {}, 0
         for _ = 1, count do
             local id_end = data:find("\n", pos, true)
-            if not id_end or id_end - pos ~= 9 then return nil, nil, "预设编号无效" end
+            if not id_end or id_end - pos < 9 or id_end - pos > 17 then return nil, nil, "预设编号无效" end
             local id = data:sub(pos, id_end - 1)
-            local digits = id:match("^P(%d%d%d%d%d%d%d%d)$")
+            local digits = id:match("^P(%d%d%d%d%d%d%d%d+)$")
             local number = digits and tonumber(digits)
             if not number or number < 1 or number > MAX_SERIAL or ids[id] then return nil, nil, "预设编号重复或无效" end
             ids[id] = true; if number > highest then highest = number end
@@ -2284,27 +2435,22 @@ local function build_preset_library(env)
             names[name_key], names[name] = true, true
             local valid = validate_payload(payload)
             if not valid then return nil, nil, "库内预设数据无效" end
-            role_counts[role]=role_counts[role]+1
-            if role_counts[role]>MAX_PRESETS then return nil,nil,"单角色预设数量超过32" end
             result[#result + 1] = {id = id, role=role, name = name, payload = payload}
         end
         if pos ~= #data + 1 or highest > saved_serial then return nil, nil, "预设库含有多余数据或无效序号" end
         if legacy then
             local legacy_entries={};for i,item in ipairs(result) do legacy_entries[i]=item end
             for _,item in ipairs(legacy_entries) do
-                if #result>=MAX_LIBRARY_PRESETS or saved_serial>=MAX_SERIAL then return nil,nil,"旧版预设无法安全复制到客机预设池" end
+                if saved_serial>=MAX_SERIAL then return nil,nil,"预设编号超出安全整数范围，旧版库未迁移" end
                 saved_serial=saved_serial+1
-                result[#result+1]={id=string.format("P%08d",saved_serial),role="client",name=item.name,payload=item.payload}
+                result[#result+1]={id=string.format("P%08.0f",saved_serial),role="client",name=item.name,payload=item.payload}
             end
         end
         return result, saved_serial, nil, legacy
     end
     local function persist(next_entries, next_serial)
-        local counts={host=0,client=0}
         for _,item in ipairs(next_entries) do
             if not valid_role(item.role) then return false,"预设角色无效" end
-            counts[item.role]=counts[item.role]+1
-            if counts[item.role]>MAX_PRESETS then return false,"每个角色最多保存32个预设" end
         end
         local bytes = encode_library(next_entries, next_serial)
         if #bytes > MAX_LIBRARY then return false, "预设库超过大小限制" end
@@ -2335,12 +2481,28 @@ local function build_preset_library(env)
         end
     end
     local api = {state = state}
-    function api.list(role)
+    local list_cache={host={revision=-1},client={revision=-1}}
+    local function list_view(role)
+        if role~=nil and not valid_role(role) then return {} end
+        if role and list_cache[role].revision==state.revision then return list_cache[role].items end
         local result = {}
+        for _,item in ipairs(role and builtins[role] or {}) do
+            result[#result+1]={id=item.id,role=item.role,name=item.name,payload=item.payload,builtin=true}
+        end
         for i = 1, #entries do
             if role==nil or entries[i].role==role then
                 result[#result+1] = {id = entries[i].id, role=entries[i].role, name = entries[i].name, payload = entries[i].payload}
             end
+        end
+        if role then list_cache[role]={revision=state.revision,items=result} end
+        return result
+    end
+    api._list_view=list_view
+    function api.list(role)
+        local source=list_view(role)
+        local result={}
+        for i,item in ipairs(source) do
+            result[i]={id=item.id,role=item.role,name=item.name,payload=item.payload,builtin=item.builtin==true}
         end
         return result
     end
@@ -2350,14 +2512,13 @@ local function build_preset_library(env)
         if not valid_role(role) then return fail("请选择主机或客机预设池") end
         if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
         if duplicate_name(name,role) then return fail("此角色的预设名称已存在，请先重命名现有预设") end
-        if #api.list(role) >= MAX_PRESETS then return fail("每个角色最多保存32个预设") end
-        local ok, payload, why = call(env.capture, role)
+        local ok, payload, why = call(env.capture, role, nil)
         if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
         if serial >= MAX_SERIAL then return fail("预设编号已用尽") end
         local next_serial = serial + 1
         local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
-        local id = string.format("P%08d", next_serial)
+        local id = string.format("P%08.0f", next_serial)
         next_entries[#next_entries + 1] = {id = id, role=role, name = name, payload = payload}
         local saved, savewhy = persist(next_entries, next_serial)
         if not saved then return fail(savewhy) end
@@ -2365,9 +2526,10 @@ local function build_preset_library(env)
     end
     function api.replace(id, role)
         local r, reason = ready(); if not r then return false, reason end
+        if find_builtin(id) then return fail("内置预设不能覆盖") end
         local index, old = find(id); if not index then return fail("找不到该预设") end
         if not valid_role(role) or role~=old.role then return fail("所选预设不属于当前角色") end
-        local ok, payload, why = call(env.capture, role)
+        local ok, payload, why = call(env.capture, role, old.payload)
         if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
         local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, role=old.role, name = old.name, payload = payload} or entries[i] end
@@ -2376,6 +2538,7 @@ local function build_preset_library(env)
     end
     function api.remove(id)
         local r, reason = ready(); if not r then return false, reason end
+        if find_builtin(id) then return fail("内置预设不能删除") end
         local index = find(id); if not index then return fail("找不到该预设") end
         local next_entries = {}; for i = 1, #entries do if i ~= index then next_entries[#next_entries + 1] = entries[i] end end
         local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
@@ -2383,6 +2546,7 @@ local function build_preset_library(env)
     end
     function api.rename(id, name)
         local r, reason = ready(); if not r then return false, reason end
+        if find_builtin(id) then return fail("内置预设不能重命名") end
         local index, old = find(id); if not index then return fail("找不到该预设") end
         if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
         if duplicate_name(name, old.role, index) then return fail("此角色的预设名称已存在") end
@@ -2392,15 +2556,15 @@ local function build_preset_library(env)
     end
     function api.apply(id, role)
         local r, reason = ready(); if not r then return false, reason end
-        local _, item = find(id); if not item then return fail("找不到该预设") end
+        local _, item = find(id); item=item or find_builtin(id,role); if not item then return fail("找不到该预设") end
         local valid, why = validate_payload(item.payload); if not valid then return fail(why) end
         local ok, applied, detail = call(env.apply, item.payload, role)
         if not ok or applied ~= true then return fail(detail or "应用预设失败") end
         return true
     end
-    function api.export(id)
+    function api.export(id, role)
         local r, reason = ready(); if not r then return false, reason end
-        local _, item = find(id); if not item then return fail("找不到该预设") end
+        local _, item = find(id); item=item or find_builtin(id,role); if not item then return fail("找不到该预设") end
         local valid, why = validate_payload(item.payload); if not valid then return fail(why) end
         local data = FILE_MAGIC .. tostring(#item.name) .. "\n" .. tostring(#item.payload) .. "\n" .. item.name .. item.payload
         local filename = "preset-" .. item.id .. ".autochat"
@@ -2425,11 +2589,10 @@ local function build_preset_library(env)
         if not valid_name(name) then return fail("预设名称无效") end
         if duplicate_name(name,role) then return fail("此角色的预设名称已存在，请先重命名现有预设") end
         local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
-        if #api.list(role) >= MAX_PRESETS then return fail("每个角色最多保存32个预设") end
         if serial >= MAX_SERIAL then return fail("预设编号已用尽") end
         local next_serial = serial + 1
         local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
-        local id = string.format("P%08d", next_serial)
+        local id = string.format("P%08.0f", next_serial)
         next_entries[#next_entries + 1] = {id = id, role=role, name = name, payload = payload}
         local saved, savewhy = persist(next_entries, next_serial); if not saved then return fail(savewhy) end
         return true, nil, id
@@ -2461,9 +2624,9 @@ automation = build_chat_automation({
         return ok and saved == true
     end,
     identity = function(peer) return peer_identity and peer_identity.lookup(peer) or nil end,
-    category_label = function(category) return M.language.phrase('category.' .. tostring(category)) end,
-    phrase = function(key) return M.language.phrase(key) end,
-    stock_template = function(value) return M.language.stock_template(value) end,
+    category_label = function(category,locale) return M.language.phrase('category.' .. tostring(category),locale) end,
+    phrase = function(key,locale) return M.language.phrase(key,locale) end,
+    stock_template = function(value,locale) return M.language.stock_template(value,locale) end,
     diagnostic = function(...) return M.record_event_diagnostic(...) end,
     colorize = function(prefix, argb)
         if #argb == 6 then argb = 'FF' .. argb end
@@ -2504,20 +2667,53 @@ local function preset_atomic_write(path, data)
     if not ok or wrote ~= true then return false, '原子保存预设文件失败' end
     return true
 end
+M.builtin_presets = (function()
+    local stock=M.language.stock_templates()
+    local chinese={welcome_message='欢迎加入小队！',ping_message='标记了{目标}（{类别}）',
+        summon_message='{玩家名}召唤了{目标}',task_stratagem_message='{玩家名}正在开始{目标}',
+        quick_timer_message='自动聊天测试消息'}
+    local english={}
+    for key,value in pairs(chinese) do english[key]=stock[value] or value end
+    local result={host={},client={}}
+    for _,role in ipairs({'host','client'}) do
+        local cn=automation.export_default_profile(role,'zh',chinese)
+        local en=automation.export_default_profile(role,'en',english)
+        assert(type(cn)=='string' and type(en)=='string','failed to construct built-in default presets')
+        result[role][1]={id='builtin-'..role..'-en',name='English Default Preset',payload=en}
+        result[role][2]={id='builtin-'..role..'-zh',name='中文默认预设',payload=cn}
+    end
+    return result
+end)()
 preset_library = build_preset_library({
     read_file = function()
         return preset_read(PRESET_LIBRARY_PATH, 16 * 1024 * 1024 + 1, true)
     end,
     write_file = function(data) return preset_atomic_write(PRESET_LIBRARY_PATH, data) end,
-    capture = function(role) return automation.export_profile(role, M.profile_tasks(role)) end,
+    capture = function(role, old_payload)
+        local previous={}
+        if type(old_payload)=='string' then
+            local valid,parsed=automation.validate_profile(old_payload)
+            if valid and type(parsed.plugins)=='table' then previous=parsed.plugins end
+        end
+        local blobs=previous
+        if REGISTRY and type(REGISTRY.capture_presets)=='function' then
+            local captured,why=REGISTRY.capture_presets(role,previous)
+            if type(captured)~='table' then return nil,why or '无法捕获插件预设' end
+            blobs=captured
+        end
+        return automation.export_profile(role,M.profile_tasks(role),blobs)
+    end,
     validate = function(payload) return automation.validate_profile(payload) end,
+    builtins = M.builtin_presets,
     apply = function(payload, role) return apply_preset_snapshot(payload, role) end,
     diagnostic = function(category, action, stable_id, result, output)
         note('event flow category='..tostring(category)..' action='..tostring(action)
             ..' rule='..tostring(stable_id)..' result='..tostring(result)..' output='..tostring(output))
     end,
     export_file = function(filename, data)
-        if type(filename) ~= 'string' or not filename:match('^preset%-P%d%d%d%d%d%d%d%d%.autochat$')
+        if type(filename) ~= 'string'
+            or not filename:match('^preset%-P%d%d%d%d%d%d%d%d+%.autochat$')
+                and not filename:match('^preset%-builtin%-%a[%w%-]*%.autochat$')
             or filename:find('[/\\:]') or filename:find('%z') then
             return false, '无效的导出文件名'
         end
@@ -3198,6 +3394,8 @@ local function enrich_stratagem_event(event,now)
     if row then
         event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group
         event.display_name=M.language.is_chinese() and row.display_name or row.debug_name
+        event.target_names={zh=row.display_name or row.debug_name,en=row.debug_name or row.display_name}
+        event.display_name=M.language.is_chinese() and row.display_name or row.debug_name
     else
         local rule=stratagem_catalog.resolve_rule_resource(event.resource)
             or stratagem_catalog.resolve_rule_name_key(event.localization_key)
@@ -3208,6 +3406,10 @@ function M.debug_enrich_stratagem_event(event,now)enrich_stratagem_event(event,n
 M._published_ping_events=setmetatable({}, {__mode='k'})
 function M.debug_emit_ping_event(event,now)
     enrich_stratagem_event(event,now)
+    if type(event)=='table' and type(event.target_names)~='table' and type(event.resource)=='string' then
+        local row=M.special_targets and M.special_targets.resolve(event.resource)
+        if row then event.target_names={zh=row.name_zh,en=row.name_en} end
+    end
     event.type='ping'
     local accepted,disposition=automation.push_ping(event,now)
     local published_ping_events=M._published_ping_events
@@ -4112,7 +4314,9 @@ local function build_ping_events(env)
             local mission = MISSION_TARGETS[resource]
             if not mission and exact_supply_name(localized) then
                 if read(address, 24) ~= identity then return nil, 'retry' end
+                local known_supply=classification.supply_targets[resource]
                 return {category='supplies',target=localized,target_id=entry.target_id,
+                    target_names=known_supply and {zh=known_supply.name_zh,en=known_supply.name_en} or nil,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4127,6 +4331,7 @@ local function build_ping_events(env)
                 end
                 if read(address, 24) ~= identity then return nil, 'retry' end
                 return {category='supplies',target=label,target_id=entry.target_id,
+                    target_names=supply and {zh=supply.name_zh,en=supply.name_en} or nil,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4149,6 +4354,7 @@ local function build_ping_events(env)
                 local target = localized and not generic_name(localized, entry.localization_key)
                     and localized or selected_name(special)
                 return {category='building',target=target,target_id=entry.target_id,
+                    target_names={zh=special.name_zh,en=special.name_en},
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4516,6 +4722,9 @@ M.task_stratagem_status = '等待任务战备数据'
 
 -- Tasks are data, never executable Lua. Percent escaping preserves UTF-8 and delimiters.
 M.tasks = {}
+local task_serial, task_revision = 0, 0
+M.MAX_TASK_ID = 9007199254740991 -- exact-integer ceiling for LuaJIT's number representation
+M.task_profile_cache = {}
 function M.profile_tasks(role)
     local result = {}
     for _, task in ipairs(M.tasks) do
@@ -4523,8 +4732,18 @@ function M.profile_tasks(role)
     end
     return result
 end
-local task_serial, task_revision = 0, 0
-local MAX_TASKS = 32
+function M.profile_task_view(role)
+    if role~='host' and role~='client' then return {} end
+    local cached=M.task_profile_cache[role]
+    if cached and cached.revision==task_revision then return cached.items end
+    local items={}
+    for _,task in ipairs(M.tasks) do
+        if (task.profile or 'host')==role then items[#items+1]=task end
+    end
+    M.task_profile_cache[role]={revision=task_revision,items=items}
+    return items
+end
+M.TASK_FILE_LIMIT = 16 * 1024 * 1024
 local function single_line(value)
     return tostring(value or ''):gsub('[%c]', ' '):match('^%s*(.-)%s*$')
 end
@@ -4570,7 +4789,8 @@ local function serialize_tasks()
     return table.concat(out, '\n') .. '\n'
 end
 local function restore_tasks(data)
-    if type(data) ~= 'string' or #data > 65536 then return false end
+    if type(data) ~= 'string' then return false, '任务文件格式无效' end
+    if #data > M.TASK_FILE_LIMIT then return false, '任务文件超过 16 MiB；原内容未加载' end
     local first, list, ids, serial = true, {}, {}, 0
     for line in data:gmatch('[^\r\n]+') do
         if first then
@@ -4579,11 +4799,11 @@ local function restore_tasks(data)
         else
             local f = {}
             for v in (line .. '\t'):gmatch('(.-)\t') do f[#f + 1] = unescape_field(v) end
-            if (#f ~= 9 and #f ~= 10) or #list >= MAX_TASKS then return false end
+            if #f ~= 9 and #f ~= 10 then return false, '任务记录格式无效' end
             if f[10] and f[10] ~= 'host' and f[10] ~= 'client' then return false end
             local t = task_validate(f[8], f[2], f[3], f[9])
             local id, due = tonumber(f[1]), tonumber(f[6])
-            if not t or not id or id < 1 or id > 1000000000 or id ~= math.floor(id)
+            if not t or not id or id < 1 or id > M.MAX_TASK_ID or id ~= math.floor(id)
                 or ids[id] or not due or due < 0 or due > 1e12
                 or not f[4]:match('^[01]$') or not f[5]:match('^[01]$') then return false end
             t.id, t.due, t.enabled, t.done = id, due, f[4] == '1', f[5] == '1'
@@ -4602,17 +4822,19 @@ end
 local function save_tasks()
     -- Same-directory replacement keeps the previous valid file if writing fails.
     local temporary = TASK_FILE .. '.tmp'
+    local serialized = serialize_tasks()
+    if #serialized > M.TASK_FILE_LIMIT then return false, '任务文件超过 16 MiB' end
     local handle = io.open(temporary, 'w')
     if not handle then return false end
     local ok, result = pcall(function()
-        local written, err = handle:write(serialize_tasks())
+        local written, err = handle:write(serialized)
         if not written then error(err or 'write failed') end
         local closed, close_err = handle:close()
         if closed == nil and close_err then error(close_err) end
         if kernel.MoveFileExA(temporary, TASK_FILE, 9) == 0 then error('file replacement failed') end
         return true
     end)
-    if not ok then pcall(function() handle:close() end) note('task save failed: ' .. tostring(result)) end
+    if not ok then pcall(function() handle:close() end) note('task save failed: ' .. tostring(result)); return false, '保存失败：'..tostring(result) end
     return ok
 end
 M.quick_migrated_task_name = '旧版快捷定时'
@@ -4636,7 +4858,7 @@ function M.append_quick_task_definition(definitions, interval, message)
     definitions[#definitions + 1] = {name=name,mode='repeat',time=tostring(interval),message=message,enabled=true}
     return definitions
 end
-apply_preset_snapshot = function(payload, role)
+apply_host_preset_snapshot = function(payload, role)
     local valid, parsed = automation.validate_profile(payload)
     if not valid then return false, parsed end
     local old_tasks, old_serial, old_revision
@@ -4654,7 +4876,6 @@ apply_preset_snapshot = function(payload, role)
             definitions = M.append_quick_task_definition(definitions, parsed.values.quick_timer_interval,
                 parsed.values.quick_timer_message)
         end
-        if count + #(definitions or {}) > MAX_TASKS then return false, '应用后任务总数超过32' end
         old_tasks, old_serial, old_revision = {}, task_serial, task_revision
         for i, task in ipairs(M.tasks) do old_tasks[i] = task end
         local now = os.time()
@@ -4662,7 +4883,7 @@ apply_preset_snapshot = function(payload, role)
         for _, definition in ipairs(definitions or {}) do
             local task, why = task_validate(definition.name, definition.mode, definition.time, definition.message)
             if not task then return false, why end
-            if next_serial >= 1000000000 then return false, '任务编号已用尽' end
+            if next_serial >= M.MAX_TASK_ID then return false, '任务编号超过可精确保存的范围' end
             next_serial = next_serial + 1
             task.id, task.profile = next_serial, role
             task.enabled = definition.enabled == true
@@ -4679,11 +4900,12 @@ apply_preset_snapshot = function(payload, role)
         for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
         for i, task in ipairs(candidate) do M.tasks[i] = task end
         task_serial = next_serial
-        if not save_tasks() then
+        local tasks_saved, tasks_save_why = save_tasks()
+        if not tasks_saved then
             for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
             for i, task in ipairs(old_tasks) do M.tasks[i] = task end
             task_serial = old_serial
-            return false, '保存定时任务失败；原任务已恢复'
+            return false, '保存定时任务失败；原任务已恢复' .. (tasks_save_why and ('：'..tostring(tasks_save_why)) or '')
         end
         task_revision = old_revision + 1
     end
@@ -4696,7 +4918,10 @@ apply_preset_snapshot = function(payload, role)
                 for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
                 for i, task in ipairs(old_tasks) do M.tasks[i] = task end
                 task_serial, task_revision = old_serial, old_revision
-                if not save_tasks() then note('preset task rollback failed after quick timer conversion error') end
+                if not save_tasks() then
+                    note('preset task rollback failed after quick timer conversion error')
+                    return false, '快捷定时迁移失败；任务文件回滚失败；预设未应用'
+                end
             end
             return false, '快捷定时迁移失败；预设未应用'
         end
@@ -4707,23 +4932,55 @@ apply_preset_snapshot = function(payload, role)
         for i = #M.tasks, 1, -1 do M.tasks[i] = nil end
         for i, task in ipairs(old_tasks) do M.tasks[i] = task end
         task_serial, task_revision = old_serial, old_revision
-        if not save_tasks() then note('preset task rollback failed after settings write failure') end
+        if not save_tasks() then
+            note('preset task rollback failed after settings write failure')
+            return false, tostring(why or '预设设置写入失败')..'；任务文件回滚失败'
+        end
     end
     return false, why
+end
+apply_preset_snapshot = function(payload,role)
+    local valid,parsed=automation.validate_profile(payload)
+    if not valid then return false,parsed end
+    local tx
+    if type(parsed.plugins)=='table' and next(parsed.plugins)~=nil then
+        if not REGISTRY or type(REGISTRY.prepare_presets)~='function' then
+            return false,'插件预设恢复接口不可用；未应用预设'
+        end
+        local why
+        tx,why=REGISTRY.prepare_presets(parsed.plugins,role)
+        if not tx then return false,why or '插件预设验证失败；未应用预设' end
+        local committed,commit_why=tx.commit()
+        if committed~=true then
+            local rolled,rollback_why=tx.rollback()
+            if rolled~=true then
+                return false,tostring(commit_why or '插件预设应用失败')..'；插件回滚失败：'..tostring(rollback_why)
+            end
+            return false,commit_why or '插件预设应用失败；插件状态已回滚'
+        end
+    end
+    local applied,why=apply_host_preset_snapshot(payload,role)
+    if applied then return true,why end
+    if tx then
+        local rolled,rollback_why=tx.rollback()
+        if rolled~=true then return false,tostring(why or '预设应用失败')..'；插件回滚失败：'..tostring(rollback_why) end
+    end
+    return false,why
 end
 local function load_tasks()
     local handle = io.open(TASK_FILE, 'r')
     if not handle then return end
-    local data = handle:read(65537)
+    local data = handle:read(M.TASK_FILE_LIMIT + 1)
     handle:close()
-    if not restore_tasks(data) then note('tasks: invalid file; not loaded') end
+    local ok, why = restore_tasks(data)
+    if not ok then note('tasks: ' .. tostring(why or 'invalid file') .. '; not loaded') end
 end
 function M.add_task(name, mode, time, message, now, profile)
     profile = profile or automation.sync() or 'host'
     if profile ~= 'host' and profile ~= 'client' then return nil, '未知预设' end
-    if #M.tasks >= MAX_TASKS then return nil, '最多添加 32 个任务' end
     local t, why = task_validate(name, mode, time, message)
     if not t then return nil, why end
+    if task_serial >= M.MAX_TASK_ID then return nil, '任务编号超过可精确保存的范围' end
     task_serial = task_serial + 1
     now = now or os.time()
     t.id, t.due, t.profile = task_serial, now + (t.seconds or 0), profile
@@ -4734,7 +4991,8 @@ function M.add_task(name, mode, time, message, now, profile)
         end
     end
     M.tasks[#M.tasks + 1] = t
-    if not save_tasks() then table.remove(M.tasks) return nil, '保存失败，请检查配置目录' end
+    local saved, save_why = save_tasks()
+    if not saved then table.remove(M.tasks) return nil, save_why or '保存失败，请检查配置目录' end
     task_revision = task_revision + 1
     return t
 end
@@ -4848,7 +5106,11 @@ local function run_tasks(now)
             -- must not cause a supposedly one-shot message to be replayed on restart.
             if save_tasks() then
                 t.retry_after = nil
-                local ok, why = automation.send(automation.format(t.message), t.profile or 'host')
+                local task_role=t.profile or 'host'
+                local task_profile=automation.profile(task_role)
+                local ok, why = automation.send(automation.format(t.message,nil,nil,false,
+                    task_profile and task_profile.ping_sender_color==true,
+                    task_profile and task_profile.message_language), task_role)
                 if ok then automation.record(now) end
                 t.result = ok and (why == 'local' and '已显示 / 仅自己可见' or why == 0 and '已发送 / 单人会话' or ('已发送 / ' .. tostring(why) .. ' 位队友'))
                     or ('发送失败：' .. tostring(why))
@@ -5460,6 +5722,25 @@ local function save_preset_selection()
 end
 load_preset_selection()
 local draft = {name = '', mode = 'repeat', time = '30', message = ''}
+M.batch_rule_ids = function()
+    local ids,seen={},{}
+    local filter=PANEL.rule_filter or 'all'
+    local query=tostring(PANEL.rule_search or ''):lower()
+    for _,row in ipairs(stratagem_catalog.list_rules and stratagem_catalog.list_rules() or stratagem_catalog.list()) do
+        local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
+            or (filter=='other' and row.group=='other' and row.family~='mission')
+            or (filter~='mission' and filter~='other' and row.group==filter)
+        local display=M.language.is_chinese() and (row.display_name or row.name or row.debug_name)
+            or (row.debug_name or row.name or row.display_name)
+        if matches_filter and (query=='' or tostring(display or ''):lower():find(query,1,true)
+            or tostring(row.id):find(query,1,true)
+            or tostring(row.debug_name or row.name or ''):lower():find(query,1,true)) then
+            local key=tostring(row.id)
+            if not seen[key] then seen[key]=true;ids[#ids+1]=row.id end
+        end
+    end
+    return ids
+end
 PANEL.task_page = 1
 local POSITION_FILE = HOME .. 'AutoChat/panel-position.txt'
 local function load_position()
@@ -5993,8 +6274,8 @@ local function build_plugin_registry(env)
     registry.plugins = type(registry.plugins) == 'table' and registry.plugins or {}
     registry.by_id = type(registry.by_id) == 'table' and registry.by_id or {}
     registry.serial = type(registry.serial) == 'number' and registry.serial or 0
-    registry.version, registry.api_version, registry.api_revision = 2, 2, 3
-    registry.capabilities = {independent_send=true, settings=true, plugin_ui=true}
+    registry.version, registry.api_version, registry.api_revision = 2, 2, 4
+    registry.capabilities = {independent_send=true, settings=true, plugin_ui=true, plugin_presets=true}
     local independent_state, context_token = {}, nil
     local function note(message)
         if type(env.note) == 'function' then pcall(env.note, '[plugin] ' .. message) end
@@ -6107,9 +6388,163 @@ local function build_plugin_registry(env)
         if entry.faults <= 3 then note(entry.id .. ' ' .. entry.last_error)
         elseif entry.faults == 4 then note(entry.id .. ' further callback faults suppressed') end
     end
+    local function valid_plugin_id(id)
+        return text(id,64) and id:match('^[%w_.%-]+$')~=nil
+    end
+    local function copy_preset_blobs(source)
+        if source==nil then return {} end
+        if type(source)~='table' then return nil,'plugin preset payload map must be a table' end
+        local result,total={},0
+        for id,data in next,source do
+            if not valid_plugin_id(id) then return nil,'invalid plugin preset id' end
+            if type(data)~='string' then return nil,'plugin '..id..' preset data must be a string' end
+            total=total+#id+#data
+            if total>1024*1024 then return nil,'plugin preset data exceeds 1 MiB' end
+            result[id]=data
+        end
+        return result
+    end
+    local function preset_error(entry,operation,why)
+        local message='plugin '..entry.id..' preset '..operation..' failed'
+        if why~=nil and tostring(why)~='' then message=message..': '..tostring(why) end
+        note(message)
+        return message
+    end
+    local function preset_callback(entry,operation,...)
+        local hook=entry._preset and entry._preset[operation]
+        local values={pcall(hook,...)}
+        if not values[1] then return false,nil,preset_error(entry,operation,values[2]) end
+        return true,values[2],values[3]
+    end
+    function registry.capture_presets(role,previous_blobs)
+        if role~='host' and role~='client' then return nil,'invalid plugin preset role' end
+        local result,why=copy_preset_blobs(previous_blobs)
+        if not result then return nil,why end
+        local plugins={};for i,entry in ipairs(registry.plugins) do plugins[i]=entry end
+        table.sort(plugins,function(a,b)return a.id<b.id end)
+        for _,entry in ipairs(plugins) do
+            if registry.by_id[entry.id]==entry and entry._preset then
+                local called,data,detail=preset_callback(entry,'capture',role)
+                if not called then return nil,detail end
+                if type(data)~='string' then
+                    return nil,preset_error(entry,'capture',detail or 'expected byte string')
+                end
+                if #data+#entry.id>1024*1024 then
+                    return nil,preset_error(entry,'capture','data exceeds 1 MiB')
+                end
+                local valid,accepted,validate_why=preset_callback(entry,'validate',data,role)
+                if not valid then return nil,validate_why end
+                if accepted~=true then return nil,preset_error(entry,'validate',validate_why or 'data rejected') end
+                result[entry.id]=data
+            end
+        end
+        local total=0
+        for id,data in next,result do
+            total=total+#id+#data
+            if total>1024*1024 then return nil,'plugin preset data exceeds 1 MiB' end
+        end
+        return result
+    end
+    function registry.prepare_presets(blobs,role)
+        if role~='host' and role~='client' then return nil,'invalid plugin preset role' end
+        local payloads,why=copy_preset_blobs(blobs)
+        if not payloads then return nil,why end
+        local ids,entries={},{}
+        for id in next,payloads do
+            local entry=registry.by_id[id]
+            if entry and entry._preset then ids[#ids+1]=id;entries[id]=entry end
+        end
+        table.sort(ids)
+        -- Validate every target before asking any plugin for rollback state.
+        for _,id in ipairs(ids) do
+            local entry=entries[id]
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'validate','plugin registration changed')
+            end
+            local called,accepted,detail=preset_callback(entry,'validate',payloads[id],role)
+            if not called then return nil,detail end
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'validate','plugin registration changed')
+            end
+            if accepted~=true then return nil,preset_error(entry,'validate',detail or 'data rejected') end
+        end
+        local participants={}
+        for _,id in ipairs(ids) do
+            local entry=entries[id]
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'capture','plugin registration changed')
+            end
+            local called,old_data,detail=preset_callback(entry,'capture',role)
+            if not called then return nil,detail end
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'capture','plugin registration changed')
+            end
+            if type(old_data)~='string' then
+                return nil,preset_error(entry,'capture',detail or 'expected byte string')
+            end
+            if #old_data+#id>1024*1024 then
+                return nil,preset_error(entry,'capture','rollback data exceeds 1 MiB')
+            end
+            local valid,accepted,validate_why=preset_callback(entry,'validate',old_data,role)
+            if not valid then return nil,validate_why end
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'validate','plugin registration changed')
+            end
+            if accepted~=true then return nil,preset_error(entry,'validate','rollback data rejected: '..tostring(validate_why or '')) end
+            participants[#participants+1]={id=id,entry=entry,data=payloads[id],old_data=old_data}
+        end
+        for _,item in ipairs(participants) do
+            if registry.by_id[item.id]~=item.entry then
+                return nil,preset_error(item.entry,'prepare','plugin registration changed')
+            end
+        end
+        local tx={state='prepared',attempted={}}
+        function tx.commit()
+            if tx.state~='prepared' then return false,'plugin preset transaction is not prepared' end
+            tx.state='committing'
+            for _,item in ipairs(participants) do
+                tx.attempted[#tx.attempted+1]=item -- apply may fail after changing plugin state
+                if registry.by_id[item.id]~=item.entry then
+                    tx.failure=preset_error(item.entry,'apply','plugin registration changed')
+                    tx.state='failed'
+                    return false,tx.failure
+                end
+                local called,accepted,detail=preset_callback(item.entry,'apply',item.data,role)
+                if not called then
+                    tx.failure=detail;tx.state='failed';return false,detail
+                end
+                if accepted~=true then
+                    tx.failure=preset_error(item.entry,'apply',detail or 'data rejected')
+                    tx.state='failed';return false,tx.failure
+                end
+            end
+            tx.state='committed'
+            return true
+        end
+        function tx.rollback()
+            if tx.state~='failed' and tx.state~='committed' then
+                return false,'plugin preset transaction cannot be rolled back in this state'
+            end
+            tx.state='rolling_back'
+            local failures={}
+            for i=#tx.attempted,1,-1 do
+                local item=tx.attempted[i]
+                local called,restored,detail=preset_callback(item.entry,'restore',item.old_data,role)
+                if not called then failures[#failures+1]=item.id..' ('..tostring(detail)..')'
+                elseif restored~=true then
+                    local message=preset_error(item.entry,'restore',detail or 'rollback rejected')
+                    failures[#failures+1]=item.id..' ('..message..')'
+                end
+            end
+            tx.state='rolled_back'
+            if #failures>0 then return false,'plugin preset rollback failed: '..table.concat(failures,', ') end
+            return true
+        end
+        return tx
+    end
     local function api_for(entry)
         local token = context()
-        local api = {version = 2, api_version = 2, api_revision = 3,
+        local api = {version = 2, api_version = 2, api_revision = 4,
             capabilities = registry.capabilities, id = entry.id,
             context = context,
             send = function(value, creator_id, options)
@@ -6148,11 +6583,20 @@ local function build_plugin_registry(env)
                 return nil, 'invalid ' .. name .. ' callback'
             end
         end
+        local preset=rawget(spec,'preset')
+        if preset~=nil then
+            if type(preset)~='table' then return nil,'invalid preset hooks' end
+            for _,name in ipairs({'capture','validate','apply','restore'}) do
+                if type(rawget(preset,name))~='function' then return nil,'incomplete preset hooks: '..name end
+            end
+        end
         local entry = {id = id, title = title, name = title, name_en = name_en, faults = 0,
             _draw = rawget(spec, '_draw') or rawget(spec, 'draw'),
             _on_click = rawget(spec, '_on_click') or rawget(spec, 'on_click'),
             _revision = rawget(spec, '_revision') or rawget(spec, 'revision'),
-            _on_event = rawget(spec, '_on_event') or rawget(spec, 'on_event')}
+            _on_event = rawget(spec, '_on_event') or rawget(spec, 'on_event'),
+            _preset = preset and {capture=rawget(preset,'capture'),validate=rawget(preset,'validate'),
+                apply=rawget(preset,'apply'),restore=rawget(preset,'restore')} or nil}
         entry.draw = function(u, ctx) return invoke(entry, 'draw', u, ctx, api_for(entry)) end
         registry.plugins[#registry.plugins + 1], registry.by_id[id] = entry, entry
         registry.serial = registry.serial + 1
@@ -7041,10 +7485,11 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
         return row.debug_name or row.name or row.display_name or tostring(row.id)
     end
-    local function button(key,value,x,y,w,on)
-        canvas.rect(x,y,w,32,on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
-        canvas.border(x,y,w,32,on and C.YELLOW or C.LINE2,952)
-        text(value,x+9,y+8,13,on and C.INK or C.TEXT,w-18);canvas.region(key,x,y,w,32)
+    local function button(key,value,x,y,w,on,disabled)
+        canvas.rect(x,y,w,32,disabled and C.FIELD or on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
+        canvas.border(x,y,w,32,disabled and C.LINE2 or on and C.YELLOW or C.LINE2,952)
+        text(value,x+9,y+8,13,disabled and C.DIM or on and C.INK or C.TEXT,w-18)
+        if not disabled then canvas.region(key,x,y,w,32) end
     end
     local role=p.profile or 'host';local opts=a.profile(role)
     button('profile:host',say('主机预设','HOST PRESET'),614,48,146,role=='host')
@@ -7106,6 +7551,36 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local selected
     for _,row in ipairs(rows) do if tostring(row.id)==tostring(p.rule_selected) then selected=row end end
     selected=selected or rows[1];p.rule_selected=selected and selected.id or nil
+    local batch_fields={{'mark_message',say('标记消息','MARK MESSAGE')},
+        {'call_message',say('召唤 / 执行消息','CALL / TASK MESSAGE')},
+        {'cooldown',say('独立冷却（秒）：空 = 默认；0 合法','RULE COOLDOWN: BLANK = DEFAULT; 0 IS VALID')}}
+    local function batch_toggle()
+        local key=p.rule_batch_edit and 'rules:batch:close' or 'rules:batch:open'
+        button(key,p.rule_batch_edit and say('返回单项编辑','BACK TO SINGLE RULE')
+            or say('批量编辑筛选 ('..#rows..')','BULK EDIT FILTER ('..#rows..')'),724,334,236,false)
+    end
+    local function draw_batch_fields()
+        text(say('对当前筛选的全部匹配项应用；包含其他分页。','APPLIES TO ALL FILTER MATCHES, INCLUDING OTHER PAGES.'),486,378,13,C.YELLOW,474)
+        p.rule_batch_drafts=p.rule_batch_drafts or {}
+        p.rule_batch_drafts[role]=p.rule_batch_drafts[role] or {}
+        local drafts=p.rule_batch_drafts[role]
+        for i,item in ipairs(batch_fields) do
+            local field,title=item[1],item[2];local y=408+(i-1)*108
+            local key='rules:batch:edit:'..field
+            local editing=p.edit_field==key and p.editing
+            local value=editing and (p.edit_text or '') or drafts[field] or ''
+            text(title,486,y,12,C.YELLOW,474)
+            canvas.rect(486,y+18,474,34,editing and C.ROW_HI or C.FIELD,951)
+            canvas.border(486,y+18,474,34,editing and C.YELLOW or C.LINE2,952)
+            text(value~='' and tostring(value)..(editing and '_' or '')
+                or say('点击输入本字段批量值','CLICK TO ENTER A VALUE FOR THIS FIELD'),494,y+27,13,editing and C.TEXT or C.MUTED,458)
+            canvas.region(key,486,y+18,474,34)
+            local count=#rows
+            button('rules:batch:apply:'..field,say('应用到筛选 ('..count..')','APPLY TO FILTER ('..count..')'),486,y+58,260,false,count==0)
+            button('rules:batch:reset:'..field,say('恢复默认 ('..count..')','RESET DEFAULT ('..count..')'),754,y+58,206,false,count==0)
+        end
+        if p.hint then text(status_text and status_text(p.hint) or p.hint,486,750,12,C.YELLOW,474) end
+    end
     local page_size=enemy and 5 or 9
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
@@ -7131,6 +7606,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     if not selected then
         text(say('等待游戏战备目录，或没有符合筛选的条目。','WAITING FOR CATALOG / NO MATCHES.'),486,270,14,C.MUTED,470)
         text(say('进入游戏后读取；不支持的版本会停止读取。','READS IN GAME; UNSUPPORTED BUILDS STOP.'),486,305,12,C.MUTED,470)
+        if not enemy then
+            batch_toggle()
+            if p.rule_batch_edit then draw_batch_fields() end
+        end
         return
     end
     local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
@@ -7143,6 +7622,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     end
     local enabled=enemy and opts['ping_'..selected.id] or not enemy and rule.enabled~=false
     button('rules:enabled',say('此类提醒 ','THIS ALERT ')..(enabled and 'ON' or 'OFF'),486,334,230,enabled)
+    if not enemy then
+        batch_toggle()
+        if p.rule_batch_edit then draw_batch_fields();return end
+    end
     local function field(name,title,y)
         local key='rule:'..kind..':'..selected.id..':'..name
         text(title,486,y,13,C.YELLOW,474)
@@ -7176,12 +7659,12 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
     local role = PANEL.profile or 'host'
     local options = automation.profile(role)
     local function say(cn, en) return font_ok and cn or en end
-    local function button(key, title, x, y, w, h, active)
+    local function button(key, title, x, y, w, h, active, disabled)
         local hovered = PANEL.hover == key
-        rect(x, y, w, h, active and C.YELLOW or hovered and C.ROW_HI or C.PANEL, 951)
-        border(x, y, w, h, active and C.YELLOW or hovered and C.TEXT or C.LINE2, 952)
-        text(title, x+w/2, y+(h-13)/2, 13, active and C.INK or C.TEXT, w-12, 'center')
-        region(key, x, y, w, h)
+        rect(x, y, w, h, disabled and C.FIELD or active and C.YELLOW or hovered and C.ROW_HI or C.PANEL, 951)
+        border(x, y, w, h, disabled and C.LINE2 or active and C.YELLOW or hovered and C.TEXT or C.LINE2, 952)
+        text(title, x+w/2, y+(h-13)/2, 13, disabled and C.DIM or active and C.INK or C.TEXT, w-12, 'center')
+        if not disabled then region(key, x, y, w, h) end
     end
     local function field(key, title, value, y)
         text(title, 390, y, 11, C.YELLOW, 568)
@@ -7197,14 +7680,30 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
     text(say('命名自动消息预设','NAMED AUTOMATION PRESETS'),40,178,20,C.TEXT,306)
     PANEL.preset_selected_by_role=PANEL.preset_selected_by_role or {}
     PANEL.preset_page_by_role=PANEL.preset_page_by_role or {}
+    PANEL.preset_index_cache_by_role=PANEL.preset_index_cache_by_role or {}
     local selected_id=PANEL.preset_selected_by_role[role]
-    local entries=preset_library.list(role)
-    if selected_id then
-        local found=false
-        for _,entry in ipairs(entries) do if entry.id==selected_id then found=true;break end end
-        if not found then selected_id=nil;PANEL.preset_selected_by_role[role]=nil end
+    local entries=(preset_library._list_view or preset_library.list)(role)
+    local revision=preset_library.state and preset_library.state.revision or 0
+    local index_cache=PANEL.preset_index_cache_by_role[role]
+    if not index_cache or index_cache.revision~=revision or index_cache.entries~=entries then
+        local by_id={}
+        for _,entry in ipairs(entries) do by_id[entry.id]=entry end
+        index_cache={revision=revision,entries=entries,by_id=by_id}
+        PANEL.preset_index_cache_by_role[role]=index_cache
     end
-    text(#entries..' / 32',346,184,12,C.MUTED,nil,'right')
+    if selected_id then
+        if not index_cache.by_id[selected_id] then selected_id=nil;PANEL.preset_selected_by_role[role]=nil end
+    end
+    if not selected_id then
+        local english_id='builtin-'..role..'-en'
+        local english=index_cache.by_id[english_id]
+        if english and english.builtin==true then
+            selected_id=english_id
+            PANEL.preset_selected_by_role[role]=english_id
+        end
+    end
+    local selected=selected_id and index_cache.by_id[selected_id] or nil
+    text(say('共 '..#entries..' 个预设',#entries..' PRESETS'),346,184,12,C.MUTED,nil,'right')
     if preset_library.state.error then
         text(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,218,12,C.BAD,300)
         text(preset_library.state.error,40,240,11,C.BAD,300)
@@ -7225,19 +7724,25 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
     text(page..' / '..pages,94,H-126,12,C.MUTED)
     button('preset:next','>',142,H-132,40,26,page<pages)
     button('preset:save',say('保存当前配置','SAVE CURRENT'),38,H-94,146,32,false)
-    button('preset:replace',say('替换所选','REPLACE'),194,H-94,152,32,false)
+    button('preset:replace',say('替换所选','REPLACE'),194,H-94,152,32,false,selected and selected.builtin==true)
 
     text(say('编辑目标：','EDITING:')..say(role=='host' and '主机' or '客机',role:upper()),390,178,13,C.YELLOW,270)
     text(say('当前：','ACTIVE: ')..(automation.state.active_role=='host' and say('主机','HOST') or automation.state.active_role=='client' and say('客机','CLIENT') or say('等待','WAITING')),682,178,12,C.MUTED,130)
     button('preset:back',say('返回设置','BACK TO SETTINGS'),822,168,136,30,false)
     text(say('当前配置输出：','CURRENT OUTPUT: ')..(options.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),390,201,12,C.MUTED,568)
     field('preset:name',say('预设名称','PRESET NAME'),PANEL.preset_name or '',230)
-    local selected
-    for _,entry in ipairs(entries) do if entry.id==selected_id then selected=entry;break end end
     text(selected and (say('已选：','SELECTED: ')..selected.name) or say('请选择预设','SELECT A PRESET'),390,348,13,selected and C.TEXT or C.DIM,420)
-    button('preset:rename',say('改名','RENAME'),822,340,136,30,false)
+    button('preset:rename',say('改名','RENAME'),822,340,136,30,false,selected and selected.builtin==true)
     local valid,parsed
-    if selected then valid,parsed=automation.validate_profile(selected.payload) end
+    if selected then
+        local cached=index_cache.validation
+        if not cached or cached.id~=selected.id or cached.payload~=selected.payload then
+            local ok,profile=automation.validate_profile(selected.payload)
+            cached={id=selected.id,payload=selected.payload,valid=ok,parsed=profile}
+            index_cache.validation=cached
+        end
+        valid,parsed=cached.valid,cached.parsed
+    end
     local saved=valid and parsed and parsed.values
     if saved then
         text(say('将载入：','WILL LOAD: ')..(saved.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),390,376,12,C.YELLOW,568)
@@ -7250,7 +7755,7 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
     button('preset:apply',say(role=='host' and '应用到主机配置' or '应用到客机配置',
         role=='host' and 'APPLY TO HOST CONFIG' or 'APPLY TO CLIENT CONFIG'),390,432,210,34,false)
     button('preset:export',say('导出文件','EXPORT FILE'),612,432,160,34,false)
-    button('preset:delete',say('删除','DELETE'),784,432,174,34,false)
+    button('preset:delete',say('删除','DELETE'),784,432,174,34,false,selected and selected.builtin==true)
     field('preset:path',say('导入文件路径','IMPORT FILE PATH'),PANEL.preset_path or '',488)
     button('preset:import',say('导入路径中的文件','IMPORT FILE FROM PATH'),390,556,276,34,false)
     text(PANEL.hint and status_text and status_text(PANEL.hint) or PANEL.hint
@@ -7687,7 +8192,7 @@ local function draw_panel()
             {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'},
             {'ping_map','地图任务 / 撤离区','MAP OBJECTIVES / EXTRACTION'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
-            {'ping_sender_color','缩写使用队员颜色','PLAYER COLOR PREFIX'}}) do
+            {'ping_sender_color','玩家名称与缩写使用队员颜色','PLAYER NAME AND PREFIX COLOR'}}) do
             button('opt:' .. item[1], caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]'),
                    IX, y, IW, 30, true, opts[item[1]])
             y = y + 34
@@ -7767,8 +8272,8 @@ local function draw_panel()
     y = TOP + 14
     head(IX, y, caption('设置', 'SETTINGS'), (PANEL.profile or 'host') == 'host'
          and caption('主机定时任务', 'HOST TASKS') or caption('客机定时任务', 'CLIENT TASKS'))
-    local visible_tasks = M.profile_tasks(PANEL.profile or 'host')
-    text(#visible_tasks .. ' / 32', IX + IW, y + 20, 12, C.MUTED, nil, 'right')
+    local visible_tasks = M.profile_task_view(PANEL.profile or 'host')
+    text(M.language.is_chinese() and ('共 '..#visible_tasks..' 个任务') or (#visible_tasks..' TASKS'), IX + IW, y + 20, 12, C.MUTED, nil, 'right')
     y = y + 58
     local pages = math.max(1, math.ceil(#visible_tasks / 7))
     PANEL.task_page = math.max(1, math.min(pages, PANEL.task_page or 1))
@@ -7966,6 +8471,8 @@ local function panel_frame()
         if commit and PANEL.edit_field then
             local option = PANEL.edit_field:match('^option:(.+)$')
             local kind,id,rule_field=PANEL.edit_field:match('^rule:([^:]+):([^:]+):([^:]+)$')
+            local batch_field=PANEL.edit_field:match('^rules:batch:edit:([%a_]+)$')
+            if batch_field~='mark_message' and batch_field~='call_message' and batch_field~='cooldown' then batch_field=nil end
             if kind then
                 local value=PANEL.edit_text or ''
                 if rule_field=='cooldown' and value~='' then value=tonumber(value) or false end
@@ -7973,6 +8480,11 @@ local function panel_frame()
                 PANEL.hint=why;if not ok then return false end
             elseif PANEL.edit_field=='rules:search' then
                 PANEL.rule_search=PANEL.edit_text or '';PANEL.rule_page=1
+            elseif batch_field then
+                local role=PANEL.profile or 'host'
+                PANEL.rule_batch_drafts=PANEL.rule_batch_drafts or {}
+                PANEL.rule_batch_drafts[role]=PANEL.rule_batch_drafts[role] or {}
+                PANEL.rule_batch_drafts[role][batch_field]=PANEL.edit_text or ''
             elseif option then
                 local value = PANEL.edit_text
                 if option == 'cooldown' or option == 'welcome_delay' then value = tonumber(value) end
@@ -8014,6 +8526,15 @@ local function panel_frame()
         local keys = PANEL.tab_keys
         if clicked and hovered ~= 'close' and not finish_edit(true) then
             clicked = false
+        elseif hovered:match('^rules:batch:edit:') then
+            local field=hovered:match('^rules:batch:edit:(.+)$')
+            if field=='cooldown' or field=='mark_message' or field=='call_message' then
+                local role=PANEL.profile or 'host'
+                PANEL.rule_batch_drafts=PANEL.rule_batch_drafts or {}
+                PANEL.rule_batch_drafts[role]=PANEL.rule_batch_drafts[role] or {}
+                PANEL.editing,PANEL.edit_field,PANEL.edit_text=true,hovered,PANEL.rule_batch_drafts[role][field] or ''
+                PANEL.hint=M.language.text('输入后点“应用到筛选”或“恢复默认”','Type, then choose Apply to Filter or Reset Default')
+            end
         elseif hovered:match('^rule:') then
             local kind,id,rule_field=hovered:match('^rule:([^:]+):([^:]+):([^:]+)$')
             local value=automation.rule(kind,id,PANEL.profile or 'host')[rule_field]
@@ -8024,6 +8545,28 @@ local function panel_frame()
         elseif hovered:match('^rules:open:') then
             PANEL.rule_view=hovered:match('^rules:open:(.+)$');PANEL.rule_selected=nil;PANEL.rule_page=1;PANEL.preset_view=nil;PANEL.hint=nil
         elseif hovered=='rules:back' then PANEL.rule_view=nil;PANEL.hint=nil
+        elseif hovered=='rules:batch:open' then PANEL.rule_batch_edit=true;PANEL.hint=nil
+        elseif hovered=='rules:batch:close' then PANEL.rule_batch_edit=nil;PANEL.hint=nil
+        elseif hovered:match('^rules:batch:apply:') or hovered:match('^rules:batch:reset:') then
+            local action,field=hovered:match('^rules:batch:([%a_]+):(.+)$')
+            local reset=action=='reset'
+            if field=='cooldown' or field=='mark_message' or field=='call_message' then
+                local ids=M.batch_rule_ids()
+                if #ids==0 then
+                    PANEL.hint=M.language.text('当前筛选没有可修改条目','No matching entries in the current filter')
+                else
+                    local role=PANEL.profile or 'host'
+                    local value
+                    if not reset then
+                        PANEL.rule_batch_drafts=PANEL.rule_batch_drafts or {}
+                        PANEL.rule_batch_drafts[role]=PANEL.rule_batch_drafts[role] or {}
+                        value=PANEL.rule_batch_drafts[role][field] or ''
+                        if field=='cooldown' and value~='' then value=tonumber(value) or false end
+                    end
+                    local ok,why=automation.set_rule_field_batch('stratagem',ids,field,value,role)
+                    PANEL.hint=ok and M.language.text('已更新 '..#ids..' 个战备规则','Updated '..#ids..' stratagem rules') or why
+                end
+            end
         elseif hovered:match('^rules:select:') then
             PANEL.rule_selected=hovered:match('^rules:select:(.+)$');PANEL.hint=nil
         elseif hovered:match('^rules:filter:') then
@@ -8060,7 +8603,7 @@ local function panel_frame()
             PANEL.hint = nil
         elseif hovered == 'preset:prev' or hovered == 'preset:next' then
             local role=PANEL.profile or 'host'
-            local pages = math.max(1, math.ceil(#preset_library.list(role)/16))
+            local pages = math.max(1, math.ceil(#preset_library._list_view(role)/16))
             PANEL.preset_page_by_role[role] = math.max(1, math.min(pages, (PANEL.preset_page_by_role[role] or 1)
                 + (hovered == 'preset:next' and 1 or -1)))
         elseif preset_field then
@@ -8073,22 +8616,32 @@ local function panel_frame()
             PANEL.hint = ok and '已保存当前自动消息配置' or why
             if ok then
                 PANEL.preset_selected_by_role[role] = id
-                PANEL.preset_page_by_role[role] = math.ceil(#preset_library.list(role)/16)
+                PANEL.preset_page_by_role[role] = math.ceil(#preset_library._list_view(role)/16)
                 save_preset_selection()
             end
         elseif hovered == 'preset:replace' then
             local role=PANEL.profile or 'host';local selected=PANEL.preset_selected_by_role[role]
             if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.replace(selected, role)
-                PANEL.hint = ok and '已替换所选预设内容' or why
+                local builtin=false
+                for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then builtin=item.builtin==true;break end end
+                if builtin then PANEL.hint=M.language.text('内置预设不可覆盖','Built-in presets cannot be replaced')
+                else
+                    local ok, why = preset_library.replace(selected, role)
+                    PANEL.hint = ok and '已替换所选预设内容' or why
+                end
             end
         elseif hovered == 'preset:rename' then
-            local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
+            local role=PANEL.profile or 'host';local selected=PANEL.preset_selected_by_role[role]
             if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.rename(selected, PANEL.preset_name or '')
-                PANEL.hint = ok and '预设名称已更新' or why
+                local builtin=false
+                for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then builtin=item.builtin==true;break end end
+                if builtin then PANEL.hint=M.language.text('内置预设不可重命名','Built-in presets cannot be renamed')
+                else
+                    local ok, why = preset_library.rename(selected, PANEL.preset_name or '')
+                    PANEL.hint = ok and '预设名称已更新' or why
+                end
             end
         elseif hovered == 'preset:apply' then
             local role=PANEL.profile or 'host'
@@ -8096,7 +8649,7 @@ local function panel_frame()
             if not selected then PANEL.hint = M.language.text('请先选择预设','Select a preset first.')
             else
                 local entry
-                for _,item in ipairs(preset_library.list(role)) do if item.id==selected then entry=item;break end end
+                for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then entry=item;break end end
                 local legacy_without_tasks=false
                 if entry then
                     local valid,parsed=automation.validate_profile(entry.payload)
@@ -8129,7 +8682,7 @@ local function panel_frame()
             local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
             if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why, path = preset_library.export(selected)
+                local ok, why, path = preset_library.export(selected,PANEL.profile or 'host')
                 PANEL.hint = ok and '预设已导出' or why
                 PANEL.preset_export_path = ok and path or nil
             end
@@ -8137,9 +8690,14 @@ local function panel_frame()
             local role=PANEL.profile or 'host';local selected=PANEL.preset_selected_by_role[role]
             if not selected then PANEL.hint = '请先选择预设'
             else
-                local ok, why = preset_library.remove(selected)
-                PANEL.hint = ok and '预设已删除' or why
-                if ok then PANEL.preset_selected_by_role[role] = nil; PANEL.preset_export_path = nil;save_preset_selection() end
+                local builtin=false
+                for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then builtin=item.builtin==true;break end end
+                if builtin then PANEL.hint=M.language.text('内置预设不可删除','Built-in presets cannot be deleted')
+                else
+                    local ok, why = preset_library.remove(selected)
+                    PANEL.hint = ok and '预设已删除' or why
+                    if ok then PANEL.preset_selected_by_role[role] = nil; PANEL.preset_export_path = nil;save_preset_selection() end
+                end
             end
         elseif hovered == 'preset:import' then
             local role=PANEL.profile or 'host'
@@ -8147,7 +8705,7 @@ local function panel_frame()
             PANEL.hint = ok and '预设已导入，请选择后加载' or why
             if ok then
                 PANEL.preset_selected_by_role[role] = id
-                PANEL.preset_page_by_role[role] = math.ceil(#preset_library.list(role)/16)
+                PANEL.preset_page_by_role[role] = math.ceil(#preset_library._list_view(role)/16)
                 save_preset_selection()
             end
         elseif option then
@@ -8188,7 +8746,7 @@ local function panel_frame()
             local t, why = M.add_task(draft.name, draft.mode, draft.time, draft.message, nil, PANEL.profile or 'host')
             PANEL.hint = t and '任务已添加' or why
             if t then
-                PANEL.task_page = math.ceil(#M.profile_tasks(PANEL.profile or 'host') / 7)
+            PANEL.task_page = math.ceil(#M.profile_task_view(PANEL.profile or 'host') / 7)
                 draft.name, draft.message = '', ''
             end
         elseif toggle_id then
@@ -8199,7 +8757,7 @@ local function panel_frame()
             PANEL.hint = M.remove_task(tonumber(delete_id)) and '任务已删除' or '保存失败'
         elseif hovered == 'page:prev' or hovered == 'page:next' then
             finish_edit(true)
-            PANEL.task_page = math.max(1, math.min(math.max(1, math.ceil(#M.profile_tasks(PANEL.profile or 'host') / 7)),
+            PANEL.task_page = math.max(1, math.min(math.max(1, math.ceil(#M.profile_task_view(PANEL.profile or 'host') / 7)),
                 PANEL.task_page + (hovered == 'page:next' and 1 or -1)))
         elseif hovered == 'close' then
             if PANEL.editing and not finish_edit(true) then
@@ -8709,7 +9267,7 @@ Each stratagem has an enable switch, separate mark/call templates and cooldown.
 Blank messages inherit defaults; blank cooldown uses the global player timer.
 Explicit rule cooldown is independent per trigger player + rule; 0 bypasses
 global cooldown and prioritizes new events, while master/dedup still apply.
-First upgrade seeds 500kg and Orbital Napalm Barrage with 0s; fully editable.
+No zero-cooldown rules are seeded; configure individual rules when needed.
 Native names/icon materials/stable IDs follow the workspace StratagemCooldown
 reader. Search/filter and red/blue/green bulk enable/disable are available.
 Icons draw only when the game's material is already loaded. Same-name variants
@@ -8730,7 +9288,7 @@ verification for this candidate.
 One user-sampled Super Earth cache resource uses the exact-hash fallback label "坠落舱" when its native name is generic; this is not official localization and does not cover other cache resources. The tower-top marker follows its existing path; the user confirmed the tower-base generic point should remain unsupported.
 中文：设置→标记消息→战备细分设置 / 敌人体型与飞行提醒。
 空消息沿用默认；冷却留空使用全局，独立秒数按触发者+规则计时，0绕过全局。
-500千克炸弹和轨道凝固汽油弹幕首次升级预设0秒；可编辑或恢复默认。
+默认不预置零冷却规则；需要时可逐项配置。
 战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
 图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
 语言按游戏设置自动切换。当前149项战备有简体中文展示名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。六种已核实的SEAF炮弹走现有任务建筑提醒。一个经用户实机样本核对的Super Earth cache资源在泛名称时回退显示“坠落舱”；这不是官方本地化，也不覆盖其他cache资源。广播塔顶端标记沿用既有路径；用户确认塔底泛型点不需适配。游戏内IME输入仍待实机验收。
@@ -8749,8 +9307,10 @@ registered addon sends. ONLY ME calls native chat add-line without a network sen
 other players do not receive it. It retains normal chat name formatting.
 An unknown role waits; local signature failure never falls back to public chat.
 Role changes clear old welcome/ping queues and cooldown. Deadlines continue while
-another role is active. There are 32 task slots total across both presets.
-Named preset v4 files save task definitions and all other behavior settings.
+another role is active. Presets and tasks have no fixed entry-count cap; local
+storage remains bounded by the documented per-file and per-preset size limits.
+Named preset v5 files save task definitions, all behavior settings and optional
+opaque addon preset data.
 Older presets without task definitions preserve the destination role's current
 tasks. Old quick-timer values are read only for one-time conversion to ordinary
 repeat tasks; there is no separate quick-timer sender or settings page.
@@ -8773,7 +9333,7 @@ The panel (hotkey K)
   - click fields to type, including Windows IME; ENTER confirms, ESC cancels,
     CTRL+V pastes Unicode. The 0.8.3 IME path has offline native tests; in-game
     physical input remains unverified.
-  - click ADD TASK to save; up to 32 tasks, with pause / enable / restart / delete
+  - click ADD TASK to save tasks; the task file has a 16 MiB size limit
 
 Timed send
 ----------
@@ -8852,7 +9412,7 @@ Files / 文件位置
   - 支持重复间隔、一次倒计时（5–86400 秒）和每天时刻（HH:MM，本机时间）
   - 中文可在字段内使用系统输入法直输，也可 Ctrl+V 粘贴；Enter 确认，Esc 取消
   - 填写完成后还须点击“添加任务”，任务才会保存并进入命名预设
-  - 最多 32 个独立任务，可暂停、启用、删除、重启
+  - 可添加任意数量的任务；单项字段和任务文件仍受明确大小限制
 
 任务按真实时间计时，仅在游戏运行时执行。倒计时保存截止时刻；重启后到期任务尝试一次。
 聊天未就绪、身份未知或冷却中时，任务保持等待，不会直接消耗一次倒计时。

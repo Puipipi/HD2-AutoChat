@@ -5,8 +5,8 @@ local function build_plugin_registry(env)
     registry.plugins = type(registry.plugins) == 'table' and registry.plugins or {}
     registry.by_id = type(registry.by_id) == 'table' and registry.by_id or {}
     registry.serial = type(registry.serial) == 'number' and registry.serial or 0
-    registry.version, registry.api_version, registry.api_revision = 2, 2, 3
-    registry.capabilities = {independent_send=true, settings=true, plugin_ui=true}
+    registry.version, registry.api_version, registry.api_revision = 2, 2, 4
+    registry.capabilities = {independent_send=true, settings=true, plugin_ui=true, plugin_presets=true}
     local independent_state, context_token = {}, nil
     local function note(message)
         if type(env.note) == 'function' then pcall(env.note, '[plugin] ' .. message) end
@@ -119,9 +119,163 @@ local function build_plugin_registry(env)
         if entry.faults <= 3 then note(entry.id .. ' ' .. entry.last_error)
         elseif entry.faults == 4 then note(entry.id .. ' further callback faults suppressed') end
     end
+    local function valid_plugin_id(id)
+        return text(id,64) and id:match('^[%w_.%-]+$')~=nil
+    end
+    local function copy_preset_blobs(source)
+        if source==nil then return {} end
+        if type(source)~='table' then return nil,'plugin preset payload map must be a table' end
+        local result,total={},0
+        for id,data in next,source do
+            if not valid_plugin_id(id) then return nil,'invalid plugin preset id' end
+            if type(data)~='string' then return nil,'plugin '..id..' preset data must be a string' end
+            total=total+#id+#data
+            if total>1024*1024 then return nil,'plugin preset data exceeds 1 MiB' end
+            result[id]=data
+        end
+        return result
+    end
+    local function preset_error(entry,operation,why)
+        local message='plugin '..entry.id..' preset '..operation..' failed'
+        if why~=nil and tostring(why)~='' then message=message..': '..tostring(why) end
+        note(message)
+        return message
+    end
+    local function preset_callback(entry,operation,...)
+        local hook=entry._preset and entry._preset[operation]
+        local values={pcall(hook,...)}
+        if not values[1] then return false,nil,preset_error(entry,operation,values[2]) end
+        return true,values[2],values[3]
+    end
+    function registry.capture_presets(role,previous_blobs)
+        if role~='host' and role~='client' then return nil,'invalid plugin preset role' end
+        local result,why=copy_preset_blobs(previous_blobs)
+        if not result then return nil,why end
+        local plugins={};for i,entry in ipairs(registry.plugins) do plugins[i]=entry end
+        table.sort(plugins,function(a,b)return a.id<b.id end)
+        for _,entry in ipairs(plugins) do
+            if registry.by_id[entry.id]==entry and entry._preset then
+                local called,data,detail=preset_callback(entry,'capture',role)
+                if not called then return nil,detail end
+                if type(data)~='string' then
+                    return nil,preset_error(entry,'capture',detail or 'expected byte string')
+                end
+                if #data+#entry.id>1024*1024 then
+                    return nil,preset_error(entry,'capture','data exceeds 1 MiB')
+                end
+                local valid,accepted,validate_why=preset_callback(entry,'validate',data,role)
+                if not valid then return nil,validate_why end
+                if accepted~=true then return nil,preset_error(entry,'validate',validate_why or 'data rejected') end
+                result[entry.id]=data
+            end
+        end
+        local total=0
+        for id,data in next,result do
+            total=total+#id+#data
+            if total>1024*1024 then return nil,'plugin preset data exceeds 1 MiB' end
+        end
+        return result
+    end
+    function registry.prepare_presets(blobs,role)
+        if role~='host' and role~='client' then return nil,'invalid plugin preset role' end
+        local payloads,why=copy_preset_blobs(blobs)
+        if not payloads then return nil,why end
+        local ids,entries={},{}
+        for id in next,payloads do
+            local entry=registry.by_id[id]
+            if entry and entry._preset then ids[#ids+1]=id;entries[id]=entry end
+        end
+        table.sort(ids)
+        -- Validate every target before asking any plugin for rollback state.
+        for _,id in ipairs(ids) do
+            local entry=entries[id]
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'validate','plugin registration changed')
+            end
+            local called,accepted,detail=preset_callback(entry,'validate',payloads[id],role)
+            if not called then return nil,detail end
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'validate','plugin registration changed')
+            end
+            if accepted~=true then return nil,preset_error(entry,'validate',detail or 'data rejected') end
+        end
+        local participants={}
+        for _,id in ipairs(ids) do
+            local entry=entries[id]
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'capture','plugin registration changed')
+            end
+            local called,old_data,detail=preset_callback(entry,'capture',role)
+            if not called then return nil,detail end
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'capture','plugin registration changed')
+            end
+            if type(old_data)~='string' then
+                return nil,preset_error(entry,'capture',detail or 'expected byte string')
+            end
+            if #old_data+#id>1024*1024 then
+                return nil,preset_error(entry,'capture','rollback data exceeds 1 MiB')
+            end
+            local valid,accepted,validate_why=preset_callback(entry,'validate',old_data,role)
+            if not valid then return nil,validate_why end
+            if registry.by_id[id]~=entry then
+                return nil,preset_error(entry,'validate','plugin registration changed')
+            end
+            if accepted~=true then return nil,preset_error(entry,'validate','rollback data rejected: '..tostring(validate_why or '')) end
+            participants[#participants+1]={id=id,entry=entry,data=payloads[id],old_data=old_data}
+        end
+        for _,item in ipairs(participants) do
+            if registry.by_id[item.id]~=item.entry then
+                return nil,preset_error(item.entry,'prepare','plugin registration changed')
+            end
+        end
+        local tx={state='prepared',attempted={}}
+        function tx.commit()
+            if tx.state~='prepared' then return false,'plugin preset transaction is not prepared' end
+            tx.state='committing'
+            for _,item in ipairs(participants) do
+                tx.attempted[#tx.attempted+1]=item -- apply may fail after changing plugin state
+                if registry.by_id[item.id]~=item.entry then
+                    tx.failure=preset_error(item.entry,'apply','plugin registration changed')
+                    tx.state='failed'
+                    return false,tx.failure
+                end
+                local called,accepted,detail=preset_callback(item.entry,'apply',item.data,role)
+                if not called then
+                    tx.failure=detail;tx.state='failed';return false,detail
+                end
+                if accepted~=true then
+                    tx.failure=preset_error(item.entry,'apply',detail or 'data rejected')
+                    tx.state='failed';return false,tx.failure
+                end
+            end
+            tx.state='committed'
+            return true
+        end
+        function tx.rollback()
+            if tx.state~='failed' and tx.state~='committed' then
+                return false,'plugin preset transaction cannot be rolled back in this state'
+            end
+            tx.state='rolling_back'
+            local failures={}
+            for i=#tx.attempted,1,-1 do
+                local item=tx.attempted[i]
+                local called,restored,detail=preset_callback(item.entry,'restore',item.old_data,role)
+                if not called then failures[#failures+1]=item.id..' ('..tostring(detail)..')'
+                elseif restored~=true then
+                    local message=preset_error(item.entry,'restore',detail or 'rollback rejected')
+                    failures[#failures+1]=item.id..' ('..message..')'
+                end
+            end
+            tx.state='rolled_back'
+            if #failures>0 then return false,'plugin preset rollback failed: '..table.concat(failures,', ') end
+            return true
+        end
+        return tx
+    end
     local function api_for(entry)
         local token = context()
-        local api = {version = 2, api_version = 2, api_revision = 3,
+        local api = {version = 2, api_version = 2, api_revision = 4,
             capabilities = registry.capabilities, id = entry.id,
             context = context,
             send = function(value, creator_id, options)
@@ -160,11 +314,20 @@ local function build_plugin_registry(env)
                 return nil, 'invalid ' .. name .. ' callback'
             end
         end
+        local preset=rawget(spec,'preset')
+        if preset~=nil then
+            if type(preset)~='table' then return nil,'invalid preset hooks' end
+            for _,name in ipairs({'capture','validate','apply','restore'}) do
+                if type(rawget(preset,name))~='function' then return nil,'incomplete preset hooks: '..name end
+            end
+        end
         local entry = {id = id, title = title, name = title, name_en = name_en, faults = 0,
             _draw = rawget(spec, '_draw') or rawget(spec, 'draw'),
             _on_click = rawget(spec, '_on_click') or rawget(spec, 'on_click'),
             _revision = rawget(spec, '_revision') or rawget(spec, 'revision'),
-            _on_event = rawget(spec, '_on_event') or rawget(spec, 'on_event')}
+            _on_event = rawget(spec, '_on_event') or rawget(spec, 'on_event'),
+            _preset = preset and {capture=rawget(preset,'capture'),validate=rawget(preset,'validate'),
+                apply=rawget(preset,'apply'),restore=rawget(preset,'restore')} or nil}
         entry.draw = function(u, ctx) return invoke(entry, 'draw', u, ctx, api_for(entry)) end
         registry.plugins[#registry.plugins + 1], registry.by_id[id] = entry, entry
         registry.serial = registry.serial + 1

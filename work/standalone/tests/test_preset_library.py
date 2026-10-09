@@ -18,6 +18,7 @@ class PresetLibraryTests(unittest.TestCase):
         self.write_ok = True
         self.export_ok = True
         self.write_count = 0
+        self.builtins = None
         self.library = self.new_library()
 
     def new_library(self, data="__disk__"):
@@ -33,7 +34,7 @@ class PresetLibraryTests(unittest.TestCase):
                 return True
             return False, b"disk full"
 
-        def capture(_role):
+        def capture(_role, _old_payload=None):
             return self.capture_value
 
         def validate(value):
@@ -56,6 +57,8 @@ class PresetLibraryTests(unittest.TestCase):
             return self.files.get(path)
 
         env[b"write_file"] = write
+        if self.builtins is not None:
+            env[b"builtins"] = self.builtins
         env[b"capture"] = capture
         env[b"validate"] = validate
         env[b"apply"] = apply
@@ -90,6 +93,55 @@ class PresetLibraryTests(unittest.TestCase):
         self.capture_value = b"valid:third"
         third = reopened[b"save"]("第三套".encode(), b"host")[2]
         self.assertEqual(third, b"P00000003")
+
+    def test_user_presets_exceed_32_per_role_and_reload_without_counting_builtins(self):
+        # Keep this behavioral: save crosses the former cap, a fresh library
+        # parses every record, and virtual built-ins never enter persistence.
+        env_builtins = self.lua.table()
+        env_builtins[b"host"] = self.lua.table_from([
+            self.lua.table_from({b"id": b"builtin-host-zh", b"name": "中文默认预设".encode(), b"payload": b"valid:zh-host"}),
+            self.lua.table_from({b"id": b"builtin-host-en", b"name": b"English Default Preset", b"payload": b"valid:en-host"}),
+        ])
+        env_builtins[b"client"] = self.lua.table_from([
+            self.lua.table_from({b"id": b"builtin-client-zh", b"name": "中文默认预设".encode(), b"payload": b"valid:zh-client"}),
+            self.lua.table_from({b"id": b"builtin-client-en", b"name": b"English Default Preset", b"payload": b"valid:en-client"}),
+        ])
+        self.builtins = env_builtins
+        for i in range(33):
+            result = self.library[b"save"]((f"host {i}".encode()), b"host")
+            self.assertTrue(result[0], result[1])
+        reopened = self.new_library()
+        listing = reopened[b"list"](b"host")
+        self.assertEqual(35, len(listing))
+        self.assertTrue(listing[1][b"builtin"])
+        self.assertNotIn(b"builtin-host-zh", self.disk)
+        self.assertIn(b"# AutoChat preset library v2\n33\n", self.disk)
+        self.assertEqual(2, len(reopened[b"list"](b"client")))
+        self.assertTrue(reopened[b"apply"](b"builtin-client-zh", b"client"))
+        self.assertEqual((b"valid:zh-client", b"client"), self.apply_calls[-1])
+        for operation in ("remove", "rename", "replace"):
+            if operation == "rename": result = reopened[b"rename"](b"builtin-host-en", b"changed")
+            elif operation == "replace": result = reopened[b"replace"](b"builtin-host-en", b"host")
+            else: result = reopened[b"remove"](b"builtin-host-en")
+            self.assertFalse(result[0], operation)
+        self.assertTrue(reopened[b"save"](b"English Default Preset copy", b"host")[0])
+
+    def test_public_list_is_detached_from_cached_ui_view_and_builtin_export_is_role_specific(self):
+        builtins=self.lua.table()
+        builtins[b"host"]=self.lua.table_from([
+            self.lua.table_from({b"id":b"builtin-host-en",b"name":b"English Default Preset",b"payload":b"valid:host-squad"})])
+        builtins[b"client"]=self.lua.table_from([
+            self.lua.table_from({b"id":b"builtin-client-en",b"name":b"English Default Preset",b"payload":b"valid:client-local"})])
+        self.builtins=builtins
+        library=self.new_library()
+        public=library[b"list"](b"host")
+        public[1][b"name"]=b"corrupted"
+        public[1][b"payload"]=b"valid:corrupted"
+        self.assertEqual(b"English Default Preset",library[b"_list_view"](b"host")[1][b"name"])
+        self.assertTrue(library[b"export"](b"builtin-client-en",b"client")[0])
+        exported=self.files["preset-builtin-client-en.autochat"]
+        self.assertIn(b"valid:client-local",exported)
+        self.assertNotIn(b"valid:host-squad",exported)
 
     def test_same_name_is_allowed_once_in_each_role_pool(self):
         host = self.library[b"save"]("同名预设".encode(), b"host")
@@ -232,7 +284,7 @@ class PresetLibraryTests(unittest.TestCase):
             self.assertEqual(self.disk, before)
 
     def test_serial_limit_and_missing_callbacks_fail_safely(self):
-        maximum = (b"# AutoChat preset library v2\n99999999\n1\nP99999999\nhost\n"
+        maximum = (b"# AutoChat preset library v2\n9007199254740991\n1\nP9007199254740991\nhost\n"
                    b"1\n7\nAvalid:x")
         self.disk = maximum
         lib = self.new_library()

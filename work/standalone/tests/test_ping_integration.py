@@ -29,7 +29,7 @@ class PingIntegrationTest(unittest.TestCase):
         automation = mod.debug_automation()
         for key, value in (('ping', True), ('ping_building', True),
                             ('ping_sender_prefix', False), ('ping_message', '{目标}'),
-                            ('cooldown', 0)):
+                            ('cooldown', 0), ('message_language', 'zh')):
             self.assertTrue(automation.set(key, value, 'host')[0], key)
         # The reader and host harness use separate Lua states. Preserve the
         # classified target/resource/key and use anonymous attribution so the

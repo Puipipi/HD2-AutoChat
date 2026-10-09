@@ -95,11 +95,9 @@ local function build_language(env)
         ['预设长度无效']='Preset length is invalid',
         ['预设名称重复或无效']='Preset name is duplicated or invalid',
         ['库内预设数据无效']='Preset data in the library is invalid',
-        ['单角色预设数量超过32']='This role has more than 32 presets',
         ['预设库含有多余数据或无效序号']='Preset library contains trailing data or an invalid serial',
         ['旧版预设无法安全复制到客机预设池']='Legacy presets cannot be safely copied to the client preset pool',
         ['预设角色无效']='Preset role is invalid',
-        ['每个角色最多保存32个预设']='Each role can have at most 32 presets',
         ['预设库超过大小限制']='Preset library exceeds the size limit',
         ['保存预设库失败']='Failed to save preset library',
         ['读取预设库失败']='Failed to read preset library',
@@ -125,7 +123,6 @@ local function build_language(env)
         ['预设转义无效']='Preset escaping is invalid',
         ['预设包含无效 UTF-8']='Preset contains invalid UTF-8',
         ['定时任务数量无效']='Scheduled task count is invalid',
-        ['预设最多包含32个定时任务']='A preset can contain at most 32 scheduled tasks',
         ['定时任务字段无效']='Scheduled task field is invalid',
         ['定时任务编号无效']='Scheduled task index is invalid',
         ['定时任务开关无效']='Scheduled task switch is invalid',
@@ -146,10 +143,8 @@ local function build_language(env)
         ['定时任务时间无效']='Scheduled task time is invalid',
         ['定时任务类型无效']='Scheduled task type is invalid',
         ['定时任务数量不匹配']='Scheduled task count does not match the data',
-        ['规则数量超过 512']='Preset contains more than 512 rules',
         ['未知预设']='Unknown preset',
         ['任务编号已用尽']='Task ID range is exhausted',
-        ['应用后任务总数超过32']='Applying this preset would exceed 32 tasks',
         ['保存定时任务失败；原任务已恢复']='Failed to save scheduled tasks; previous tasks were restored',
         ['快捷定时迁移失败；预设未应用']='Quick timer migration failed; preset was not applied',
         ['请输入事件名称']='Enter an event name',
@@ -197,9 +192,10 @@ local function build_language(env)
         if state.locale=='zh' then return tostring(chinese or english or '') end
         return tostring(english or chinese or '')
     end
-    function M.phrase(key)
+    function M.phrase(key, locale)
         local row=phrases[key]
-        return row and row[state.locale] or tostring(key or '')
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        return row and row[selected] or tostring(key or '')
     end
     function M.status(value)
         if type(value)~='string' or state.locale=='zh' then return value end
@@ -216,9 +212,11 @@ local function build_language(env)
         end
         return value
     end
-    function M.stock_template(value)
+    function M.stock_template(value, locale)
         if type(value)~='string' then return value end
-        if state.locale=='zh' then
+        if locale=='zh' or locale=='en' then return value end
+        local selected=state.locale
+        if selected=='zh' then
             for zh,en in pairs(stock) do if value==en then return zh end end
             return value
         end

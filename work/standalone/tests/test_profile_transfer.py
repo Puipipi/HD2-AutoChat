@@ -26,7 +26,7 @@ class ProfileTransferTests(unittest.TestCase):
             assert(a.set_rule('stratagem',4119049995,'cooldown',0))
             assert(a.set_rule('enemy','small_enemy','mark_message',''))
             local payload=a.export_profile('host')
-            assert(payload:sub(1,21)=='# AutoChat profile v4')
+            assert(payload:sub(1,21)=='# AutoChat profile v5')
             assert(payload:find('task_count=0\n',1,true))
             assert(payload:find('rule_stratagem_4119049995.enabled=false',1,true))
             assert(payload:find('rule_stratagem_2902516083.enabled=true',1,true))
@@ -40,6 +40,44 @@ class ProfileTransferTests(unittest.TestCase):
             assert(b.rule('stratagem',4119049995,'client').cooldown==0)
             assert(b.rule('enemy','small_enemy','client').mark_message==nil)
             assert(b.export_profile('client')==payload)
+        ''')
+
+    def test_v5_plugin_blobs_are_opaque_data_and_legacy_profiles_have_no_plugin_map(self):
+        self.run_lua(r'''
+            local blob='opaque'..string.char(0,255)..'%\nvalue'
+            local payload=a.export_profile('host',{}, {['auto-chat-demo']=blob,['count']='reserved', ['demo.plugin']=blob})
+            assert(payload:sub(1,21)=='# AutoChat profile v5')
+            assert(payload:find('plugin_count=3\n',1,true))
+            assert(payload:find('plugin.auto-chat-demo=',1,true))
+            assert(payload:find('plugin.count=reserved\n',1,true))
+            local ok,parsed=a.validate_profile(payload);assert(ok,parsed)
+            assert(parsed.plugins['demo.plugin']==blob and parsed.plugins['auto-chat-demo']==blob)
+            assert(parsed.plugins.count=='reserved')
+            assert(a.import_profile(payload,'host'))
+            assert(a.export_profile('host',{},parsed.plugins)==payload)
+            local legacy=payload:gsub('# AutoChat profile v5','# AutoChat profile v4',1)
+                :gsub('plugin_count=3\n','')
+                :gsub('plugin%.auto%-chat%-demo=[^\n]*\n','')
+                :gsub('plugin%.count=[^\n]*\n','')
+                :gsub('plugin%.demo%.plugin=[^\n]*\n','')
+            local old_ok,old=a.validate_profile(legacy);assert(old_ok,old)
+            assert(old.plugins==nil)
+        ''')
+
+    def test_v5_plugin_namespace_handles_reserved_and_hyphenated_ids(self):
+        self.run_lua(r'''
+            local blobs={count='count-value',['auto-chat.demo_v2']='dot-under-hyphen',
+                ['x-y']='binary'..string.char(0,255)..'\n%'}
+            local payload=a.export_profile('host',{},blobs)
+            assert(payload:find('plugin.count=count%-value\n'))
+            assert(payload:find('plugin.auto%-chat%.demo_v2=dot%-under%-hyphen\n'))
+            local ok,parsed=a.validate_profile(payload);assert(ok,parsed)
+            for id,value in pairs(blobs) do assert(parsed.plugins[id]==value,id) end
+            local duplicate=payload:gsub('plugin.count=', 'plugin.count=', 1)
+            duplicate=duplicate:gsub('plugin_count=3\n','plugin_count=4\n',1)
+                ..'plugin.count=duplicate\n'
+            assert(not a.validate_profile(duplicate))
+            assert(not a.export_profile('host',{},'not-a-map'))
         ''')
 
     def test_inactive_import_does_not_touch_active_runtime(self):
@@ -106,7 +144,8 @@ class ProfileTransferTests(unittest.TestCase):
             assert(a.set('ping_supplies',true,'client'))
             local v4=a.export_profile('host')
             assert(v4:find('ping_supplies=false\n',1,true))
-            local v3=v4:gsub('^# AutoChat profile v4','# AutoChat profile v3')
+            local v3=v4:gsub('^# AutoChat profile v5','# AutoChat profile v3')
+                :gsub('plugin_count=0\n','')
                 :gsub('ping_supplies=[^\n]*\n','')
                 :gsub('task_count=', 'quick_timer_enabled=false\nquick_timer_interval=30\nquick_timer_message=HELLO%%20FROM%%20AUTOCHAT\ntask_count=',1)
             assert(a.import_profile(v3,'client'))
@@ -162,6 +201,22 @@ class ProfileTransferTests(unittest.TestCase):
             assert(not a.validate_profile(p:gsub('welcome_message=[^\n]*','welcome_message=%%F4%%90%%80%%80')))
             assert(a.validate_profile(p:gsub('welcome_message=[^\n]*','welcome_message=%%F0%%9F%%98%%80')))
             assert(not a.import_profile(p,'other'))
+        ''')
+
+    def test_custom_rules_roundtrip_above_legacy_512_cap(self):
+        self.run_lua(r'''
+            local p=a.export_profile('host')
+            local rows={}
+            for i=1,513 do rows[#rows+1]='rule_stratagem_'..(100000+i)..'.enabled=true\n' end
+            local expanded=p:gsub('task_count=0\n','task_count=0\n'..table.concat(rows),1)
+            local ok,parsed=a.validate_profile(expanded)
+            assert(ok,parsed)
+            assert(a.import_profile(expanded,'host'))
+            local saved=a.export_profile('host')
+            local yes,roundtrip=a.validate_profile(saved)
+            assert(yes,roundtrip)
+            local count=0;for _ in pairs(roundtrip.rules) do count=count+1 end
+            assert(count==513)
         ''')
 
 

@@ -49,7 +49,8 @@ class PluginIntegrationTests(unittest.TestCase):
             test_api.register{id='revision3',name='Revision 3',draw=function() end,
                 on_click=function(_,api) callback=api end}
             test_api.click('revision3','capture')
-            assert(callback.api_revision==3 and callback.capabilities.independent_send)
+            assert(callback.api_revision==4 and callback.capabilities.independent_send
+                and callback.capabilities.plugin_presets)
             local a=test_api.settings('revision3')
             assert(a.role=='host' and a.output=='squad' and a.rules and a.tasks)
             a.rules.enemy_large_enemy={enabled=true};a.tasks[1]={message='mutated'}

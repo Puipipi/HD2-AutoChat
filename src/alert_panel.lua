@@ -8,10 +8,11 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
         return row.debug_name or row.name or row.display_name or tostring(row.id)
     end
-    local function button(key,value,x,y,w,on)
-        canvas.rect(x,y,w,32,on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
-        canvas.border(x,y,w,32,on and C.YELLOW or C.LINE2,952)
-        text(value,x+9,y+8,13,on and C.INK or C.TEXT,w-18);canvas.region(key,x,y,w,32)
+    local function button(key,value,x,y,w,on,disabled)
+        canvas.rect(x,y,w,32,disabled and C.FIELD or on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
+        canvas.border(x,y,w,32,disabled and C.LINE2 or on and C.YELLOW or C.LINE2,952)
+        text(value,x+9,y+8,13,disabled and C.DIM or on and C.INK or C.TEXT,w-18)
+        if not disabled then canvas.region(key,x,y,w,32) end
     end
     local role=p.profile or 'host';local opts=a.profile(role)
     button('profile:host',say('主机预设','HOST PRESET'),614,48,146,role=='host')
@@ -73,6 +74,36 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local selected
     for _,row in ipairs(rows) do if tostring(row.id)==tostring(p.rule_selected) then selected=row end end
     selected=selected or rows[1];p.rule_selected=selected and selected.id or nil
+    local batch_fields={{'mark_message',say('标记消息','MARK MESSAGE')},
+        {'call_message',say('召唤 / 执行消息','CALL / TASK MESSAGE')},
+        {'cooldown',say('独立冷却（秒）：空 = 默认；0 合法','RULE COOLDOWN: BLANK = DEFAULT; 0 IS VALID')}}
+    local function batch_toggle()
+        local key=p.rule_batch_edit and 'rules:batch:close' or 'rules:batch:open'
+        button(key,p.rule_batch_edit and say('返回单项编辑','BACK TO SINGLE RULE')
+            or say('批量编辑筛选 ('..#rows..')','BULK EDIT FILTER ('..#rows..')'),724,334,236,false)
+    end
+    local function draw_batch_fields()
+        text(say('对当前筛选的全部匹配项应用；包含其他分页。','APPLIES TO ALL FILTER MATCHES, INCLUDING OTHER PAGES.'),486,378,13,C.YELLOW,474)
+        p.rule_batch_drafts=p.rule_batch_drafts or {}
+        p.rule_batch_drafts[role]=p.rule_batch_drafts[role] or {}
+        local drafts=p.rule_batch_drafts[role]
+        for i,item in ipairs(batch_fields) do
+            local field,title=item[1],item[2];local y=408+(i-1)*108
+            local key='rules:batch:edit:'..field
+            local editing=p.edit_field==key and p.editing
+            local value=editing and (p.edit_text or '') or drafts[field] or ''
+            text(title,486,y,12,C.YELLOW,474)
+            canvas.rect(486,y+18,474,34,editing and C.ROW_HI or C.FIELD,951)
+            canvas.border(486,y+18,474,34,editing and C.YELLOW or C.LINE2,952)
+            text(value~='' and tostring(value)..(editing and '_' or '')
+                or say('点击输入本字段批量值','CLICK TO ENTER A VALUE FOR THIS FIELD'),494,y+27,13,editing and C.TEXT or C.MUTED,458)
+            canvas.region(key,486,y+18,474,34)
+            local count=#rows
+            button('rules:batch:apply:'..field,say('应用到筛选 ('..count..')','APPLY TO FILTER ('..count..')'),486,y+58,260,false,count==0)
+            button('rules:batch:reset:'..field,say('恢复默认 ('..count..')','RESET DEFAULT ('..count..')'),754,y+58,206,false,count==0)
+        end
+        if p.hint then text(status_text and status_text(p.hint) or p.hint,486,750,12,C.YELLOW,474) end
+    end
     local page_size=enemy and 5 or 9
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
@@ -98,6 +129,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     if not selected then
         text(say('等待游戏战备目录，或没有符合筛选的条目。','WAITING FOR CATALOG / NO MATCHES.'),486,270,14,C.MUTED,470)
         text(say('进入游戏后读取；不支持的版本会停止读取。','READS IN GAME; UNSUPPORTED BUILDS STOP.'),486,305,12,C.MUTED,470)
+        if not enemy then
+            batch_toggle()
+            if p.rule_batch_edit then draw_batch_fields() end
+        end
         return
     end
     local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
@@ -110,6 +145,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     end
     local enabled=enemy and opts['ping_'..selected.id] or not enemy and rule.enabled~=false
     button('rules:enabled',say('此类提醒 ','THIS ALERT ')..(enabled and 'ON' or 'OFF'),486,334,230,enabled)
+    if not enemy then
+        batch_toggle()
+        if p.rule_batch_edit then draw_batch_fields();return end
+    end
     local function field(name,title,y)
         local key='rule:'..kind..':'..selected.id..':'..name
         text(title,486,y,13,C.YELLOW,474)

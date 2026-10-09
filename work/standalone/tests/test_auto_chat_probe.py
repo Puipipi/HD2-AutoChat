@@ -613,6 +613,10 @@ function harness.install()
                 return {read=function(_,count) return contents:sub(1,count or #contents) end,
                     close=function() return true end}
             end
+            if harness.fail_next_task_write then
+                harness.fail_next_task_write=false
+                return nil
+            end
             local contents=''
             return {write=function(self,text)
                     contents=contents..text;return self
@@ -623,7 +627,10 @@ function harness.install()
         end
         if mode == nil or tostring(mode):find('r') then return real_open(path, mode) end
         if tostring(path):find('AutoChat', 1, true) then
-            if harness.deny_settings_write and tostring(path):find('settings%.txt%.tmp') then return nil end
+            if harness.deny_settings_write and tostring(path):find('settings%.txt%.tmp') then
+                if harness.fail_task_rollback_after_settings_failure then harness.fail_next_task_write=true end
+                return nil
+            end
             return {
                 write = function(self, text) written[#written + 1] = {path = path, text = text} return self end,
                 close = function() return true end,
@@ -1366,6 +1373,99 @@ class AutoChatProbeTest(unittest.TestCase):
         mod.debug_release_cursor()
         state = mod.debug_cursor_state()
         self.assertIn("taken", state)
+
+    def test_builtin_default_presets_are_role_specific_fixed_and_only_apply_explicitly(self):
+        lua, h, mod = self.fresh()
+        library, automation, language = mod.debug_preset_library(), mod.debug_automation(), mod.debug_language()
+        host, client = library.list("host"), library.list("client")
+        self.assertEqual((2, 2), (len(host), len(client)))
+        self.assertEqual(("builtin-host-en", "builtin-host-zh", "English Default Preset", "中文默认预设"),
+                         (host[1].id, host[2].id, host[1].name, host[2].name))
+        self.assertEqual(("builtin-client-en", "builtin-client-zh", "English Default Preset", "中文默认预设"),
+                         (client[1].id, client[2].id, client[1].name, client[2].name))
+        ok, host_profile = automation.validate_profile(host[1].payload)
+        self.assertTrue(ok)
+        self.assertEqual("en", host_profile[b"values"][b"message_language"])
+        self.assertEqual("Welcome to the squad!", host_profile[b"values"][b"welcome_message"])
+        self.assertEqual("squad", host_profile[b"values"][b"output"])
+        self.assertEqual(0, len(host_profile.rules))
+        ok, client_profile = automation.validate_profile(client[1].payload)
+        self.assertTrue(ok)
+        self.assertEqual(("en", "local", False),
+                         (client_profile[b"values"][b"message_language"], client_profile[b"values"][b"output"],
+                          client_profile[b"values"][b"welcome"]))
+        ok, chinese = automation.validate_profile(host[2].payload)
+        self.assertTrue(ok)
+        self.assertEqual(("zh", "欢迎加入小队！"),
+                         (chinese[b"values"][b"message_language"], chinese[b"values"][b"welcome_message"]))
+
+        # A UI locale refresh alone cannot replace saved settings or selected messages.
+        self.assertTrue(library.apply("builtin-host-zh", "host"))
+        self.assertTrue(automation.set("enabled", False, "host")[0])
+        before = automation.export_profile("host", mod.profile_tasks("host"))
+        language.update("en", 1)
+        self.assertEqual(before, automation.export_profile("host", mod.profile_tasks("host")))
+        self.assertEqual("zh", automation.profile("host").message_language)
+        self.assertTrue(library.apply("builtin-client-en", "client"))
+        self.assertEqual("local", automation.profile("client").output)
+        self.assertFalse(automation.profile("host").enabled)
+        # Applying the same stable built-in again restores its factory payload,
+        # proving edits did not mutate the virtual built-in source.
+        self.assertTrue(library.apply("builtin-host-zh", "host"))
+        self.assertTrue(automation.profile("host").enabled)
+        self.assertEqual("zh", automation.profile("host").message_language)
+        self.assertEqual("中文默认预设", library.list("host")[2].name)
+
+    def test_fresh_profile_defaults_to_english_messages(self):
+        _, _, mod = self.fresh()
+        automation = mod.debug_automation()
+        self.assertEqual("en", automation.profile("host").message_language)
+        self.assertEqual("Welcome to the squad!", automation.profile("host").welcome_message)
+
+    def test_plugin_preset_capture_preserves_unregistered_blob_and_host_failure_rolls_back(self):
+        lua, h, mod = self.fresh()
+        result = lua.execute(r'''
+            local library,mod_automation,harness=...
+            local registry=HD2AutoChatAPI
+            local old_state='kept-opaque'
+            local function hooks(state_ref)
+                return {
+                    capture=function(role) assert(role=='host');return state_ref.value end,
+                    validate=function(data,role) return role=='host' and type(data)=='string' end,
+                    apply=function(data,role) assert(role=='host');state_ref.value=data;return true end,
+                    restore=function(data,role) assert(role=='host');state_ref.value=data;return true end}
+            end
+            local zombie={value=old_state}
+            assert(registry.register({id='future.plugin',title='Future',draw=function()end,preset=hooks(zombie)}))
+            local saved,_,id=library.save('Hook Snapshot','host');assert(saved)
+            assert(registry.unregister('future.plugin'))
+            local active={value='state-B'}
+            assert(registry.register({id='auto-chat-demo',title='Demo',draw=function()end,preset=hooks(active)}))
+            local replaced,replace_why=library.replace(id,'host');assert(replaced,'replace:'..tostring(replace_why))
+            local item
+            for _,entry in ipairs(library.list('host')) do if entry.id==id then item=entry end end
+            assert(item)
+            local valid,parsed=mod_automation.validate_profile(item.payload);assert(valid,parsed)
+            assert(parsed.plugins['future.plugin']=='kept-opaque')
+            assert(parsed.plugins['auto-chat-demo']=='state-B')
+            active.value='state-C'
+            assert(library.apply(id,'host'))
+            assert(active.value=='state-B')
+            -- Force the host settings save to fail after plugin commit. The plugin
+            -- transaction must compensate back to its state from prepare time.
+            active.value='before-failure'
+            assert(mod_automation.set('welcome_message','changed after save','host'))
+            harness.deny_settings_write=true
+            harness.fail_task_rollback_after_settings_failure=true
+            local ok,why=library.apply(id,'host')
+            harness.deny_settings_write=false
+            harness.fail_task_rollback_after_settings_failure=false
+            assert(not ok and (tostring(why):find('保存失败') or tostring(why):find('设置保存失败')))
+            assert(tostring(why):find('任务文件回滚失败'))
+            assert(active.value=='before-failure')
+            return true
+        ''', mod.debug_preset_library(), mod.debug_automation(), h)
+        self.assertTrue(result)
 
     # ---------------------------------------------------------- retired timer
     def test_legacy_quick_timer_runtime_is_inert_after_migration(self):

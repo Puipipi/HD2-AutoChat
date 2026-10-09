@@ -398,6 +398,8 @@ class PingEventsTests(unittest.TestCase):
                 self.assertEqual(event['category'],'building')
                 self.assertEqual(event['resource'],resource)
                 self.assertEqual(event['target'],expected)
+                self.assertTrue(event['target_names'].zh==expected)
+                self.assertTrue(len(event['target_names']['en'])>0)
 
     def test_known_seaf_shell_target_name_uses_english_game_language(self):
         self.setUp()
@@ -410,6 +412,8 @@ class PingEventsTests(unittest.TestCase):
         self.mark(creator=1001,kind=18,localization_key=3585962803)
         self.header(0,1);self.poll(1)
         self.assertEqual(self.events[0][0]['target'],'High-Yield Explosive (SEAF)')
+        self.assertEqual(self.events[0][0]['target_names']['zh'],'大炮 高爆弹')
+        self.assertEqual(self.events[0][0]['target_names']['en'],'High-Yield Explosive (SEAF)')
 
     def test_broken_language_getter_falls_back_without_aborting_event_classification(self):
         self.setUp()
@@ -974,6 +978,9 @@ class PingEventsTests(unittest.TestCase):
                     ''', lambda text: sent.append(text) or True,
                          lambda *row: diagnostics.append(row))
                     automation.set('ping', True); automation.set('ping_sender_prefix', False)
+                    automation.set('message_language', 'zh')
+                    automation.set('ping_message', '标记了{目标}（{类别}）')
+                    automation.set('summon_message', '{玩家名}召唤了{目标}')
                     if rule_id:
                         automation.set_rule('stratagem', rule_id, 'enabled', enabled)
                         automation.set_rule('stratagem', rule_id, 'cooldown', 0)
@@ -1061,6 +1068,8 @@ class PingEventsTests(unittest.TestCase):
                 self.mark(); self.header(0, 1); self.poll(1)
                 if resource in ('79CCFFD281E3F3A9','B4CA4C5B922F7965'):
                     self.assertEqual(self.events[0][0]['category'],'supplies')
+                    self.assertTrue(self.events[0][0]['target_names']['zh'])
+                    self.assertTrue(self.events[0][0]['target_names']['en'])
                 else:
                     self.assertEqual(self.events, [])
         self.assertTrue(self.adapter.supported.supplies)

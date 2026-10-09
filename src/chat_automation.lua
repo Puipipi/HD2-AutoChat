@@ -2,18 +2,18 @@
 -- Session API provenance: P2P-Ping 0.1.34 scope() / update_peer_labels().
 local function build_chat_automation(env)
     local options = {enabled = true, allow_solo = true,
-        welcome = false, welcome_message = '欢迎加入小队！', cooldown = 5,
-        welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
+        welcome = false, welcome_message = 'Welcome to the squad!', cooldown = 5,
+        welcome_delay = 2, message_language = 'en', ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_supplies = false,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
-        ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
-        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad',
+        ping_message = 'Marked {目标} ({类别})', summon_message = '{玩家名} called in {目标}',
+        task_stratagem_message = '{玩家名} started {目标}', output = 'squad',
         quick_timer_enabled = false, quick_timer_interval = 30,
         quick_timer_message = 'HELLO FROM AUTOCHAT'}
     local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
-        'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_supplies', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
+        'cooldown', 'welcome_delay', 'message_language', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_supplies', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
         'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output',
         'quick_timer_enabled', 'quick_timer_interval', 'quick_timer_message'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true, quick_timer_enabled=true,
@@ -38,6 +38,8 @@ local function build_chat_automation(env)
             if type(value) ~= 'boolean' then return false, '开关只能设为开启或关闭' end
         elseif key == 'output' then
             if value ~= 'squad' and value ~= 'local' then return false, '请选择小队公屏或仅自己可见' end
+        elseif key == 'message_language' then
+            if value ~= 'auto' and value ~= 'zh' and value ~= 'en' then return false, '消息语言无效' end
         elseif key == 'cooldown' or key == 'welcome_delay' or key == 'quick_timer_interval' then
             local minimum = key == 'quick_timer_interval' and 5 or 0
             local limit = (key == 'cooldown' or key == 'quick_timer_interval') and 3600 or 60
@@ -96,6 +98,8 @@ local function build_chat_automation(env)
         end
         return result
     end
+    local factory_profiles = {host=copy(options),client=copy(options)}
+    factory_profiles.client.welcome, factory_profiles.client.output = false, 'local'
     local enemy_rules = {small_enemy=true,medium_enemy=true,large_enemy=true,giant_enemy=true,flying_enemy=true}
     local rule_fields = {enabled=true,mark_message=true,call_message=true,cooldown=true}
     local function rule_key(kind,id)
@@ -105,6 +109,8 @@ local function build_chat_automation(env)
             return 'stratagem_'..string.format('%.0f',id)
         end
     end
+    factory_profiles.host.rules={}
+    factory_profiles.client.rules={}
     local function rule_value(field,value)
         if not rule_fields[field] then return false end
         if value==nil or value=='' then return true,nil end
@@ -179,7 +185,7 @@ local function build_chat_automation(env)
     state.legacy_quick_timer_missing = (saved_version or 1)<5
     for _, role in ipairs({'host','client'}) do
         for _, key in ipairs({'quick_timer_enabled','quick_timer_interval','quick_timer_message'}) do
-            if role_values[role][key] == nil then state.legacy_quick_timer_missing = true end
+                if role_values[role][key] == nil then state.legacy_quick_timer_missing = true end
         end
     end
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
@@ -189,15 +195,10 @@ local function build_chat_automation(env)
     profiles.client.welcome, profiles.client.output = false, 'local'
     for _, role in ipairs({'host','client'}) do
         for key,value in pairs(role_values[role]) do profiles[role][key] = value end
-        profiles[role].rules=saved_rules[role]
-        if (saved_version or 1)<4 then
-            -- First upgrade seeds the requested high-TK-risk alerts only. Once
-            -- v4 is saved, clearing these fields really restores global timing.
-            for _,id in ipairs({4119049995,2902516083}) do
-                local key=rule_key('stratagem',id)
-                profiles[role].rules[key]=profiles[role].rules[key] or {cooldown=0}
-            end
+        if role_values[role].message_language==nil and not saved_keys.message_language and saved~=nil then
+            profiles[role].message_language='auto'
         end
+        profiles[role].rules=saved_rules[role]
     end
     for _,key in ipairs(keys) do options[key] = profiles.host[key] end
     state.active_role = 'host'
@@ -222,10 +223,8 @@ local function build_chat_automation(env)
     end
 
     -- Portable named-profile format is deliberately data-only and parsed strictly.
-    function api.export_profile(role, tasks)
-        local source=profiles[role]
-        if not source then return nil,'未知预设' end
-        local lines={'# AutoChat profile v4'}
+    local function encode_profile(source,tasks,plugin_blobs)
+        local lines={'# AutoChat profile v5'}
         for _,key in ipairs(keys) do
             if not key:match('^quick_timer_') then lines[#lines+1]=key..'='..escape(tostring(source[key])) end
         end
@@ -237,7 +236,6 @@ local function build_chat_automation(env)
             end
         end
         tasks=type(tasks)=='table' and tasks or {}
-        if #tasks>32 then return nil,'预设最多包含32个定时任务' end
         lines[#lines+1]='task_count='..tostring(#tasks)
         for i,task in ipairs(tasks) do
             if type(task)~='table' then return nil,'定时任务无效' end
@@ -249,36 +247,74 @@ local function build_chat_automation(env)
                 lines[#lines+1]='task_'..i..'.'..field..'='..escape(value)
             end
         end
+        if plugin_blobs~=nil and type(plugin_blobs)~='table' then return nil,'插件预设数据无效' end
+        plugin_blobs=plugin_blobs or {}
+        local plugin_ids={}
+        for id,blob in pairs(plugin_blobs) do
+            if type(id)~='string' or #id<1 or #id>64 or not id:match('^[%w_.%-]+$')
+                or type(blob)~='string' then return nil,'插件预设数据无效' end
+            plugin_ids[#plugin_ids+1]=id
+        end
+        table.sort(plugin_ids)
+        lines[#lines+1]='plugin_count='..tostring(#plugin_ids)
+        for _,id in ipairs(plugin_ids) do lines[#lines+1]='plugin.'..id..'='..escape(plugin_blobs[id]) end
         local payload=table.concat(lines,'\n')..'\n'
         if #payload>1048576 then return nil,'预设超过 1 MiB' end
         return payload
+    end
+    function api.export_profile(role, tasks, plugin_blobs)
+        local source=profiles[role]
+        if not source then return nil,'未知预设' end
+        return encode_profile(source,tasks,plugin_blobs)
+    end
+    function api.export_default_profile(role, language, templates)
+        local source=factory_profiles[role]
+        if not source then return nil,'未知预设' end
+        if language~='zh' and language~='en' then return nil,'消息语言无效' end
+        source=copy(source)
+        source.message_language=language
+        for key,value in pairs(type(templates)=='table' and templates or {}) do
+            if key=='welcome_message' or key=='ping_message' or key=='summon_message'
+                or key=='task_stratagem_message' or key=='quick_timer_message' then
+                source[key]=value
+            end
+        end
+        return encode_profile(source,{}, {})
     end
     function api.validate_profile(payload)
         if type(payload)~='string' or #payload>1048576 then return false,'预设格式无效或超过 1 MiB' end
         if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
         local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
         local version=tonumber(lines[1]:match('^# AutoChat profile v(%d+)$'))
-        if version~=1 and version~=2 and version~=3 and version~=4 then return false,'预设版本无效' end
-        local values,rules,seen,tasks_by_id={}, {}, {}, {}
-        local task_count
+        if version~=1 and version~=2 and version~=3 and version~=4 and version~=5 then return false,'预设版本无效' end
+        local values,rules,seen,tasks_by_id,plugin_blobs={}, {}, {}, {}, {}
+        local task_count,plugin_count
         local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
         for i=2,#lines do
-            local key,raw=lines[i]:match('^([%w_%.]+)=(.*)$')
+            local key,raw=lines[i]:match('^([%w_%.%-]+)=(.*)$')
             if not key or key=='' or seen[key] then return false,'预设包含空白、重复或无效行' end
             seen[key]=true
             local value=unescape(raw)
             if value==nil or escape(value)~=raw then return false,'预设转义无效' end
-            if not valid_utf8(value) then return false,'预设包含无效 UTF-8' end
+            local plugin_id=key:match('^plugin%.([%w_.%-]+)$')
+            if not valid_utf8(value) and not plugin_id then return false,'预设包含无效 UTF-8' end
             local task_index,task_field=key:match('^task_(%d+)%.([%a_]+)$')
-            if key=='task_count' then
+            if key=='plugin_count' then
+                if version<5 or not value:match('^%d+$') then return false,'插件数据数量无效' end
+                plugin_count=tonumber(value)
+                if plugin_count>#lines then return false,'插件数据数量与文件长度不符' end
+            elseif plugin_id then
+                if version<5 or #plugin_id>64 then return false,'插件数据编号无效' end
+                plugin_blobs[plugin_id]=value
+            elseif key=='task_count' then
                 if version<2 or not value:match('^%d+$') then return false,'定时任务数量无效' end
                 task_count=tonumber(value)
-                if task_count>32 then return false,'预设最多包含32个定时任务' end
+                if task_count>#lines then return false,'定时任务数量与文件长度不符' end
             elseif task_index then
                 local fields={name=true,mode=true,time=true,message=true,enabled=true}
                 if version<2 or not fields[task_field] then return false,'定时任务字段无效' end
                 local index=tonumber(task_index)
-                if not index or index<1 or index>32 or index%1~=0 then return false,'定时任务编号无效' end
+                if not index or index<1 or index%1~=0 then return false,'定时任务编号无效' end
                 if task_field=='enabled' then
                     if value=='true' then value=true elseif value=='false' then value=false else return false,'定时任务开关无效' end
                 end
@@ -324,6 +360,7 @@ local function build_chat_automation(env)
                 elseif (version<3 or version>=4) and key=='quick_timer_enabled' then values[key]=false
                 elseif (version<3 or version>=4) and key=='quick_timer_interval' then values[key]=30
                 elseif (version<3 or version>=4) and key=='quick_timer_message' then values[key]='HELLO FROM AUTOCHAT'
+                elseif key=='message_language' then values[key]='auto'
                 else return false,'缺少设置：'..key end
             end
         end
@@ -353,9 +390,13 @@ local function build_chat_automation(env)
             end
             for i in pairs(tasks_by_id) do if i>task_count then return false,'定时任务数量不匹配' end end
         end
-        local count=0;for _ in pairs(rules) do count=count+1 end
-        if count>512 then return false,'规则数量超过 512' end
-        return true,{values=values,rules=rules,tasks=task_list,version=version}
+        if version>=5 then
+            if plugin_count==nil then return false,'缺少插件数据数量' end
+            local actual=0;for _ in pairs(plugin_blobs) do actual=actual+1 end
+            if actual~=plugin_count then return false,'插件数据数量不匹配' end
+        end
+        return true,{values=values,rules=rules,tasks=task_list,
+            plugins=version>=5 and plugin_blobs or nil,version=version}
     end
     function api.import_profile(payload,role)
         if role~='host' and role~='client' then return false,'未知预设' end
@@ -467,18 +508,28 @@ local function build_chat_automation(env)
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
         supplies='普通物资',
         small_enemy='小型敌人', flying_enemy='飞行敌人', medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
-    function api.category_label(category)
-        local ok,value=pcall(env.category_label or function() return nil end,category)
+    local categories_en = {building='OBJECTIVE BUILDING',stratagem='STRATAGEM',map='MAP MARKER',
+        supplies='SUPPLIES',small_enemy='SMALL ENEMY',flying_enemy='FLYING ENEMY',
+        medium_enemy='MEDIUM ENEMY',large_enemy='LARGE ENEMY',giant_enemy='GIANT ENEMY'}
+    function api.category_label(category,language)
+        local ok,value=pcall(env.category_label or function() return nil end,category,language)
         if ok and type(value)=='string' and value~='' then return value end
-        return categories[category] or '未知'
+        return language=='en' and (categories_en[category] or 'UNKNOWN') or categories[category] or '未知'
     end
-    function api.phrase(key,fallback)
-        local ok,value=pcall(env.phrase or function() return nil end,key)
+    function api.phrase(key,fallback,language)
+        local ok,value=pcall(env.phrase or function() return nil end,key,language)
         if ok and type(value)=='string' and value~='' and value~=key then return value end
+        if language=='en' then
+            local english={['action.mark']='marked',['action.summon']='called in',['action.start']='started',
+                ['objective.primary']='PRIMARY OBJECTIVE',['objective.prerequisite']='PREREQUISITE',
+                ['objective.optional']='OPTIONAL OBJECTIVE',['objective.tactical']='TACTICAL OBJECTIVE',
+                ['objective.unknown']='OBJECTIVE'}
+            return english[key] or fallback
+        end
         return fallback
     end
-    function api.stock_template(value)
-        local ok,result=pcall(env.stock_template or function() return value end,value)
+    function api.stock_template(value,language)
+        local ok,result=pcall(env.stock_template or function() return value end,value,language)
         return ok and type(result)=='string' and result or value
     end
     local function clipped(value, limit)
@@ -489,6 +540,42 @@ local function build_chat_automation(env)
     end
     local function plain(value, limit)
         return clipped(tostring(value or ''):gsub('[%c<>]', ''), limit)
+    end
+    local function clip_color_markup(value,limit)
+        local reset='<c=FFFFFFFF>'
+        local out,used,at,active={},0,1,false
+        while at<=#value do
+            local start_pos,end_pos,hex=value:find('<c=([%x]+)>',at)
+            if not start_pos then
+                local tail=value:sub(at)
+                local budget=math.max(0,limit-used-(active and #reset or 0))
+                if #tail>budget then tail=clipped(tail,budget) end
+                out[#out+1]=tail
+                used=used+#tail
+                if active then out[#out+1]=reset;active=false end
+                break
+            end
+            local prefix=value:sub(at,start_pos-1)
+            local prefix_budget=math.max(0,limit-used-(active and #reset or 0))
+            if #prefix>prefix_budget then
+                prefix=clipped(prefix,prefix_budget)
+                out[#out+1]=prefix;used=used+#prefix
+                if active then out[#out+1]=reset end
+                return table.concat(out)
+            end
+            out[#out+1]=prefix;used=used+#prefix
+            local token=value:sub(start_pos,end_pos)
+            local closing=hex:upper()=='FFFFFFFF'
+            if used+#token>limit or not closing and used+#token+#reset>limit then
+                if active and used+#reset<=limit then out[#out+1]=reset end
+                return table.concat(out)
+            end
+            out[#out+1]=token;used=used+#token
+            active=not closing
+            at=end_pos+1
+        end
+        if active and used+#reset<=limit then out[#out+1]=reset end
+        return table.concat(out)
     end
     local session_peer_hex
     local function identity_for(peer)
@@ -534,12 +621,13 @@ local function build_chat_automation(env)
         end
         return false
     end
-    local function position_text(event)
+    local function position_text(event,language)
         local p = event.position
-        if type(p) ~= 'table' then return '未知位置' end
+        local unknown=language=='en' and 'Unknown position' or '未知位置'
+        if type(p) ~= 'table' then return unknown end
         for _, key in ipairs({'x','y','z'}) do
             local n=p[key]
-            if type(n) ~= 'number' or n ~= n or math.abs(n) > 1000000 then return '未知位置' end
+            if type(n) ~= 'number' or n ~= n or math.abs(n) > 1000000 then return unknown end
         end
         return string.format('(%.0f, %.0f, %.0f)', p.x, p.y, p.z)
     end
@@ -550,14 +638,21 @@ local function build_chat_automation(env)
         return session_peer_hex(peer or snapshot.mine)
     end
 
-    function api.format(template, peer, extra, anonymous)
+    function api.format(template, peer, extra, anonymous, color_player_names, language)
         if type(template) ~= 'string' then return '' end
         if peer == nil then local s=api.snapshot();peer=s and s.mine end
         local identity = identity_for(peer)
-        local name = anonymous and '小队' or identity and plain(identity.name,96) or '队友'
-        local short = anonymous and '小队' or identity and plain(identity.short,16) or '队友'
-        if name=='' then name='队友' end
-        if short=='' then short='队友' end
+        local group,teammate=language=='en' and 'Squad' or '小队',language=='en' and 'Teammate' or '队友'
+        local name = anonymous and group or identity and plain(identity.name,96) or teammate
+        local short = anonymous and group or identity and plain(identity.short,16) or teammate
+        if name=='' then name=teammate end
+        if short=='' then short=teammate end
+        if color_player_names and not anonymous and identity and type(identity.color)=='string'
+            and (#identity.color==6 or #identity.color==8) and identity.color:match('^%x+$') then
+            local color=identity.color:upper()
+            if #color==6 then color='FF'..color end
+            name='<c='..color..'>'..name..'<c=FFFFFFFF>'
+        end
         local slot = not anonymous and identity and identity.color_index
         local number = type(slot)=='number' and slot%1==0 and slot>=0 and slot<=3 and tostring(slot+1) or '?'
         local values = {['{玩家名}']=name,['{名字}']=name,['{触发者}']=name,
@@ -570,7 +665,8 @@ local function build_chat_automation(env)
             end
         end
         -- Function replacement keeps '%' and nested braces in player names literal.
-        return clipped(template:gsub('{[^{}]+}',function(key)return values[key] or key end),512)
+        local formatted=template:gsub('{[^{}]+}',function(key)return values[key] or key end)
+        return color_player_names and clip_color_markup(formatted,512) or clipped(formatted,512)
     end
     local function bucket(peer, snapshot)
         local key = peer or snapshot and snapshot.mine
@@ -678,6 +774,36 @@ local function build_chat_automation(env)
         end
         return save_rules(candidate,role)
     end
+    function api.set_rule_field_batch(kind,ids,field,value,role)
+        api.sync();role=role or state.active_role
+        if not profiles[role] or type(ids)~='table' or #ids==0
+            or (field~='cooldown' and field~='mark_message' and field~='call_message') then
+            return false,'无效批量规则设置'
+        end
+        local removing=value==nil or value==''
+        local valid,converted=rule_value(field,value)
+        if not valid then return false,'无效规则字段值' end
+        local keys_by_id,unique={},{}
+        for _,id in ipairs(ids) do
+            local key=rule_key(kind,id)
+            if not key then return false,'无效战备 ID' end
+            if not unique[key] then unique[key]=true;keys_by_id[#keys_by_id+1]=key end
+        end
+        if #keys_by_id==0 then return false,'没有可更新的规则' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        for _,key in ipairs(keys_by_id) do
+            local rule=candidate[role].rules[key]
+            if removing then
+                if rule then
+                    rule[field]=nil
+                    if not next(rule) then candidate[role].rules[key]=nil end
+                end
+            else
+                rule=rule or {};candidate[role].rules[key]=rule;rule[field]=converted
+            end
+        end
+        return save_rules(candidate,role)
+    end
     function api.reset_rule(kind,id,role)
         api.sync();role=role or state.active_role
         local key=rule_key(kind,id)
@@ -746,7 +872,8 @@ local function build_chat_automation(env)
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
         local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
         if not allowed then state.status = reason; return false, reason end
-        local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message),candidate), state.active_role)
+        local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message, options.message_language),candidate,nil,nil,
+            options.ping_sender_color==true,options.message_language), state.active_role)
         if sent == true then
             state.pending[candidate] = nil; api.record(now,candidate)
             state.status = '已发送新人欢迎'; return true, state.status
@@ -785,27 +912,34 @@ local function build_chat_automation(env)
             end
             if normal_count>=16 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
         end
-        local label = api.category_label(event.category)
+        local message_language=options.message_language
+        local label = api.category_label(event.category,message_language)
         local raw_target=type(event.display_name)=='string' and event.display_name or event.target
+        if type(event.target_names)=='table' then
+            local selected=event.target_names[message_language]
+            if type(selected)=='string' and selected~='' then raw_target=selected end
+        end
         local target = type(raw_target) == 'string' and plain(raw_target,200) or label
         local identity = identity_for(event.creator_id)
-        local short = identity and plain(identity.short, 16) or '队友'
-        if short == '' then short = '队友' end
+        local fallback_teammate=message_language=='en' and 'Teammate' or '队友'
+        local short = identity and plain(identity.short, 16) or fallback_teammate
+        if short == '' then short = fallback_teammate end
         local objective_types = {primary='主线任务', prerequisite='主线前置任务',
             optional='支线任务', tactical='战术任务', unknown='任务'}
         local objective_kind=tostring(event.objective_kind or 'unknown')
-        local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label)
+        local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label,message_language)
         local summoned = event.action == 'summon'
         local executing = event.action == 'use'
         local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and api.phrase('action.summon','召唤') or executing and api.phrase('action.start','开始') or api.phrase('action.mark','标记'),
+            ['{动作}']=summoned and api.phrase('action.summon','召唤',message_language) or executing and api.phrase('action.start','开始',message_language) or api.phrase('action.mark','标记',message_language),
             ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
             ['{任务类型}']=objective_type or label,
-            ['{位置}']=position_text(event)}
+            ['{位置}']=position_text(event,message_language)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
         template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
-        template=api.stock_template(template)
-        local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
+        template=api.stock_template(template,message_language)
+        local text = api.format(template,event.creator_id,replacements,event.anonymous==true,
+            options.ping_sender_color==true,message_language)
         local prefix = ''
         if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
             prefix = '[' .. short .. ']'
@@ -815,7 +949,8 @@ local function build_chat_automation(env)
             end
             prefix = prefix .. ' '
         end
-        text = prefix .. clipped(text, math.max(0, 512 - #prefix))
+        text = prefix .. (options.ping_sender_color and clip_color_markup(text, math.max(0, 512 - #prefix))
+            or clipped(text, math.max(0, 512 - #prefix)))
         state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, rule_id=rule_id, cooldown=rule.cooldown, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}

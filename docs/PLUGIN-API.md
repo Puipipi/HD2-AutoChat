@@ -1,6 +1,6 @@
-# AutoChat 菜单接口 v2，revision 3 扩展
+# AutoChat 菜单接口 v2，revision 4 扩展
 
-运行依赖：Bingus Shared Loader v15+、AutoChat 0.8.6 或更新版本（当前推荐 1.0.0）。协议保留 `version=2` 与 `api_version=2`，新增 `api_revision=3` 和 capabilities；因此只检查 `api_version==2` 的旧插件仍可注册并使用原有发送调用。revision 3 示例包：
+运行依赖：Bingus Shared Loader v15+、AutoChat 0.8.6 或更新版本（当前推荐 1.0.0）。协议保留 `version=2` 与 `api_version=2`，当前 `api_revision=4` 并通过 capabilities 声明可选能力；因此只检查 `api_version==2` 的旧插件仍可注册并使用原有发送调用。revision 4 示例包：
 `src/examples/interface_demo.lua`，资源 `mods/codex/auto_chat_demo`，GUID `a1000000-0000-4000-8000-000000000023`。
 构建：`python -B tools/build_interface_demo.py`。示例输出为 `dist/AutoChat-Interface-Demo-1.0.0.zip`；它与 AutoChat 主包分开构建、启用和部署。
 
@@ -37,7 +37,7 @@ end
 
 `HD2AutoChatPlugins` 与 `HD2AutoChatAPI` 指向同一注册表；旧版 `title` 与 `draw(u,ctx)` 仍兼容。
 `id` 是1–64字节英文/数字/下划线/点/连字符；`name` 是1–96字节显示名。`name_en` 可选，也是1–96字节，并遵循同样的非空白、无控制字符校验。自动语言为英文且存在 `name_en` 时，标签显示英文名；否则显示 `name`。注册身份 `id`、entry 的 `title`/`name` 始终保留原值。ID不可重复，最多16项。
-`draw` 必填，其余回调可选。`register(spec)` 返回 entry 或 `nil,原因`；`unregister(id)` 注销。revision 3 客户端可在注册表或每次回调 API 上检查 `api_revision >= 3` 与 `capabilities`，不要把 `api_version` 改成 3，否则旧版严格检查 `==2` 的插件会停止工作。
+`draw` 必填，其余回调可选。`register(spec)` 返回 entry 或 `nil,原因`；`unregister(id)` 注销。客户端应检查所需的 capability，不要把 `api_version` 改成 3，否则旧版严格检查 `==2` 的插件会停止工作。
 `on_event` 是可选回调；只有确实需要实时游戏事件时才注册。注册该回调会启用宿主事件采样，即使插件在回调内部忽略事件也一样；只提供菜单和自定义发送的插件应省略它。
 菜单显示在“设置”旁，较多时用左右箭头翻页。显示名称过长会截短，注册名保留。
 插件是另一个独立 Lua addon；若宿主已初始化，可直接调用公开的 `HD2AutoChatAPI.register`。若插件更早加载，则把 spec 暂存到 `HD2AutoChatPending[id]`，宿主初始化时会接管。两种路径都无需固定加载顺序。仓库没有 Bingus Shared Loader 或 Arsenal 的资源调度实现，因此不能据管理器列表位置推断运行时先后；插件应始终实现这两条注册路径。ID已注册时拒绝重复注册，不会产生重复菜单。插件自行编写消息文本并在按钮回调中调用 `api.send(text)`，无需接触游戏内存或聊天原生函数。宿主不提供插件文本输入框；需要让用户配置消息时，插件应自行保存设置。当前示例发送插件自己生成的自定义消息。
@@ -69,8 +69,27 @@ draw只负责绘制，不能在其中每帧发送。revision返回改变后的�
 
 `u.line` 用受边界限制的矩形近似线段，不是原生矢量线条。水平和垂直线使用一个矩形；斜线由离散矩形点组成，最多 512 个点，超长或越界线段会被拒绝。
 
-回调 API 的基础字段是 `{version=2,api_version=2,api_revision=3,capabilities,id,context(),settings(),send(...)}`。当前 capabilities 名称为 `independent_send`、`settings`、`plugin_ui`；逐项检查对应字段，不能只凭 revision 假定功能可用。
-`api.settings()` 返回当前已确认角色的只读配置副本，含 `role`（`host` 或 `client`）、`language`（`zh` 或 `en`）、该预设的可序列化字段（如 `enabled`、`allow_solo`、`cooldown`、`output`、各类 `ping_*` 和快捷计时器字段）、深拷贝 `rules`，以及任务数组 `tasks`（每项含 `name`、`mode`、`time`、`message`、`enabled`）。语言自动跟随受支持的游戏语言设置。未确认角色返回 `nil,'role unavailable'`；无效会话或已注销的回调返回 `nil,reason`。快照不可用于修改宿主配置，也不暴露玩家、聊天、运行时对象或回调引用。
+回调 API 的基础字段是 `{version=2,api_version=2,api_revision=4,capabilities,id,context(),settings(),send(...)}`。当前 capabilities 名称为 `independent_send`、`settings`、`plugin_ui`、`plugin_presets`；逐项检查对应字段，不能只凭 revision 假定功能可用。
+`api.settings()` 返回当前已确认角色的只读配置副本，含 `role`（`host` 或 `client`）、`language`（`zh` 或 `en`，宿主界面语言）、`message_language`（`auto`、`zh` 或 `en`，预设消息模式；当前没有单独的界面选项）、该预设的可序列化字段（如 `enabled`、`allow_solo`、`cooldown`、`output`、各类 `ping_*` 和快捷计时器字段）、深拷贝 `rules`，以及任务数组 `tasks`（每项含 `name`、`mode`、`time`、`message`、`enabled`）。`language` 自动跟随受支持的游戏语言设置；它不会更改 `message_language`、消息、规则或任务。新安装的默认消息使用英文，缺少该字段的旧配置以 `message_language='auto'` 兼容读取。两个不可删除的内置预设固定命名为“中文默认预设”和“English Default Preset”，分别使用固定 ID `builtin-host-zh`、`builtin-host-en`、`builtin-client-zh`、`builtin-client-en`，主机与客机各有独立内容；只有用户手动应用预设时才替换当前角色配置。未确认角色返回 `nil,'role unavailable'`；无效会话或已注销的回调返回 `nil,reason`。快照不可用于修改宿主配置，也不暴露玩家、聊天、运行时对象或回调引用。
+
+### 插件预设 opt-in hooks
+
+插件默认不参与主机/客机命名预设。若插件要把自己的设置随 AutoChat 预设保存，注册 spec 可选提供完整四项 `preset` hooks；只提供部分函数会使注册失败：
+
+```lua
+spec.preset = {
+    capture = function(role) return data_string end,
+    validate = function(data_string, role) return true end,
+    apply = function(data_string, role) return true end,
+    restore = function(previous_data_string, role) return true end,
+}
+```
+
+`role` 是 `host` 或 `client`。`capture` 返回插件自己的数据字符串；校验、应用和恢复必须返回 `true`，失败可返回 `false,reason` 或抛出错误。宿主按稳定插件 `id` 保存各插件数据。hooks 只在用户保存、替换或应用预设时调用，不会进入 `draw`、每帧更新或游戏事件热路径。插件应严格校验自有格式和版本；这些回调只处理数据，不发送消息或执行配置内容。当前可移植 profile 为 v5，使用 `plugin_count` 记录插件数据条数，并以 `plugin.<id>=...` 保存按字节转义的不透明 blob；ID 为 1–64 字节英文/数字/下划线/点/连字符。blob 可包含非 UTF-8 字节、NUL 和换行；v1–v4 没有插件 blob。单个 profile 总体最多 1 MiB，超限会拒绝保存或应用。
+
+应用前宿主先校验所有当前已注册且 opt-in 插件的数据，并捕获它们各自的旧状态；只有预检成功才按插件 ID 顺序调用 `apply`。若 hook 执行期间插件注册发生变化，预检会失败且不会开始应用。某个插件或 AutoChat 自身预设应用失败时，宿主按逆序调用已尝试插件的 `restore`，并报告无法恢复的插件 ID。插件应让 `restore` 安全处理部分应用失败，并在失败时返回明确原因。没有对应 blob 时不会调用 hook；缺失、未 opt-in 或未知插件 ID 的数据会保留，不会被擅自应用或丢弃。两个内置默认预设只保存 AutoChat 默认配置，不会更改插件状态。
+
+随包“接口示例”addon 实现了这些 hooks，可离线验证主机和客机分别保存模式、独立开关、冷却、输出与模板索引；发送结果、悬停和提示等临时 UI 状态不写入预设。示例不会自动发送或订阅实时事件。
 
 `api.send(text,creator_id?,options?)` 返回 `成功布尔值,原因`，消息非空、无 NUL、最多 512 UTF-8 字节。旧版 `api.send(text,creator_id?)` 保持 API v2 行为：遵守总开关、当前角色配置、无人房间许可、宿主发送冷却、会话及原生聊天可用性，并采用当前主机/客机预设的输出方式。
 
@@ -92,6 +111,7 @@ AutoChat 0.7.1起，可传入当前事件的完整16位hex `creator_id`，按该
 例如 `api.send('欢迎 {玩家名}（{缩写}，{编号}号）',event.creator_id)`；触发者离队或ID无效会拒绝。
 不传时按本机玩家计时并代入本机信息，旧版调用保持兼容。
 `{玩家名}/{名字}/{触发者}`为名字，`{缩写}`为HUD缩写，`{编号}`为真实队伍槽号；未知变量保留。
+AutoChat 自身的玩家标记消息会按 `ping_sender_color` 同时着色缩写前缀和完整玩家名；插件直接发送的文本不会自动着色。
 失败时接口不自动排队，插件按返回原因决定何时重试；勿每帧重试。
 不要保留旧回调中的 api 发送器，切房或注销后会拒绝；在当前回调中获取新的 api。
 注册表还提供 `send(id,text,creator_id?,options?)`、`settings(id)` 和 `click(id,key)`，供同进程直接调用。`settings(id)` 返回相同的只读配置副本；传入不存在或未注册的 ID 会返回 `nil,reason`。直接调用 `send` 与 callback API 使用相同 options 和发送校验。
@@ -114,9 +134,9 @@ AutoChat 0.7.1起，可传入当前事件的完整16位hex `creator_id`，按该
 | `stratagem_rule_id / stratagem_group / stratagem_ambiguous` | 0.8.0：同名且呼叫方式相同的变体共用设置规则ID；分组为red/blue/green/other；无法唯一确认具体变体时ambiguous=true且不伪造stratagem_id |
 | `resource / target_id / localization_key / slot` | 可选调查字段 |
 
-这是经过归属与会话检查的本人或队友新标记、战备召唤及任务执行。共享调用不能证明触发者时不提供creator_id，插件应显示“小队”，不可把缺省ID代入本机冒充调用者。可确认身份的普通物资以 `supplies` 类别发布；宿主普通物资自动提醒默认关闭，但插件订阅者仍可观察这类事件。未能确认身份的地图物资、地面空点和地图空白点不发布，进入房间时已有标记只建基线。
+这是经过归属与会话检查的本人或队友新标记、战备召唤及任务执行。共享调用不能证明触发者时不提供creator_id，插件应显示本地化的“小队 / Squad”，不可把缺省ID代入本机冒充调用者。可确认身份的普通物资以 `supplies` 类别发布；宿主普通物资自动提醒默认关闭，但插件订阅者仍可观察这类事件。未能确认身份的地图物资、地面空点和地图空白点不发布，进入房间时已有标记只建基线。
 地图任务字段来自目标实体与当局任务记录，不按名称猜分类；撤离区没有任务字段。
-订阅者存在时，即使宿主自动消息关闭也读取并发布观察事件。继承模式的调用发送仍受宿主总开关限制；独立模式按其 `enabled` 与冷却策略决定是否发送，并继续经过其他宿主校验。
+订阅者存在时，即使宿主自动消息关闭也读取并发布观察事件。继承模式的调用发送仍受宿主总开关限制；独立模式按其 `enabled` 与冷却策略决定是否发送，并继续经过其他宿主校验。预设池、任务列表和规则没有条目数量上限，但持久化文件、预设payload及各字段仍受显式字节大小和格式校验限制；插件事件队列、菜单数和独立冷却桶也有各自的运行时容量边界。
 每个插件接收独立的有界事件副本；某个插件改事件不会影响其他插件或自动消息。
 回调异常被隔离并记日志，draw故障会移除该菜单，其他回调故障保留菜单并限量记日志。
 这些接口用于合作模组，不是隔离不可信Lua的沙箱。
