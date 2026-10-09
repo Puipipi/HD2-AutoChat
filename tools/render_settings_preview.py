@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "work/standalone/tests"))
 from test_auto_chat_probe import fresh_image, SOURCE
 
 
-def render(output, populated=False, automation=False, view=None, plugin=False):
+def render(output, populated=False, automation=False, view=None, plugin=False, profile=None):
     lua, h = fresh_image(font_ids=True)
     mod = h.load(SOURCE)
     if plugin:
@@ -56,6 +56,8 @@ def render(output, populated=False, automation=False, view=None, plugin=False):
         mod.debug_panel()['settings_view'] = 'automation'
     if view:
         mod.debug_panel()['settings_view'] = view
+    if profile:
+        mod.debug_panel()['profile'] = profile
     lua.execute("for i=1,601 do update() end")
     if mod.draw_errors or mod.panel_errors:
         raise RuntimeError(str(mod.debug_panel()["hint"]) + str(mod.draw_error_text))
@@ -86,3 +88,4 @@ if __name__ == "__main__":
 
     render(ROOT / "docs/ping-preview.png", populated=True, view="pings")
     render(ROOT / "docs/plugin-demo-preview.png", plugin=True)
+    render(ROOT / "docs/client-profile-preview.png", automation=True, profile='client')

@@ -7,10 +7,10 @@ local function build_chat_automation(env)
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
-        task_stratagem_message = '{玩家名}正在开始{目标}'}
+        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
@@ -32,6 +32,8 @@ local function build_chat_automation(env)
             if type(value) ~= 'boolean' then return false, '开关只能设为开启或关闭' end
         elseif key == 'scope' then
             if value ~= 'all' and value ~= 'host' then return false, '发送范围只能选仅主机或主机和客机' end
+        elseif key == 'output' then
+            if value ~= 'squad' and value ~= 'local' then return false, '请选择小队公屏或仅自己可见' end
         elseif key == 'cooldown' or key == 'welcome_delay' then
             local limit = key == 'cooldown' and 3600 or 60
             if type(value) ~= 'number' or value ~= value or value < 0 or value > limit
@@ -59,17 +61,29 @@ local function build_chat_automation(env)
             return string.char(tonumber(h, 16))
         end))
     end
+    local function copy(source)
+        local result = {}; for _, key in ipairs(keys) do result[key] = source[key] end
+        return result
+    end
+    local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v2'}
-        for _, key in ipairs(keys) do lines[#lines + 1] = key .. '=' .. escape(tostring(candidate[key])) end
+        local lines = {'# AutoChat automation settings v3'}
+        for _, role in ipairs({'host','client'}) do
+            for _, key in ipairs(keys) do
+                lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
+            end
+        end
         return table.concat(lines, '\n') .. '\n'
     end
     local saved_keys, legacy = {}, {}
+    local role_values = {host={},client={}}
     local saved = attempt(env.read_file)
     if type(saved) == 'string' then
         for line in saved:gmatch('[^\r\n]+') do
-            local key, raw = line:match('^([%w_]+)=(.*)$')
+            local key, raw = line:match('^([%w_%.]+)=(.*)$')
             if key then
+                local role, name = key:match('^(%a+)%.([%w_]+)$')
+                if role then key = name end
                 local value = unescape(raw)
                 if booleans[key] then
                     if value == 'true' then value = true
@@ -80,7 +94,10 @@ local function build_chat_automation(env)
                 end
                 if (key == 'ping_small_items' or key == 'ping_mission') and (value == 'true' or value == 'false') then
                     legacy[key] = value == 'true'
-                elseif validate(key, value) then options[key] = value; saved_keys[key] = true end
+                elseif validate(key, value) then
+                    if role == 'host' or role == 'client' then role_values[role][key] = value
+                    elseif not role then options[key] = value; saved_keys[key] = true end
+                end
             end
         end
     end
@@ -93,6 +110,14 @@ local function build_chat_automation(env)
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
         options.ping_message = '标记了{目标}（{类别}）'
     end
+    profiles = {host=copy(options), client=copy(options)}
+    profiles.client.welcome, profiles.client.output, profiles.client.scope = false, 'local', 'all'
+    for _, role in ipairs({'host','client'}) do
+        for key,value in pairs(role_values[role]) do profiles[role][key] = value end
+    end
+    for _,key in ipairs(keys) do options[key] = profiles.host[key] end
+    state.active_role = 'host'
+    function api.profile(role) return profiles[role or state.active_role] end
 
     local function peer_key(value)
         local kind = type(value)
@@ -138,6 +163,31 @@ local function build_chat_automation(env)
         if host and present[host] then is_host = host == mine end
         return {session = session, context = attempt(env.context), mine = mine, host = host,
             peers = all, remote = remote, present = present, is_host = is_host}
+    end
+
+    function api.sync(snapshot)
+        snapshot = snapshot or api.snapshot()
+        local role = snapshot and snapshot.is_host ~= nil and (snapshot.is_host and 'host' or 'client') or nil
+        if not role then return nil end
+        if role ~= state.active_role then
+            state.active_role = role
+            for _, key in ipairs(keys) do options[key] = profiles[role][key] end
+            state.pending, state.pings, state.ping_seen, state.last_by_peer = {}, {}, {}, {}
+            state.baseline, state.last_send = nil, nil
+            state.status = role == 'host' and '已切换主机预设' or '已切换客机预设'
+        end
+        return role
+    end
+    function api.send(text, expected_role)
+        local role = api.sync()
+        if not role then return false, '等待：主机身份尚未确认' end
+        if expected_role and role ~= expected_role then return false, '身份已变化，取消旧预设消息' end
+        if options.output == 'local' then
+            local ok, why = attempt(env.send_local, text)
+            return ok == true, why or '本地显示入口不可用'
+        end
+        local ok, why = attempt(env.send, text)
+        return ok == true, why
     end
 
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
@@ -266,6 +316,7 @@ local function build_chat_automation(env)
         return true, '可以自动发送'
     end
     function api.check(now, others, peer)
+        api.sync()
         return policy(now, others, api.snapshot(), peer)
     end
     function api.record(now, peer)
@@ -278,19 +329,24 @@ local function build_chat_automation(env)
     local function reset()
         state.baseline, state.pending = nil, {}
     end
-    function api.set(key, value)
+    function api.set(key, value, role)
+        api.sync()
+        role = role or state.active_role
+        if not profiles[role] then return false, '未知预设' end
         local ok, why = validate(key, value)
         if not ok then return false, why end
-        if options[key] == value then return true, '设置未变化' end
-        local candidate = {}
-        for _, name in ipairs(keys) do candidate[name] = options[name] end
-        candidate[key] = value
+        if profiles[role][key] == value then return true, '设置未变化' end
+        local candidate = {host=copy(profiles.host), client=copy(profiles.client)}
+        candidate[role][key] = value
         -- The environment writes a temporary file and renames it atomically.
         -- Commit options only after that succeeds; queue/baseline also survive failure.
         if attempt(env.write_file, serialize(candidate)) ~= true then return false, '设置保存失败，已保留原设置' end
+        profiles[role][key] = value
+        if role ~= state.active_role then state.status='设置已保存';return true,state.status end
         options[key] = value
         if key == 'enabled' or key == 'welcome' or key == 'scope' then reset() end
-        if key == 'enabled' or key == 'scope' or key == 'ping' then state.pings = {} end
+        if key == 'enabled' or key == 'scope' or key == 'ping' or key == 'output' then state.pings = {} end
+        if key == 'output' then reset() end
         state.status = '设置已保存'
         return true, state.status
     end
@@ -340,7 +396,7 @@ local function build_chat_automation(env)
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
         local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
         if not allowed then state.status = reason; return false, reason end
-        local sent, send_why = attempt(env.send, api.format(options.welcome_message,candidate))
+        local sent, send_why = api.send(api.format(options.welcome_message,candidate), state.active_role)
         if sent == true then
             state.pending[candidate] = nil; api.record(now,candidate)
             state.status = '已发送新人欢迎'; return true, state.status
@@ -356,6 +412,7 @@ local function build_chat_automation(env)
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
+        api.sync()
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then return false end
@@ -393,7 +450,7 @@ local function build_chat_automation(env)
         text = prefix .. clipped(text, math.max(0, 512 - #prefix))
         state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
-            host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil}
+            host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
         state.ping_seen[event.key] = now + 30
         return true
     end
@@ -420,7 +477,7 @@ local function build_chat_automation(env)
             end
         end
         if not pending then return false end
-        local sent = attempt(env.send, pending.text)
+        local sent = api.send(pending.text, pending.role)
         if sent == true then
             table.remove(state.pings,index); api.record(now,pending.creator_id)
             state.status='已发送玩家标记提示'; return true, state.status
@@ -430,6 +487,7 @@ local function build_chat_automation(env)
         return false, state.status
     end
     function api.poll(now)
+        api.sync()
         local sent, why = poll_welcome(now)
         if sent then return sent, why end
         local ping_sent, ping_why = poll_ping(now)

@@ -26,7 +26,8 @@ class ScheduledTasksTest(unittest.TestCase):
         lua.globals().test_identity = mod.debug_identity()
         lua.execute("""
             stingray.Network={game_session=function()return 'room' end,peer_id=function()return '76561198000000001' end}
-            stingray.GameSession={peers=function()return {'76561198000000001'} end}
+            stingray.GameSession={peers=function()return {'76561198000000001'} end,
+                game_session_host=function()return '76561198000000001' end}
             test_identity.lookup=function(peer) return {peer_id=peer,name='Alice',short='A1',color_index=0} end
         """)
         mod.add_task('template','once','5','{玩家名} {缩写} {编号}',1000)

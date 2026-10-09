@@ -119,6 +119,14 @@ end
 function Bytes:__tostring() return self.text end
 
 local function new_buffer(ctype, arg)
+    if ctype == 'uint64_t[1]' then
+        return setmetatable({text=''}, {__index=function(self,key)
+            if key == 0 then
+                local out={};for i=8,1,-1 do out[#out+1]=string.format('%02X',self.text:byte(i) or 0) end
+                return table.concat(out)
+            end
+        end})
+    end
     if ctype == 'uint8_t[?]' then
         return setmetatable({n = arg, chars = {}, text = ''}, Bytes)
     end
@@ -481,6 +489,15 @@ function harness.install()
     harness.live_guis = 0
     harness.main_world = 'WORLD_MAIN'
     _G.stingray = {
+        Network = {game_session=function() return 'fixture-session' end,
+            peer_id=function() return tostring(0x00112233445566) end},
+        GameSession = {
+            game_session_host=function() return tostring(0x00112233445566) end,
+            peers=function()
+                local peers={tostring(0x00112233445566)}
+                for i=1,(tonumber(harness.opts.others) or 1) do peers[#peers+1]=tostring(0x00112233445566+i) end
+                return peers
+            end},
         Application = {
             main_world = function() return harness.main_world end,
             worlds = function() return {harness.main_world} end,

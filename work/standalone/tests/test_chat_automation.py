@@ -17,6 +17,7 @@ local sr = {
         peers = function() return h.peers end,
         game_session_host = function() return h.host end} }
 h.sr = sr
+h.factory = build_chat_automation
 function h.new(content)
     return build_chat_automation({engine = function() return h.sr end,
         context = function() return h.context end,
@@ -31,6 +32,10 @@ function h.new(content)
         send = function(text)
             h.sent[#h.sent + 1] = text
             return h.send_ok, 'text chat is off'
+        end,
+        send_local = function(text)
+            h.local_sent = h.local_sent or {};h.local_sent[#h.local_sent+1]=text
+            return true,'local'
         end})
 end
 h.a = h.new()
@@ -46,6 +51,75 @@ class AutomationTests(unittest.TestCase):
 
     def run_lua(self, code):
         return self.lua.execute("local h = ...; local a = h.a; " + code, self.h)
+
+    def test_role_profiles_migrate_old_settings_and_save_independently(self):
+        self.run_lua('''
+            local b=h.new('welcome=true\\nping=true\\nping_message=旧消息\\n')
+            assert(b.profile('host').welcome and b.profile('host').ping_message=='旧消息')
+            assert(not b.profile('client').welcome and b.profile('client').output=='local')
+            assert(b.set('ping_message','客机消息','client'))
+            assert(b.profile('host').ping_message=='旧消息')
+            local c=h.new(h.writes[#h.writes])
+            assert(c.profile('client').ping_message=='客机消息')
+            assert(c.profile('host').welcome)
+        ''')
+
+    def test_client_output_never_falls_back_to_public_chat(self):
+        self.run_lua('''
+            h.host='76561198000000002';h.peers={h.mine,h.host}
+            local n=0;h.local_ok=false
+            local b=h.factory({engine=function()return h.sr end,
+                context=function()return h.context end,write_file=function()return true end,
+                send=function()n=n+1;return true end,
+                send_local=function()return h.local_ok,'local unavailable' end})
+            assert(b.sync()=='client'); assert(b.options.output=='local')
+            assert(not b.send('private')); assert(n==0)
+            h.local_ok=true;assert(b.send('private'));assert(n==0)
+            h.host=h.mine;assert(b.send('public'));assert(n==1)
+        ''')
+
+    def test_role_change_cancels_old_pending_messages_and_cooldown(self):
+        self.run_lua('''
+            assert(a.set('ping',true));assert(a.set('welcome',true))
+            assert(a.push_ping({key='old',category='stratagem',target='旧标记'},1000))
+            a.record(1000)
+            h.host='76561198000000002';h.peers={h.mine,h.host}
+            assert(a.sync()=='client');assert(#a.state.pings==0)
+            assert(next(a.state.pending)==nil and next(a.state.last_by_peer)==nil)
+            assert(not a.options.welcome and a.options.output=='local')
+        ''')
+
+    def test_inactive_profile_edits_do_not_change_active_output_or_clear_queue(self):
+        self.run_lua('''
+            a.sync();assert(a.set('ping',true))
+            assert(a.push_ping({key='kept',category='stratagem'},1000))
+            assert(a.set('enabled',false,'client'));assert(a.options.enabled)
+            assert(#a.state.pings==1)
+            h.write_ok=false
+            assert(not a.set('output','squad','client'))
+            assert(a.profile('client').output=='local')
+        ''')
+
+    def test_unknown_identity_cannot_broadcast_using_previous_host_preset(self):
+        self.run_lua('''
+            a.sync();h.host=nil
+            assert(not a.send('must not leak'));assert(#h.sent==0)
+            assert(not a.set('output','invalid','host'))
+            assert(not a.set('welcome',true,'invalid'))
+        ''')
+
+    def test_client_ping_and_explicit_client_welcome_use_only_local_output(self):
+        self.run_lua('''
+            h.host='76561198000000002';h.peers={h.mine,h.host}
+            assert(a.set('ping',true,'client'));assert(a.set('cooldown',0,'client'))
+            assert(a.push_ping({key='mark',category='medium_enemy',target='武斗虫',creator_id=h.host},1000))
+            assert(a.poll(1000));assert(#h.sent==0 and #h.local_sent==1)
+            assert(h.local_sent[1]:find('武斗虫',1,true))
+            assert(a.set('welcome',true,'client'));a.poll(1001)
+            h.peers[3]='76561198000000003';a.poll(1002);assert(a.poll(1004))
+            assert(#h.sent==0 and #h.local_sent==2)
+            assert(not a.send('old host message','host'));assert(#h.sent==0)
+        ''')
 
     def test_task_execution_has_a_custom_persistent_template_and_obeys_call_switch(self):
         self.run_lua("""
@@ -298,6 +372,7 @@ class AutomationTests(unittest.TestCase):
     def test_host_and_client_are_distinct_boolean_states(self):
         self.run_lua("""
             assert(a.set('scope', 'host'))
+            assert(a.set('scope', 'host','client'))
             assert(a.snapshot().is_host == true and a.check(0, 0))
             h.host = '76561198000000002'; h.peers[2] = h.host
             assert(a.snapshot().is_host == false)

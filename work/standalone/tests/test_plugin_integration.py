@@ -16,7 +16,8 @@ class PluginIntegrationTests(unittest.TestCase):
         lua.execute('''
             test_peers={'76561198000000001',test_peer_a,test_peer_b}
             stingray.Network={game_session=function()return 'room' end,peer_id=function()return test_peers[1] end}
-            stingray.GameSession={peers=function()return test_peers end}
+            stingray.GameSession={peers=function()return test_peers end,
+                game_session_host=function()return test_peers[1] end}
             test_profiles={
                 ['0110000100000022']={peer_id='0110000100000022',name='Alice',short='A2',color_index=1},
                 ['0110000100000023']={peer_id='0110000100000023',name='Bob',short='B3',color_index=2}}

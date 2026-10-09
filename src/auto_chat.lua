@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.7.8', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.7.9', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -179,6 +179,11 @@ M.HISTORY_TEXT_AT = 0x208
 M.SEND_RVA  = 0x1097560
 M.SEND_TYPE = 'void (*)(uint64_t, int, const char *)'
 M.MAX_TEXT  = 512
+-- Current-build read-only text capture: game.dll 0x10979C0 is add-line,
+-- called by both normal chat send and receive. It never broadcasts a message.
+-- Keep its optional signature separate: failure disables local output only.
+M.LOCAL_LINE_RVA = 0x10979c0
+M.LOCAL_LINE_BYTES = '\64\87\65\85\65\86\72\131\236\64\128\57\0\77\139\232\76\139\242\72\139\249\15\132\167\2\0\0'
 M.REGION_PROBE = 4096
 
 M.CODE = {
@@ -467,6 +472,36 @@ function M.send_text(text, verbose, force)
     return true, others
 end
 
+local function local_output_context()
+    local chat, why = send_context(true)
+    if not chat then return nil, why end
+    if read_at(game_base + M.LOCAL_LINE_RVA, #M.LOCAL_LINE_BYTES) ~= M.LOCAL_LINE_BYTES then
+        return nil, '本地聊天签名不匹配；未向小队发送'
+    end
+    local ctx = u64(game_base + M.CONTEXT_PTR)
+    local own = ctx and read_at(ctx + M.LOCAL, 8)
+    if not own or own == string.rep('\0', 8) then return nil, '本机玩家身份不可用' end
+    return chat, own
+end
+function M.display_local(text)
+    if type(text) ~= 'string' or #text == 0 or text:find('%z') then return false, 'empty or invalid text' end
+    local chat, own = local_output_context()
+    if not chat then return false, own end
+    -- Copy all 64 bits. Converting a peer ID to a Lua number loses precision.
+    local peer = ffi.new('uint64_t[1]')
+    ffi.copy(peer, own, 8)
+    local clipped = cut_utf8(text, M.MAX_TEXT)
+    ffi.copy(chat_buffer, clipped .. '\0')
+    local okay, err = pcall(function()
+        local fn = ffi.cast('void (*)(uint64_t, uint64_t, const char *)', game_base + M.LOCAL_LINE_RVA)
+        fn(chat, peer[0], chat_buffer)
+    end)
+    if not okay then return false, '本地消息显示失败：' .. tostring(err) end
+    M.local_shown = (M.local_shown or 0) + 1
+    note('local-only message: ' .. tostring(#clipped) .. ' bytes; no network send')
+    return true, 'local'
+end
+
 -- ---------------------------------------------------------------- 9. pixel font
 -- Every glyph is a 4x5 bitmap drawn with Gui.rect. No engine font, no material:
 -- create_screen_gui before the engine's font/material libraries exist faults at
@@ -727,10 +762,10 @@ local function build_chat_automation(env)
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
-        task_stratagem_message = '{玩家名}正在开始{目标}'}
+        task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
@@ -752,6 +787,8 @@ local function build_chat_automation(env)
             if type(value) ~= 'boolean' then return false, '开关只能设为开启或关闭' end
         elseif key == 'scope' then
             if value ~= 'all' and value ~= 'host' then return false, '发送范围只能选仅主机或主机和客机' end
+        elseif key == 'output' then
+            if value ~= 'squad' and value ~= 'local' then return false, '请选择小队公屏或仅自己可见' end
         elseif key == 'cooldown' or key == 'welcome_delay' then
             local limit = key == 'cooldown' and 3600 or 60
             if type(value) ~= 'number' or value ~= value or value < 0 or value > limit
@@ -779,17 +816,29 @@ local function build_chat_automation(env)
             return string.char(tonumber(h, 16))
         end))
     end
+    local function copy(source)
+        local result = {}; for _, key in ipairs(keys) do result[key] = source[key] end
+        return result
+    end
+    local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v2'}
-        for _, key in ipairs(keys) do lines[#lines + 1] = key .. '=' .. escape(tostring(candidate[key])) end
+        local lines = {'# AutoChat automation settings v3'}
+        for _, role in ipairs({'host','client'}) do
+            for _, key in ipairs(keys) do
+                lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
+            end
+        end
         return table.concat(lines, '\n') .. '\n'
     end
     local saved_keys, legacy = {}, {}
+    local role_values = {host={},client={}}
     local saved = attempt(env.read_file)
     if type(saved) == 'string' then
         for line in saved:gmatch('[^\r\n]+') do
-            local key, raw = line:match('^([%w_]+)=(.*)$')
+            local key, raw = line:match('^([%w_%.]+)=(.*)$')
             if key then
+                local role, name = key:match('^(%a+)%.([%w_]+)$')
+                if role then key = name end
                 local value = unescape(raw)
                 if booleans[key] then
                     if value == 'true' then value = true
@@ -800,7 +849,10 @@ local function build_chat_automation(env)
                 end
                 if (key == 'ping_small_items' or key == 'ping_mission') and (value == 'true' or value == 'false') then
                     legacy[key] = value == 'true'
-                elseif validate(key, value) then options[key] = value; saved_keys[key] = true end
+                elseif validate(key, value) then
+                    if role == 'host' or role == 'client' then role_values[role][key] = value
+                    elseif not role then options[key] = value; saved_keys[key] = true end
+                end
             end
         end
     end
@@ -813,6 +865,14 @@ local function build_chat_automation(env)
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
         options.ping_message = '标记了{目标}（{类别}）'
     end
+    profiles = {host=copy(options), client=copy(options)}
+    profiles.client.welcome, profiles.client.output, profiles.client.scope = false, 'local', 'all'
+    for _, role in ipairs({'host','client'}) do
+        for key,value in pairs(role_values[role]) do profiles[role][key] = value end
+    end
+    for _,key in ipairs(keys) do options[key] = profiles.host[key] end
+    state.active_role = 'host'
+    function api.profile(role) return profiles[role or state.active_role] end
 
     local function peer_key(value)
         local kind = type(value)
@@ -858,6 +918,31 @@ local function build_chat_automation(env)
         if host and present[host] then is_host = host == mine end
         return {session = session, context = attempt(env.context), mine = mine, host = host,
             peers = all, remote = remote, present = present, is_host = is_host}
+    end
+
+    function api.sync(snapshot)
+        snapshot = snapshot or api.snapshot()
+        local role = snapshot and snapshot.is_host ~= nil and (snapshot.is_host and 'host' or 'client') or nil
+        if not role then return nil end
+        if role ~= state.active_role then
+            state.active_role = role
+            for _, key in ipairs(keys) do options[key] = profiles[role][key] end
+            state.pending, state.pings, state.ping_seen, state.last_by_peer = {}, {}, {}, {}
+            state.baseline, state.last_send = nil, nil
+            state.status = role == 'host' and '已切换主机预设' or '已切换客机预设'
+        end
+        return role
+    end
+    function api.send(text, expected_role)
+        local role = api.sync()
+        if not role then return false, '等待：主机身份尚未确认' end
+        if expected_role and role ~= expected_role then return false, '身份已变化，取消旧预设消息' end
+        if options.output == 'local' then
+            local ok, why = attempt(env.send_local, text)
+            return ok == true, why or '本地显示入口不可用'
+        end
+        local ok, why = attempt(env.send, text)
+        return ok == true, why
     end
 
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
@@ -986,6 +1071,7 @@ local function build_chat_automation(env)
         return true, '可以自动发送'
     end
     function api.check(now, others, peer)
+        api.sync()
         return policy(now, others, api.snapshot(), peer)
     end
     function api.record(now, peer)
@@ -998,19 +1084,24 @@ local function build_chat_automation(env)
     local function reset()
         state.baseline, state.pending = nil, {}
     end
-    function api.set(key, value)
+    function api.set(key, value, role)
+        api.sync()
+        role = role or state.active_role
+        if not profiles[role] then return false, '未知预设' end
         local ok, why = validate(key, value)
         if not ok then return false, why end
-        if options[key] == value then return true, '设置未变化' end
-        local candidate = {}
-        for _, name in ipairs(keys) do candidate[name] = options[name] end
-        candidate[key] = value
+        if profiles[role][key] == value then return true, '设置未变化' end
+        local candidate = {host=copy(profiles.host), client=copy(profiles.client)}
+        candidate[role][key] = value
         -- The environment writes a temporary file and renames it atomically.
         -- Commit options only after that succeeds; queue/baseline also survive failure.
         if attempt(env.write_file, serialize(candidate)) ~= true then return false, '设置保存失败，已保留原设置' end
+        profiles[role][key] = value
+        if role ~= state.active_role then state.status='设置已保存';return true,state.status end
         options[key] = value
         if key == 'enabled' or key == 'welcome' or key == 'scope' then reset() end
-        if key == 'enabled' or key == 'scope' or key == 'ping' then state.pings = {} end
+        if key == 'enabled' or key == 'scope' or key == 'ping' or key == 'output' then state.pings = {} end
+        if key == 'output' then reset() end
         state.status = '设置已保存'
         return true, state.status
     end
@@ -1060,7 +1151,7 @@ local function build_chat_automation(env)
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
         local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
         if not allowed then state.status = reason; return false, reason end
-        local sent, send_why = attempt(env.send, api.format(options.welcome_message,candidate))
+        local sent, send_why = api.send(api.format(options.welcome_message,candidate), state.active_role)
         if sent == true then
             state.pending[candidate] = nil; api.record(now,candidate)
             state.status = '已发送新人欢迎'; return true, state.status
@@ -1076,6 +1167,7 @@ local function build_chat_automation(env)
         return options['ping_' .. category]
     end
     function api.push_ping(event, now)
+        api.sync()
         if type(event) ~= 'table' or not categories[event.category] or type(event.key) ~= 'string'
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then return false end
@@ -1113,7 +1205,7 @@ local function build_chat_automation(env)
         text = prefix .. clipped(text, math.max(0, 512 - #prefix))
         state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
-            host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil}
+            host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
         state.ping_seen[event.key] = now + 30
         return true
     end
@@ -1140,7 +1232,7 @@ local function build_chat_automation(env)
             end
         end
         if not pending then return false end
-        local sent = attempt(env.send, pending.text)
+        local sent = api.send(pending.text, pending.role)
         if sent == true then
             table.remove(state.pings,index); api.record(now,pending.creator_id)
             state.status='已发送玩家标记提示'; return true, state.status
@@ -1150,6 +1242,7 @@ local function build_chat_automation(env)
         return false, state.status
     end
     function api.poll(now)
+        api.sync()
         local sent, why = poll_welcome(now)
         if sent then return sent, why end
         local ping_sent, ping_why = poll_ping(now)
@@ -1185,6 +1278,7 @@ automation = build_chat_automation({
         return '<c=' .. argb:upper() .. '>' .. prefix .. '<c=FFFFFFFF>'
     end,
     send = function(text) return M.send_text(text, true, true) end,
+    send_local = function(text) return M.display_local(text) end,
 })
 M.options = automation.options
 function M.debug_automation() return automation end
@@ -2460,6 +2554,13 @@ M.task_stratagem_status = '等待任务战备数据'
 
 -- Tasks are data, never executable Lua. Percent escaping preserves UTF-8 and delimiters.
 M.tasks = {}
+function M.profile_tasks(role)
+    local result = {}
+    for _, task in ipairs(M.tasks) do
+        if (task.profile or 'host') == role then result[#result+1] = task end
+    end
+    return result
+end
 local task_serial, task_revision = 0, 0
 local MAX_TASKS = 32
 local function single_line(value)
@@ -2500,7 +2601,7 @@ local function serialize_tasks()
     local out = {'AutoChatTasks1'}
     for _, t in ipairs(M.tasks) do
         local row = {t.id, t.mode, t.time, t.enabled and '1' or '0',
-                     t.done and '1' or '0', t.due or 0, t.last_day or '-', t.name, t.message}
+                     t.done and '1' or '0', t.due or 0, t.last_day or '-', t.name, t.message, t.profile or 'host'}
         for i = 1, #row do row[i] = escape_field(row[i]) end
         out[#out + 1] = table.concat(row, '\t')
     end
@@ -2516,13 +2617,15 @@ local function restore_tasks(data)
         else
             local f = {}
             for v in (line .. '\t'):gmatch('(.-)\t') do f[#f + 1] = unescape_field(v) end
-            if #f ~= 9 or #list >= MAX_TASKS then return false end
+            if (#f ~= 9 and #f ~= 10) or #list >= MAX_TASKS then return false end
+            if f[10] and f[10] ~= 'host' and f[10] ~= 'client' then return false end
             local t = task_validate(f[8], f[2], f[3], f[9])
             local id, due = tonumber(f[1]), tonumber(f[6])
             if not t or not id or id < 1 or id > 1000000000 or id ~= math.floor(id)
                 or ids[id] or not due or due < 0 or due > 1e12
                 or not f[4]:match('^[01]$') or not f[5]:match('^[01]$') then return false end
             t.id, t.due, t.enabled, t.done = id, due, f[4] == '1', f[5] == '1'
+            t.profile = f[10] or 'host'
             t.last_day = f[7] ~= '-' and f[7] or nil
             list[#list + 1], ids[id], serial = t, true, math.max(serial, id)
         end
@@ -2557,13 +2660,15 @@ local function load_tasks()
     handle:close()
     if not restore_tasks(data) then note('tasks: invalid file; not loaded') end
 end
-function M.add_task(name, mode, time, message, now)
+function M.add_task(name, mode, time, message, now, profile)
+    profile = profile or automation.sync() or 'host'
+    if profile ~= 'host' and profile ~= 'client' then return nil, '未知预设' end
     if #M.tasks >= MAX_TASKS then return nil, '最多添加 32 个任务' end
     local t, why = task_validate(name, mode, time, message)
     if not t then return nil, why end
     task_serial = task_serial + 1
     now = now or os.time()
-    t.id, t.due = task_serial, now + (t.seconds or 0)
+    t.id, t.due, t.profile = task_serial, now + (t.seconds or 0), profile
     if mode == 'daily' then
         local c = os.date('*t', now)
         if type(c) == 'table' and c.hour * 60 + c.min >= t.minute then
@@ -2604,6 +2709,8 @@ function M.toggle_task(id, now)
     return false
 end
 local function run_tasks(now)
+    local active_role = automation.sync()
+    if not active_role then return end
     local calendar
     local ordered, order = {}, {}
     for i, t in ipairs(M.tasks) do
@@ -2623,7 +2730,7 @@ local function run_tasks(now)
     end)
     for _, t in ipairs(ordered) do
         local due, day = false, nil
-        if t.enabled and not t.done and (not t.retry_after or now >= t.retry_after) then
+        if (t.profile or 'host') == active_role and t.enabled and not t.done and (not t.retry_after or now >= t.retry_after) then
             if t.mode == 'daily' then
                 calendar = calendar or os.date('*t', now)
                 if type(calendar) == 'table' then
@@ -2634,6 +2741,10 @@ local function run_tasks(now)
         end
         if due then
             local ready, reason = send_context(true)
+            if ready and automation.options.output == 'local' then
+                local local_chat, local_why = local_output_context()
+                if not local_chat then ready, reason = nil, local_why end
+            end
             if ready then
                 local allowed, why = automation.check(now, reason)
                 if not allowed then ready, reason = nil, why end
@@ -2656,9 +2767,9 @@ local function run_tasks(now)
             -- must not cause a supposedly one-shot message to be replayed on restart.
             if save_tasks() then
                 t.retry_after = nil
-                local ok, why = M.send_text(automation.format(t.message), true, true)
+                local ok, why = automation.send(automation.format(t.message), t.profile or 'host')
                 if ok then automation.record(now) end
-                t.result = ok and (why == 0 and '已发送 / 单人会话' or ('已发送 / ' .. tostring(why) .. ' 位队友'))
+                t.result = ok and (why == 'local' and '已显示 / 仅自己可见' or why == 0 and '已发送 / 单人会话' or ('已发送 / ' .. tostring(why) .. ' 位队友'))
                     or ('发送失败：' .. tostring(why))
                 M.last_send = {ok = ok and true or false, why = t.result}
             else
@@ -3464,7 +3575,7 @@ REGISTRY = build_plugin_registry({
         if not chat then return false, others end
         local allowed, why = automation.check(now, others, creator_id)
         if not allowed then return false, why end
-        local sent, reason = M.send_text(automation.format(text,creator_id), true, true)
+        local sent, reason = automation.send(automation.format(text,creator_id), automation.state.active_role)
         if sent then automation.record(now,creator_id) end
         return sent, reason
     end,
@@ -3577,6 +3688,7 @@ end
 
 
 local function panel_signature()
+    local opts = automation.profile(PANEL.profile or 'host')
     local s, ox, oy = PANEL.ui_s, PANEL.ui_ox, PANEL.ui_oy
     return table.concat({
         PANEL.rw, PANEL.rh,
@@ -3586,17 +3698,18 @@ local function panel_signature()
         PANEL.pos and PANEL.pos.fx or '-', PANEL.pos and PANEL.pos.fy or '-',
         tostring(PANEL.ui_scale or 1),
         draft.name, draft.mode, draft.time, draft.message,
-        tostring(PANEL.settings_view), M.options and tostring(M.options.enabled) or '-',
-        M.options and tostring(M.options.allow_solo) or '-', M.options and M.options.scope or '-',
-        M.options and tostring(M.options.welcome) or '-', M.options and M.options.welcome_message or '-',
-        M.options and M.options.cooldown or '-', M.options and M.options.welcome_delay or '-',
-        M.options and tostring(M.options.ping) or '-', M.options and M.options.ping_message or '-',
-        M.options and tostring(M.options.ping_summon) or '-', M.options and M.options.summon_message or '-',
-        M.options and M.options.task_stratagem_message or '-', tostring(M.task_stratagem_status),
-        M.options and tostring(M.options.ping_building) or '-', M.options and tostring(M.options.ping_stratagem) or '-', M.options and tostring(M.options.ping_medium_enemy) or '-',
-        M.options and tostring(M.options.ping_large_enemy) or '-', M.options and tostring(M.options.ping_giant_enemy) or '-',
-        M.options and tostring(M.options.ping_map) or '-', M.options and tostring(M.options.ping_sender_prefix) or '-',
-        M.options and tostring(M.options.ping_sender_color) or '-', tostring(M.ping_status),
+        PANEL.profile or 'host', automation.state.active_role or '-', opts.output,
+        tostring(PANEL.settings_view), opts and tostring(opts.enabled) or '-',
+        opts and tostring(opts.allow_solo) or '-', opts and opts.scope or '-',
+        opts and tostring(opts.welcome) or '-', opts and opts.welcome_message or '-',
+        opts and opts.cooldown or '-', opts and opts.welcome_delay or '-',
+        opts and tostring(opts.ping) or '-', opts and opts.ping_message or '-',
+        opts and tostring(opts.ping_summon) or '-', opts and opts.summon_message or '-',
+        opts and opts.task_stratagem_message or '-', tostring(M.task_stratagem_status),
+        opts and tostring(opts.ping_building) or '-', opts and tostring(opts.ping_stratagem) or '-', opts and tostring(opts.ping_medium_enemy) or '-',
+        opts and tostring(opts.ping_large_enemy) or '-', opts and tostring(opts.ping_giant_enemy) or '-',
+        opts and tostring(opts.ping_map) or '-', opts and tostring(opts.ping_sender_prefix) or '-',
+        opts and tostring(opts.ping_sender_color) or '-', tostring(M.ping_status),
         task_revision, PANEL.task_page or 1,
         cfg.timer_on and 'on' or 'off', cfg.interval,
         string.format('%.0f', cfg.elapsed), cfg.message,
@@ -3940,6 +4053,12 @@ local function draw_panel()
              IX + 8, y + 25, 14, focus and C.TEXT or C.MUTED, IW - 18)
         region(key:match('^option:') and key or ('task:' .. key), IX, y + 18, IW, 30)
     end
+    local editing_role = PANEL.profile or 'host'
+    button('profile:host', caption('主机预设', 'HOST PRESET'), 614, 48, 146, 30, true, editing_role == 'host')
+    button('profile:client', caption('客机预设', 'CLIENT PRESET'), 768, 48, 146, 30, true, editing_role == 'client')
+    local current_role = automation.sync()
+    text(caption('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'),
+         'ACTIVE: ' .. (current_role or 'WAITING'):upper()), 614, 86, 12, C.MUTED, 300)
     local y = TOP + 14
     head(IX, y, 'AUTOCHAT', PANEL.settings_view == 'automation' and caption('自动消息设置', 'AUTO MESSAGE SETTINGS')
         or PANEL.settings_view == 'pings' and caption('玩家标记消息', 'PLAYER PING MESSAGES')
@@ -3954,7 +4073,7 @@ local function draw_panel()
            y, navw, 30, true, PANEL.settings_view == 'pings')
     y = y + 44
     if PANEL.settings_view == 'pings' and M.options then
-        local opts = M.options
+        local opts = automation.profile(PANEL.profile or 'host')
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
             {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
@@ -3980,7 +4099,7 @@ local function draw_panel()
         text(caption('{玩家名} / {缩写} / {编号}', 'PLAYER NAME / SHORT / SLOT'), IX, y + 106, 12, C.MUTED, IW)
         if PANEL.hint then text(PANEL.hint, IX, y + 128, 11, C.YELLOW, IW) end
     elseif PANEL.settings_view == 'automation' and M.options then
-        local opts = M.options
+        local opts = automation.profile(PANEL.profile or 'host')
         local function toggle(key, zh, en)
             button('opt:' .. key, caption(zh, en) .. (opts[key] and ' [ON]' or ' [OFF]'),
                    IX, y, IW, 30, true, opts[key])
@@ -3993,6 +4112,11 @@ local function draw_panel()
         button('scope:all', caption('主机和客机', 'HOST + CLIENT'), IX + (IW + 8) / 2, y,
                (IW - 8) / 2, 30, true, opts.scope == 'all')
         y = y + 42
+        label(caption('消息输出方式', 'MESSAGE OUTPUT'), IX, y)
+        y = y + 18
+        button('output:squad', caption('小队公屏', 'SQUAD CHAT'), IX, y, (IW - 8)/2, 30, true, opts.output == 'squad')
+        button('output:local', caption('仅自己可见', 'ONLY ME'), IX + (IW + 8)/2, y, (IW - 8)/2, 30, true, opts.output == 'local')
+        y = y + 40
         toggle('allow_solo', '无人房间也发送', 'ALLOW SOLO SEND')
         field('option:cooldown', caption('每人自动消息最短间隔（秒）', 'PER-PLAYER MESSAGE INTERVAL (SECONDS)'), tostring(opts.cooldown), y)
         y = y + 64
@@ -4036,17 +4160,19 @@ local function draw_panel()
     -- The right column uses the same row controls as the settings form.
     IX, IW = RX, RIW
     y = TOP + 14
-    head(IX, y, caption('设置', 'SETTINGS'), caption('已添加任务', 'SCHEDULED TASKS'))
-    text(#M.tasks .. ' / 32', IX + IW, y + 20, 12, C.MUTED, nil, 'right')
+    head(IX, y, caption('设置', 'SETTINGS'), (PANEL.profile or 'host') == 'host'
+         and caption('主机定时任务', 'HOST TASKS') or caption('客机定时任务', 'CLIENT TASKS'))
+    local visible_tasks = M.profile_tasks(PANEL.profile or 'host')
+    text(#visible_tasks .. ' / 32', IX + IW, y + 20, 12, C.MUTED, nil, 'right')
     y = y + 58
-    local pages = math.max(1, math.ceil(#M.tasks / 7))
+    local pages = math.max(1, math.ceil(#visible_tasks / 7))
     PANEL.task_page = math.max(1, math.min(pages, PANEL.task_page or 1))
     local start = (PANEL.task_page - 1) * 7 + 1
-    if #M.tasks == 0 then
+    if #visible_tasks == 0 then
         text(caption('暂无任务，填写上方表单即可添加', 'NO TASKS. FILL THE FORM ABOVE.'), IX, y + 12, 13, C.DIM, IW)
     end
-    for i = start, math.min(#M.tasks, start + 6) do
-        local t = M.tasks[i]
+    for i = start, math.min(#visible_tasks, start + 6) do
+        local t = visible_tasks[i]
         rect(IX, y, IW, 68, C.ROW, 951)
         local state = t.done and caption('已执行', 'DONE')
                       or t.enabled and caption('运行中', 'ON') or caption('暂停', 'PAUSED')
@@ -4087,6 +4213,7 @@ set_panel_open = function(open)
     M.panel_open = open
     PANEL.version = (PANEL.version or 0) + 1
     if open then
+        PANEL.profile = PANEL.profile or automation.sync() or 'host'
         PANEL.armed, mouse_was_down = nil, nil
         take_cursor()
     else
@@ -4207,7 +4334,7 @@ local function panel_frame()
             if option then
                 local value = PANEL.edit_text
                 if option == 'cooldown' or option == 'welcome_delay' then value = tonumber(value) end
-                local ok, why = automation.set(option, value)
+                local ok, why = automation.set(option, value, PANEL.profile or 'host')
                 if not ok then PANEL.hint = why; return false end
             else
                 draft[PANEL.edit_field] = PANEL.edit_text or draft[PANEL.edit_field]
@@ -4231,14 +4358,21 @@ local function panel_frame()
         if clicked and hovered ~= 'close' and not finish_edit(true) then
             clicked = false
         elseif option then
-            PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, hovered, tostring(M.options[option])
+            PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, hovered, tostring(automation.profile(PANEL.profile or 'host')[option])
             PANEL.hint = 'Enter 保存 / Esc 取消 / Ctrl+V 粘贴'
         elseif opt_toggle then
-            local ok, why = automation.set(opt_toggle, not M.options[opt_toggle])
+            local ok, why = automation.set(opt_toggle, not automation.profile(PANEL.profile or 'host')[opt_toggle], PANEL.profile or 'host')
             PANEL.hint = ok and '设置已保存' or why
         elseif scope then
-            local ok, why = automation.set('scope', scope)
+            local ok, why = automation.set('scope', scope, PANEL.profile or 'host')
             PANEL.hint = ok and '设置已保存' or why
+        elseif hovered:match('^profile:') then
+            PANEL.profile = hovered:match('^profile:(.+)$')
+            PANEL.task_page = 1
+            PANEL.hint = '正在编辑' .. (PANEL.profile == 'host' and '主机' or '客机') .. '预设；根据身份自动启用'
+        elseif hovered:match('^output:') then
+            local ok, why = automation.set('output', hovered:match('^output:(.+)$'), PANEL.profile or 'host')
+            PANEL.hint = ok and '输出方式已保存' or why
         elseif hovered:match('^plugin:') then
             local id, key = hovered:match('^plugin:([^:]+):(.+)$')
             if id == PANEL.active_plugin then
@@ -4260,10 +4394,10 @@ local function panel_frame()
             PANEL.hint = nil
         elseif hovered == 'task:add' then
             finish_edit(true)
-            local t, why = M.add_task(draft.name, draft.mode, draft.time, draft.message)
+            local t, why = M.add_task(draft.name, draft.mode, draft.time, draft.message, nil, PANEL.profile or 'host')
             PANEL.hint = t and '任务已添加' or why
             if t then
-                PANEL.task_page = math.ceil(#M.tasks / 7)
+                PANEL.task_page = math.ceil(#M.profile_tasks(PANEL.profile or 'host') / 7)
                 draft.name, draft.message = '', ''
             end
         elseif toggle_id then
@@ -4274,7 +4408,7 @@ local function panel_frame()
             PANEL.hint = M.remove_task(tonumber(delete_id)) and '任务已删除' or '保存失败'
         elseif hovered == 'page:prev' or hovered == 'page:next' then
             finish_edit(true)
-            PANEL.task_page = math.max(1, math.min(math.max(1, math.ceil(#M.tasks / 7)),
+            PANEL.task_page = math.max(1, math.min(math.max(1, math.ceil(#M.profile_tasks(PANEL.profile or 'host') / 7)),
                 PANEL.task_page + (hovered == 'page:next' and 1 or -1)))
         elseif hovered == 'close' then
             set_panel_open(false)
@@ -4525,7 +4659,13 @@ local function timed_send(dt)
     cfg.elapsed = cfg.elapsed + dt
     if cfg.elapsed < cfg.interval then return end
     cfg.elapsed = 0
-    local ok, why = M.send_text(cfg.message, true)
+    local chat, others = send_context(false)
+    local allowed, why = automation.check(os.time(), others)
+    local ok = false
+    if chat and allowed then
+        ok, why = automation.send(automation.format(cfg.message), automation.state.active_role)
+        if ok then automation.record(os.time()) end
+    elseif not chat then why = others end
     -- Recorded on the MOD, not only in the log. A refusal whose only trace is a file the
     -- player never opens is indistinguishable from "the feature does nothing" -- which
     -- is exactly how this was reported. The panel prints this line, so "it is ON but
@@ -4622,6 +4762,7 @@ local function tick()
         local now = os.time()
         local elapsed = M.scheduler_time and math.max(0, now - M.scheduler_time) or 0
         M.scheduler_time = now
+        automation.sync()
         timed_send(elapsed)
         if M.options.enabled and M.options.ping or REGISTRY.has_listeners() then
             local _, status = ping_events.poll(now)
@@ -4662,7 +4803,7 @@ if cfg.timer_on then
     local migration_saved = #M.tasks > 0
     if #M.tasks == 0 then
         local migrated, why = M.add_task('旧版定时发送', 'repeat', tostring(cfg.interval),
-                                        cut_utf8(cfg.message, 200))
+                                        cut_utf8(cfg.message, 200), nil, 'host')
         migration_saved = migrated ~= nil
         if not migrated then
             note('legacy timer migration failed: ' .. tostring(why))
@@ -4750,6 +4891,21 @@ no input lock.
 Before anything is sent, five machine-code signatures are checked against the
 running game.dll. If any does not match, the mod goes dormant and says which one
 changed: an unverified address is an arbitrary address.
+
+Role presets and private output (0.7.9)
+---------------------------------------
+HOST PRESET / CLIENT PRESET select what you EDIT. The current session role selects
+what RUNS. Welcome, ping categories, templates, cooldown, output and tasks are separate.
+Old settings/tasks remain with host. Client copies old ping preferences, disables
+welcome and defaults to ONLY ME. Host keeps its saved welcome choice (off on a fresh install).
+AUTO MESSAGES > SQUAD CHAT / ONLY ME selects output for all automatic messages and
+registered addon sends. ONLY ME calls native chat add-line without a network send;
+other players do not receive it. It retains normal chat name formatting.
+An unknown role waits; local signature failure never falls back to public chat.
+Role changes clear old welcome/ping queues and cooldown. Deadlines continue while
+another role is active. There are 32 task slots total across both presets.
+Manual console send/force remain explicit squad sends. New native local display
+requires an in-game check; offline tests do not establish multiplayer visibility.
 
 The panel (hotkey K)
 --------------------
