@@ -161,7 +161,7 @@ class PanelInteractionTest(unittest.TestCase):
             h.user32.set_key(1, True); lua.eval('update()')
             h.user32.set_key(1, False); lua.eval('update()')
         click('view:pings')
-        for option in ('ping_building','ping_stratagem','ping_summon','ping_map','ping_medium_enemy','ping_large_enemy','ping_giant_enemy','ping_sender_prefix','ping_sender_color'):
+        for option in ('ping_building','ping_stratagem','ping_summon','ping_map','ping_sender_prefix','ping_sender_color'):
             self.assertTrue(mod.options[option])
             click('opt:'+option)
             self.assertFalse(mod.options[option])
@@ -172,6 +172,13 @@ class PanelInteractionTest(unittest.TestCase):
         h.user32.set_key(0x0D, True); lua.eval('update()')
         h.user32.set_key(0x0D, False); lua.eval('update()')
         self.assertEqual('{缩写}{动作}了{目标}', mod.options['summon_message'])
+        click('rules:open:enemy')
+        for category in ('medium_enemy','large_enemy','giant_enemy','flying_enemy'):
+            self.assertTrue(mod.options['ping_'+category])
+            click('rules:select:'+category);click('rules:enabled')
+            self.assertFalse(mod.options['ping_'+category])
+        self.assertFalse(mod.options['ping_small_enemy'])
+        click('rules:back');self.point(h,mod,'rules:open:stratagem')
         self.assertTrue(any('settings.txt' in h.written()[i]['path'] for i in range(1,len(h.written())+1)))
 
     def test_all_settings_pages_have_visible_nonoverlapping_hit_regions(self):

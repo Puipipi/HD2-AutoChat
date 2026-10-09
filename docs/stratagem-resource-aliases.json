@@ -1,0 +1,944 @@
+{
+  "game_version": "1.007.100",
+  "patch_date": "2026-09-22",
+  "source_commit": "52056ecb5637bf8d71481a724b019a6bd3b0e9ea",
+  "method": "Exact resource graph aliases remain native-ID unique. Shared candidate sets resolve a separate visible policy only when every candidate is present and has the same two native name keys plus call type.",
+  "unique": [
+    {
+      "resource": "02EECD0B1FA49630",
+      "id": 3343676429,
+      "debug_name": "TEAM WEAPONS. GRENADE LAUNCHER",
+      "entity_name": "GL-21 Grenade Launcher (Model)",
+      "evidence": [
+        {
+          "id": 3343676429,
+          "via": "HellpodRack.payloads.item",
+          "parent": "20225DEE487C9F5F"
+        }
+      ]
+    },
+    {
+      "resource": "09183066C4EBCE28",
+      "id": 272480476,
+      "debug_name": "BACKPACK. DIRECTIONAL ENERGY SHIELD",
+      "entity_name": "SH-51 Directional Shield (Hellpod)",
+      "evidence": [
+        {
+          "id": 272480476,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "12C8D71AC3897A5C",
+      "id": 3843705076,
+      "debug_name": "BACKPACK.  GENERATOR PACK",
+      "entity_name": "SH-32 Shield Generator Pack (Model)",
+      "evidence": [
+        {
+          "id": 3843705076,
+          "via": "HellpodRack.payloads.item",
+          "parent": "F88D61A8FE1E0766"
+        }
+      ]
+    },
+    {
+      "resource": "16474112801385B6",
+      "id": 2002187052,
+      "debug_name": "VEHICLES. BASTION(tank)",
+      "entity_name": "TD-220 Bastion MK XVI",
+      "evidence": [
+        {
+          "id": 2002187052,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "2152D5147B0AC418",
+      "id": 533318241,
+      "debug_name": "TEAM WEAPONS. HEAVY MACHINEGUN",
+      "entity_name": "MG-206 Heavy Machine Gun (Model)",
+      "evidence": [
+        {
+          "id": 533318241,
+          "via": "HellpodRack.payloads.item",
+          "parent": "0FD8B759412815DD"
+        }
+      ]
+    },
+    {
+      "resource": "25AA2FD4643CF4EE",
+      "id": 3923676543,
+      "debug_name": "TEAM WEAPONS. SPEAR",
+      "entity_name": "FAF-14 Spear (Model)",
+      "evidence": [
+        {
+          "id": 3923676543,
+          "via": "HellpodRack.payloads.item",
+          "parent": "C57F85252B7D853B"
+        }
+      ]
+    },
+    {
+      "resource": "26E40437EA275296",
+      "id": 2007887745,
+      "debug_name": "TEAM WEAPONS. AIR BURST ROCKET LAUNCHER",
+      "entity_name": "RL-77 Airburst Rocket Launcher (Model)",
+      "evidence": [
+        {
+          "id": 2007887745,
+          "via": "HellpodRack.payloads.item",
+          "parent": "CA6E81E2B3E22B18"
+        }
+      ]
+    },
+    {
+      "resource": "2E9D0BDC48B09E60",
+      "id": 3078242205,
+      "debug_name": "TEAM WEAPONS. RAILGUN ",
+      "entity_name": "RS-422 Railgun (Model)",
+      "evidence": [
+        {
+          "id": 3078242205,
+          "via": "HellpodRack.payloads.item",
+          "parent": "B62620AE2CD89F49"
+        }
+      ]
+    },
+    {
+      "resource": "31400A6A3003E29C",
+      "id": 1907808218,
+      "debug_name": "BACKPACK. SUPPLY BACKPACK",
+      "entity_name": "B-1 Supply Pack (Hellpod)",
+      "evidence": [
+        {
+          "id": 1907808218,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "35A61296619CC47E",
+      "id": 2625074523,
+      "debug_name": "TEAM WEAPONS. LASER PULSE CANNON",
+      "entity_name": "LAS-99 Quasar Cannon (Model)",
+      "evidence": [
+        {
+          "id": 2625074523,
+          "via": "HellpodRack.payloads.item",
+          "parent": "67AC082FF6D142F3"
+        }
+      ]
+    },
+    {
+      "resource": "3828E2051AA9E897",
+      "id": 336693041,
+      "debug_name": "TEAM WEAPONS. HARPOON GUN ",
+      "entity_name": "S-11 Speargun (Model)",
+      "evidence": [
+        {
+          "id": 336693041,
+          "via": "HellpodRack.payloads.item",
+          "parent": "5CAF553BA7EA1429"
+        }
+      ]
+    },
+    {
+      "resource": "3A50B58B0553056A",
+      "id": 3353508219,
+      "debug_name": "BACKPACK. BALLISTIC SHIELD BACKPACK",
+      "entity_name": "SH-20 Ballistic Shield Backpack (Hellpod)",
+      "evidence": [
+        {
+          "id": 3353508219,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "43A58CB89CFA197C",
+      "id": 3455841218,
+      "debug_name": "TEAM WEAPONS. MINIGUN",
+      "entity_name": "M-1000 Maxigun (Model)",
+      "evidence": [
+        {
+          "id": 3455841218,
+          "via": "HellpodRack.payloads.item",
+          "parent": "73B63D637973C7A4"
+        }
+      ]
+    },
+    {
+      "resource": "5990123D142B16CB",
+      "id": 2232989803,
+      "debug_name": "TEAM WEAPONS. COMMANDO",
+      "entity_name": "MLS-4X Commando (Model)",
+      "evidence": [
+        {
+          "id": 2232989803,
+          "via": "HellpodRack.payloads.item",
+          "parent": "A0E691598F32932F"
+        }
+      ]
+    },
+    {
+      "resource": "5F3EC9BDA2BD8553",
+      "id": 3330450692,
+      "debug_name": "TEAM WEAPONS. SLEDGE HAMMER",
+      "entity_name": "CQC-20 Breaching Hammer (Model)",
+      "evidence": [
+        {
+          "id": 3330450692,
+          "via": "HellpodRack.payloads.item",
+          "parent": "8DB8B823889324F9"
+        }
+      ]
+    },
+    {
+      "resource": "6CFCC7F8801A0266",
+      "id": 774795224,
+      "debug_name": "TEAM WEAPONS. SHARK ENERGY WEAPON",
+      "entity_name": "40-K Meltagun (Model)",
+      "evidence": [
+        {
+          "id": 774795224,
+          "via": "HellpodRack.payloads.item",
+          "parent": "4E52F730432CDB1E"
+        }
+      ]
+    },
+    {
+      "resource": "7617642765AC38C7",
+      "id": 2934950455,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE MASSIVE ROCKET LAUNCHER",
+      "entity_name": "EAT-411 Leveller (Model)",
+      "evidence": [
+        {
+          "id": 2934950455,
+          "via": "HellpodRack.payloads.item",
+          "parent": "8A9E543022C18092"
+        }
+      ]
+    },
+    {
+      "resource": "78A8185F63A70795",
+      "id": 2271469939,
+      "debug_name": "TEAM WEAPONS. HEAVY FLAMETHROWER",
+      "entity_name": "B/FLAM-80 Cremator (Model)",
+      "evidence": [
+        {
+          "id": 2271469939,
+          "via": "HellpodRack.payloads.item",
+          "parent": "CA4F3FC268F449D5"
+        }
+      ]
+    },
+    {
+      "resource": "88C2D09AD85A7C9F",
+      "id": 512147393,
+      "debug_name": "TEAM WEAPONS. BELT FED GRENADE LAUNCHER",
+      "entity_name": "GL-28 Belt-Fed Grenade Launcher (Model)",
+      "evidence": [
+        {
+          "id": 512147393,
+          "via": "HellpodRack.payloads.item",
+          "parent": "B7791DA91F13488C"
+        }
+      ]
+    },
+    {
+      "resource": "88F61AFFF48AC8A4",
+      "id": 4152191751,
+      "debug_name": "TEAM WEAPONS. CHEM GUN",
+      "entity_name": "TX-41 Sterilizer (Model)",
+      "evidence": [
+        {
+          "id": 4152191751,
+          "via": "HellpodRack.payloads.item",
+          "parent": "BBD57DF3E5B15ED8"
+        }
+      ]
+    },
+    {
+      "resource": "967ED15E0BAE363B",
+      "id": 3353508219,
+      "debug_name": "BACKPACK. BALLISTIC SHIELD BACKPACK",
+      "entity_name": "SH-20 Ballistic Shield Backpack (Model)",
+      "evidence": [
+        {
+          "id": 3353508219,
+          "via": "HellpodRack.payloads.item",
+          "parent": "3A50B58B0553056A"
+        }
+      ]
+    },
+    {
+      "resource": "96DE9CD50F7306E6",
+      "id": 992079466,
+      "debug_name": "TEAM WEAPONS. ARC THROWER ",
+      "entity_name": "ARC-3 Arc Thrower (Model)",
+      "evidence": [
+        {
+          "id": 992079466,
+          "via": "HellpodRack.payloads.item",
+          "parent": "4CF9D9B3F6813F52"
+        }
+      ]
+    },
+    {
+      "resource": "9B2140378640432E",
+      "id": 2636699686,
+      "debug_name": "VEHICLES. FAST RECON VEHICLE (Resupply Auto Turret)",
+      "entity_name": "M-103 Supply FRV",
+      "evidence": [
+        {
+          "id": 2636699686,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "9F80D67A12A7E40F",
+      "id": 1298599997,
+      "debug_name": "TEAM WEAPONS. RECOILLESS RIFLE",
+      "entity_name": "GR-8 Recoilless Rifle (Model)",
+      "evidence": [
+        {
+          "id": 1298599997,
+          "via": "HellpodRack.payloads.item",
+          "parent": "DDEE9646723E09D3"
+        }
+      ]
+    },
+    {
+      "resource": "A4E796F84801B40A",
+      "id": 272480476,
+      "debug_name": "BACKPACK. DIRECTIONAL ENERGY SHIELD",
+      "entity_name": "SH-51 Directional Shield (Model)",
+      "evidence": [
+        {
+          "id": 272480476,
+          "via": "HellpodRack.payloads.item",
+          "parent": "09183066C4EBCE28"
+        }
+      ]
+    },
+    {
+      "resource": "A6A735ACCB4A327F",
+      "id": 14345846,
+      "debug_name": "TEAM WEAPONS. LIGHT MACHINE GUN",
+      "entity_name": "M-105 Stalwart (Model)",
+      "evidence": [
+        {
+          "id": 14345846,
+          "via": "HellpodRack.payloads.item",
+          "parent": "31C4DD88C1450282"
+        }
+      ]
+    },
+    {
+      "resource": "A8CFFB316F0B5C5F",
+      "id": 875551083,
+      "debug_name": "TEAM WEAPONS. AUTOMATIC CANNON",
+      "entity_name": "AC-8 Autocannon (Model)",
+      "evidence": [
+        {
+          "id": 875551083,
+          "via": "HellpodRack.payloads.item",
+          "parent": "5F41C4DCABE95421"
+        }
+      ]
+    },
+    {
+      "resource": "B0F1B354BA1D38D8",
+      "id": 2265180087,
+      "debug_name": "TEAM WEAPONS. MELEE FLAG",
+      "entity_name": "CQC-1 One True Flag (Model)",
+      "evidence": [
+        {
+          "id": 2265180087,
+          "via": "HellpodRack.payloads.item",
+          "parent": "EB95609DCBAD53FE"
+        }
+      ]
+    },
+    {
+      "resource": "B16C9D490AA59B77",
+      "id": 3288352984,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE MACHINEGUN",
+      "entity_name": "MGX-42 Bullet Storm (Model)",
+      "evidence": [
+        {
+          "id": 3288352984,
+          "via": "HellpodRack.payloads.item",
+          "parent": "C87555EED1E9F092"
+        }
+      ]
+    },
+    {
+      "resource": "B2B5E0D185605F9E",
+      "id": 1813634375,
+      "debug_name": "TEAM WEAPONS. EXPENDABLE NAPALM LAUNCHER",
+      "entity_name": "EAT-700 Expendable Napalm (Model)",
+      "evidence": [
+        {
+          "id": 1813634375,
+          "via": "HellpodRack.payloads.item",
+          "parent": "20AAFC3A504D2E5F"
+        }
+      ]
+    },
+    {
+      "resource": "BF4CFD2AEABFB5A4",
+      "id": 3572024208,
+      "debug_name": "TEAM WEAPONS. CHAINSAW GREATSWORD",
+      "entity_name": "CQC-9 Defoliation Tool (Model)",
+      "evidence": [
+        {
+          "id": 3572024208,
+          "via": "HellpodRack.payloads.item",
+          "parent": "7FA006885812A756"
+        }
+      ]
+    },
+    {
+      "resource": "CC786F6491FE7E65",
+      "id": 890972990,
+      "debug_name": "TEAM WEAPONS. WASP",
+      "entity_name": "StA-X3 W.A.S.P. Launcher (Model)",
+      "evidence": [
+        {
+          "id": 890972990,
+          "via": "HellpodRack.payloads.item",
+          "parent": "0A60397B7409995E"
+        }
+      ]
+    },
+    {
+      "resource": "D54B9505C0F72873",
+      "id": 2822568285,
+      "debug_name": "TEAM WEAPONS. LASER CANNON",
+      "entity_name": "LAS-98 Laser Cannon (Model)",
+      "evidence": [
+        {
+          "id": 2822568285,
+          "via": "HellpodRack.payloads.item",
+          "parent": "FDE262593307CA2F"
+        }
+      ]
+    },
+    {
+      "resource": "DE18775FA447A9BF",
+      "id": 1337271929,
+      "debug_name": "TEAM WEAPONS. MINI MISSILE SILO",
+      "entity_name": "Mini Missile Silo (Hellpod)",
+      "evidence": [
+        {
+          "id": 1337271929,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "E8D5F49AD7780E54",
+      "id": 4261593827,
+      "debug_name": "TEAM WEAPONS. PLASMA BLASTER",
+      "entity_name": "PLAS-45 Epoch (Model)",
+      "evidence": [
+        {
+          "id": 4261593827,
+          "via": "HellpodRack.payloads.item",
+          "parent": "46B9E3BE0AE9972E"
+        }
+      ]
+    },
+    {
+      "resource": "F88D61A8FE1E0766",
+      "id": 3843705076,
+      "debug_name": "BACKPACK.  GENERATOR PACK",
+      "entity_name": "SH-32 Shield Generator Pack (Hellpod)",
+      "evidence": [
+        {
+          "id": 3843705076,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "FDE262593307CA2F",
+      "id": 2822568285,
+      "debug_name": "TEAM WEAPONS. LASER CANNON",
+      "entity_name": "LAS-98 Laser Cannon (Hellpod)",
+      "evidence": [
+        {
+          "id": 2822568285,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "FE3B29B2CFA63F9B",
+      "id": 153819019,
+      "debug_name": "TEAM WEAPONS. GRENADE LAUNCHER TACTICAL",
+      "entity_name": "GL-52 De-Escalator (Model)",
+      "evidence": [
+        {
+          "id": 153819019,
+          "via": "HellpodRack.payloads.item",
+          "parent": "2F67BF9C4F560C02"
+        }
+      ]
+    }
+  ],
+  "ambiguous": [
+    {
+      "resource": "11C27D3BABB38956",
+      "ids": [
+        458198946,
+        1567517764,
+        3868299561
+      ],
+      "evidence": [
+        {
+          "id": 3868299561,
+          "via": "HellpodRack.payloads.item",
+          "parent": "EA534432474985A0"
+        },
+        {
+          "id": 1567517764,
+          "via": "HellpodRack.payloads.item",
+          "parent": "94C5114EBA59AA21"
+        },
+        {
+          "id": 458198946,
+          "via": "HellpodRack.payloads.item",
+          "parent": "94C5114EBA59AA21"
+        }
+      ]
+    },
+    {
+      "resource": "39AB99895147A3BF",
+      "ids": [
+        1432571981,
+        3868299561
+      ],
+      "evidence": [
+        {
+          "id": 3868299561,
+          "via": "HellpodRack.payloads.item",
+          "parent": "EA534432474985A0"
+        },
+        {
+          "id": 1432571981,
+          "via": "HellpodRack.payloads.item",
+          "parent": "E90F771A36FB441E"
+        }
+      ]
+    },
+    {
+      "resource": "4EF9A47109239A58",
+      "ids": [
+        1907808218,
+        3868299561
+      ],
+      "evidence": [
+        {
+          "id": 1907808218,
+          "via": "HellpodRack.payloads.item",
+          "parent": "31400A6A3003E29C"
+        },
+        {
+          "id": 3868299561,
+          "via": "HellpodRack.payloads.item",
+          "parent": "EA534432474985A0"
+        }
+      ]
+    },
+    {
+      "resource": "5052EC6A928CCF1A",
+      "ids": [
+        867876502,
+        1295431756
+      ],
+      "evidence": [
+        {
+          "id": 867876502,
+          "via": "payload",
+          "parent": null
+        },
+        {
+          "id": 1295431756,
+          "via": "payload",
+          "parent": null
+        }
+      ]
+    },
+    {
+      "resource": "80932FA0ED6901D3",
+      "ids": [
+        3413606544,
+        3753216434
+      ],
+      "evidence": [
+        {
+          "id": 3413606544,
+          "via": "HellpodRack.payloads.item",
+          "parent": "0DC7A18342B62BEC"
+        },
+        {
+          "id": 3753216434,
+          "via": "HellpodRack.payloads.item",
+          "parent": "0DC7A18342B62BEC"
+        }
+      ]
+    },
+    {
+      "resource": "89C5493E08CA4207",
+      "ids": [
+        2207713849,
+        3868299561
+      ],
+      "evidence": [
+        {
+          "id": 3868299561,
+          "via": "HellpodRack.payloads.item",
+          "parent": "EA534432474985A0"
+        },
+        {
+          "id": 2207713849,
+          "via": "HellpodRack.payloads.item",
+          "parent": "891ADA7D553B69DB"
+        }
+      ]
+    },
+    {
+      "resource": "A94913CA014F7579",
+      "ids": [
+        867876502,
+        1295431756
+      ],
+      "evidence": [
+        {
+          "id": 867876502,
+          "via": "HellpodRack.payloads.item",
+          "parent": "5052EC6A928CCF1A"
+        },
+        {
+          "id": 1295431756,
+          "via": "HellpodRack.payloads.item",
+          "parent": "5052EC6A928CCF1A"
+        }
+      ]
+    }
+  ],
+  "unlinked": [
+    "49119612EB284A48",
+    "52071F49263415E4",
+    "9B75217D8312DD67"
+  ],
+  "visible_rule_grouping": {
+    "identity_fields": [
+      "name_upper",
+      "name_cased",
+      "call_in_type"
+    ],
+    "raw_entry_count": 149,
+    "visible_rule_count": 135,
+    "representative_preference": [
+      "non PRESIDENT REWARDS / non TUTORIAL",
+      "nonzero native icon",
+      "lowest stable ID"
+    ],
+    "shared_groups": [
+      {
+        "rule_id": 1753436707,
+        "name_upper": 2204198870,
+        "name_cased": 2872120750,
+        "call_type": 0,
+        "variant_ids": [
+          1753436707,
+          3316399568
+        ],
+        "variants": [
+          {
+            "id": 1753436707,
+            "debug_name": "BACKPACK. JUMPPACK BACKPACK"
+          },
+          {
+            "id": 3316399568,
+            "debug_name": "PRESIDENT REWARDS. JUMPPACK BACKPACK"
+          }
+        ]
+      },
+      {
+        "rule_id": 45875024,
+        "name_upper": 861327809,
+        "name_cased": 2306470396,
+        "call_type": 0,
+        "variant_ids": [
+          45875024,
+          1053576110
+        ],
+        "variants": [
+          {
+            "id": 45875024,
+            "debug_name": "BACKPACK. HELLBOMB"
+          },
+          {
+            "id": 1053576110,
+            "debug_name": "BACKPACK. HELLBOMB"
+          }
+        ]
+      },
+      {
+        "rule_id": 867876502,
+        "name_upper": 1263463686,
+        "name_cased": 1673875834,
+        "call_type": 0,
+        "variant_ids": [
+          867876502,
+          1295431756
+        ],
+        "variants": [
+          {
+            "id": 867876502,
+            "debug_name": "CONSUMABLES. RESUPPLY"
+          },
+          {
+            "id": 1295431756,
+            "debug_name": "PRESIDENT REWARDS. AMMO CACHE"
+          }
+        ]
+      },
+      {
+        "rule_id": 2229216190,
+        "name_upper": 2273284544,
+        "name_cased": 2673704303,
+        "call_type": 0,
+        "variant_ids": [
+          255298804,
+          2229216190
+        ],
+        "variants": [
+          {
+            "id": 2229216190,
+            "debug_name": "CONSUMABLES. HEALTH PACK RACK"
+          },
+          {
+            "id": 255298804,
+            "debug_name": "PRESIDENT REWARDS. HEALTH PACK RACK"
+          }
+        ]
+      },
+      {
+        "rule_id": 2319566343,
+        "name_upper": 1683937559,
+        "name_cased": 3463544321,
+        "call_type": 0,
+        "variant_ids": [
+          2319566343,
+          3928947721
+        ],
+        "variants": [
+          {
+            "id": 3928947721,
+            "debug_name": "MISSIONS. Cyborg Carry Data"
+          },
+          {
+            "id": 2319566343,
+            "debug_name": "MISSIONS. Carry Data"
+          }
+        ]
+      },
+      {
+        "rule_id": 115737856,
+        "name_upper": 3109644149,
+        "name_cased": 1171875332,
+        "call_type": 2,
+        "variant_ids": [
+          115737856,
+          2230051894
+        ],
+        "variants": [
+          {
+            "id": 115737856,
+            "debug_name": "MISSIONS. EXTRACTION"
+          },
+          {
+            "id": 2230051894,
+            "debug_name": "[TUTORIAL] EXTRACTION"
+          }
+        ]
+      },
+      {
+        "rule_id": 1606251952,
+        "name_upper": 4270246281,
+        "name_cased": 2486779978,
+        "call_type": 3,
+        "variant_ids": [
+          1606251952,
+          2670122272
+        ],
+        "variants": [
+          {
+            "id": 1606251952,
+            "debug_name": "MISSIONS. CARGO CONTAINER"
+          },
+          {
+            "id": 2670122272,
+            "debug_name": "MISSIONS. CARGO CONTAINER"
+          }
+        ]
+      },
+      {
+        "rule_id": 599201298,
+        "name_upper": 2378431612,
+        "name_cased": 2281165846,
+        "call_type": 3,
+        "variant_ids": [
+          599201298,
+          3722314010
+        ],
+        "variants": [
+          {
+            "id": 3722314010,
+            "debug_name": "MISSIONS. RAISE FLAG"
+          },
+          {
+            "id": 599201298,
+            "debug_name": "MISSIONS. RAISE FLAG NO CLEAR AREA"
+          }
+        ]
+      },
+      {
+        "rule_id": 716088572,
+        "name_upper": 3488153744,
+        "name_cased": 822640880,
+        "call_type": 3,
+        "variant_ids": [
+          716088572,
+          871315230
+        ],
+        "variants": [
+          {
+            "id": 871315230,
+            "debug_name": "MISSIONS. EXTRACTION BEACON"
+          },
+          {
+            "id": 716088572,
+            "debug_name": "MISSIONS. EMERGENCY EXTRACTION BEACON"
+          }
+        ]
+      },
+      {
+        "rule_id": 2266266587,
+        "name_upper": 3973386260,
+        "name_cased": 3241609005,
+        "call_type": 0,
+        "variant_ids": [
+          863373678,
+          2266266587
+        ],
+        "variants": [
+          {
+            "id": 2266266587,
+            "debug_name": "MISSIONS. REINFORCEMENT BEACON"
+          },
+          {
+            "id": 863373678,
+            "debug_name": "TUTORIAL REINFORCEMENT BEACON"
+          }
+        ]
+      },
+      {
+        "rule_id": 295629711,
+        "name_upper": 3200900560,
+        "name_cased": 734964784,
+        "call_type": 0,
+        "variant_ids": [
+          295629711,
+          2587901119
+        ],
+        "variants": [
+          {
+            "id": 2587901119,
+            "debug_name": "PRESIDENT REWARDS. COMBAT WALKER"
+          },
+          {
+            "id": 295629711,
+            "debug_name": "VEHICLES. COMBAT WALKER"
+          }
+        ]
+      },
+      {
+        "rule_id": 717707279,
+        "name_upper": 3633384189,
+        "name_cased": 3009882761,
+        "call_type": 0,
+        "variant_ids": [
+          717707279,
+          3275255096
+        ],
+        "variants": [
+          {
+            "id": 3275255096,
+            "debug_name": "PRESIDENT REWARDS. ROCKET SENTRY"
+          },
+          {
+            "id": 717707279,
+            "debug_name": "SENTRYS. ROCKET"
+          }
+        ]
+      },
+      {
+        "rule_id": 458198946,
+        "name_upper": 1936822397,
+        "name_cased": 3663193426,
+        "call_type": 0,
+        "variant_ids": [
+          458198946,
+          1567517764
+        ],
+        "variants": [
+          {
+            "id": 1567517764,
+            "debug_name": "PRESIDENT REWARDS. MACHINEGUN"
+          },
+          {
+            "id": 458198946,
+            "debug_name": "TEAM WEAPONS. MACHINEGUN"
+          }
+        ]
+      },
+      {
+        "rule_id": 3413606544,
+        "name_upper": 2093520486,
+        "name_cased": 1885509695,
+        "call_type": 0,
+        "variant_ids": [
+          3413606544,
+          3753216434
+        ],
+        "variants": [
+          {
+            "id": 3413606544,
+            "debug_name": "TEAM WEAPONS. EXPENDABLE ANTI-TANK"
+          },
+          {
+            "id": 3753216434,
+            "debug_name": "TEAM WEAPONS. EXPENDABLE ANTI-TANK (Booster)"
+          }
+        ]
+      }
+    ]
+  }
+}

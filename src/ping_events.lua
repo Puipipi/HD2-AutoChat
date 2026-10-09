@@ -32,7 +32,8 @@ SOFTWARE.
 -- https://github.com/SkyeShade/HD2Runtime/blob/master/runtime/event_world.lua
 -- https://github.com/SkyeShade/HD2Runtime/blob/master/domains/event_natives.lua
 -- Classification facts: current-build enemy kind intersected with AiEnemyComponentData;
--- HealthComponentData.unit_size: 1 Medium, 2 Large, 3 Massive (2026-09-22 data).
+-- HealthComponentData.unit_size: 0 Small, 1 Medium, 2 Large, 3 Massive (2026-09-22).
+-- Hostile faction + Spottable membership are required; flying components take priority.
 -- https://github.com/Darctor/Helldivers2_RawData/tree/main/Data/entities
 -- https://github.com/Darctor/Helldivers2_RawData/blob/main/Data/enums/UnitSize.txt
 -- Tactical map pins use replicated actor state, not the HUD ping ring. Current
@@ -287,6 +288,155 @@ local MISSION_TARGETS = {
 }
 -- END MISSION TARGET CATALOG
 
+-- BEGIN ENEMY TARGET CATALOG
+-- Generated offline by tools/generate_enemy_catalog.py from docs/enemy-catalog.json.
+-- Game 1.007.100, 2026-09-22; hostile + Spottable only; flight before size.
+local ENEMY_TARGETS = {
+    ['0002BA767DF856F3'] = {'small_enemy', '劫掠者', 2454424572},
+    ['0883366204E1CCC5'] = {'medium_enemy', '凝视者', 1661895142},
+    ['089833D2880D9E06'] = {'small_enemy', '机枪奇袭者（炽灼部队）', 586021653},
+    ['08E6FFC2474287BD'] = {'medium_enemy', '监视者 MK2', 3363066353},
+    ['09DFB04B2E578BC3'] = {'small_enemy', '激光装甲兵', 4039692928},
+    ['09FE0BE51A23396C'] = {'medium_enemy', '惑乱者（女）', 1371180916},
+    ['0AB7B92B131C228C'] = {'large_enemy', '爆裂强袭虫', 3903153972},
+    ['0ADC9F9173AD8E1D'] = {'small_enemy', '无票者（中型）', 4211847317},
+    ['10081ACEF6163EF6'] = {'medium_enemy', '酸液武斗虫', 3365898186},
+    ['137988CEA16458F7'] = {'large_enemy', '巨型碾压者', 613980508},
+    ['1448D494665D01A0'] = {'small_enemy', '凝视者 MK2', 2259733865},
+    ['1897BDD32105D2DC'] = {'large_enemy', '巨型炙焰者 MK2（炽灼部队）', 1775662925},
+    ['19E18B46EC55D94A'] = {'flying_enemy', '刺魟', 4160806915},
+    ['1A7FCDFF98C664B0'] = {'large_enemy', '强袭虫', 1299714559},
+    ['1B5B9AC4F96B36E5'] = {'small_enemy', '机械统帅（炽灼部队）', 621159586},
+    ['1E66EE1F6F7FD00E'] = {'large_enemy', '巨型抹煞者', 1560770730},
+    ['1F0A91729C0004E0'] = {'small_enemy', '孢裂追猎虫', 1210082392},
+    ['20B9C7734DAEAD65'] = {'large_enemy', '证真者', 3776682558},
+    ['215CE160A17BE4CD'] = {'small_enemy', '喷气机械统帅', 621159586},
+    ['257D805CAA7E10C0'] = {'small_enemy', '装甲兵 霰弹（废案）', 4039692928},
+    ['262351741C53FF0C'] = {'small_enemy', '凝视者 尖塔', 2259733865},
+    ['282EB766C1FFA6A1'] = {'flying_enemy', '炮艇', 1932062202},
+    ['2A12104F2853AE16'] = {'small_enemy', '火箭奇袭者', 3112705780},
+    ['2AD2E055DAD21F6E'] = {'flying_enemy', '入侵的穿梭舰', 3579113113},
+    ['2CF3488C4845F8BD'] = {'large_enemy', '机器人 加农炮塔', 478200978},
+    ['30CF04B2EC8C9BD4'] = {'small_enemy', '侦察奇袭者', 2319746535},
+    ['30F2DEE2333F227A'] = {'giant_enemy', '移动工厂 带干扰塔', 1153658728},
+    ['31BAE74D2F064D8D'] = {'large_enemy', '湮灭坦克 MK2', 3455009224},
+    ['32541FC4EC7C9CDC'] = {'medium_enemy', '武斗虫 MK3', 3564923972},
+    ['32CDEADA234FB8DF'] = {'large_enemy', '喷气巨型碾压者', 613980508},
+    ['34DFD23365472E9E'] = {'flying_enemy', '突入者', 3621116014},
+    ['36AA99CCE5E60146'] = {'medium_enemy', '胆汁喷涌虫', 717622970},
+    ['3AFF5FD7D5450B99'] = {'large_enemy', '巨兽级强袭虫', 1076678822},
+    ['3D0E03E2D574E1CA'] = {'small_enemy', '追猎虫 MK2', 3330362068},
+    ['3E0537D606438FEA'] = {'large_enemy', '巨型炙焰者', 1775662925},
+    ['4019623142351CB6'] = {'small_enemy', '装甲兵 MK3', 4039692928},
+    ['44458A2C52B002FB'] = {'small_enemy', '无票者（重型）', 4211847317},
+    ['453FE22C634EB30F'] = {'large_enemy', '御门者', 1870840792},
+    ['4E97FB073BDC7A4B'] = {'medium_enemy', '武斗虫 MK2（俘虏）', 3564923972},
+    ['51EEA86BF6997E4E'] = {'small_enemy', '食腐虫 MK2', 4212839382},
+    ['52018DEB9AB6827E'] = {'small_enemy', '喷气装甲兵（崩溃）', 4039692928},
+    ['53D8919D7B8ABD67'] = {'large_enemy', '湮灭坦克', 3455009224},
+    ['54E107DACF6929CB'] = {'medium_enemy', '狂暴者 MK2', 3201222154},
+    ['57EED0EAC346CD9D'] = {'medium_enemy', '蹂躏者 MK3（炽灼部队）', 1649987991},
+    ['58B2B86C11369241'] = {'medium_enemy', '燃烧机枪蹂躏者', 75849082},
+    ['5CA832447445C0BA'] = {'small_enemy', '追猎虫 MK3', 3330362068},
+    ['6021E22338333D88'] = {'medium_enemy', '抚育喷涌虫', 487985459},
+    ['604A794EC45BB820'] = {'flying_enemy', '崇高监视者', 2745056259},
+    ['611BA777783B08A2'] = {'large_enemy', '噪轰引擎 速射加农炮', 4066406510},
+    ['63DF3D07B7424588'] = {'large_enemy', '铁幕坦克', 3921592399},
+    ['64090088502435DD'] = {'flying_enemy', '尖啸虫', 793026793},
+    ['64BA5F030B114EC1'] = {'small_enemy', '奇袭者', 2000862158},
+    ['672F7DA17F3BA34A'] = {'small_enemy', '穿刺虫触手', 1046000873},
+    ['67DC32DCA4F02D33'] = {'large_enemy', '肉瘤体', 2880434041},
+    ['6B202392F4AB605E'] = {'large_enemy', '孢子强袭虫', 1939105083},
+    ['6DAB2EADF5D8B692'] = {'large_enemy', '巨型烈焰轰炸者', 2090691137},
+    ['728421351D440EBC'] = {'medium_enemy', '孢裂武斗虫', 2115960485},
+    ['72A83E49CED6DB3D'] = {'small_enemy', '胆汁吐沫虫', 444529084},
+    ['746A7F3BEDA32699'] = {'medium_enemy', '激进先锋（男）', 23741406},
+    ['74E2285C01DA4F71'] = {'flying_enemy', '增援穿梭舰', 3579113113},
+    ['78E1497571012C47'] = {'small_enemy', '无票者（轻型）', 4211847317},
+    ['7B48CACDBACB3881'] = {'small_enemy', '装甲兵 MK2', 4039692928},
+    ['7ECE5304F868F6B3'] = {'small_enemy', '装甲兵（无包裹）', 4039692928},
+    ['82A87AD8D595B2BA'] = {'small_enemy', '炙焰装甲兵', 2861014363},
+    ['843D18D4B5512B63'] = {'large_enemy', '移动工厂 连发加农炮', 478200978},
+    ['856E9710E45E760F'] = {'small_enemy', '特攻奇袭者', 1467464627},
+    ['883401AF2A98A5F6'] = {'small_enemy', '掠食追猎虫', 3029738043},
+    ['8FF0A839830A7692'] = {'small_enemy', '食腐虫', 4212839382},
+    ['905809A4C28D8A45'] = {'large_enemy', '粉碎者', 3922421925},
+    ['9076EEED17FCEE35'] = {'large_enemy', '强化侦察纵步者', 1871700431},
+    ['91EBD77931110AFC'] = {'medium_enemy', '重型蹂躏者 MK3', 1649987991},
+    ['960B48A421A3FAAA'] = {'flying_enemy', '蟑龙', 1378841226},
+    ['96110F9D6B010E02'] = {'large_enemy', '敌方单位', 478200978},
+    ['9647B00CC3A9D36F'] = {'medium_enemy', '火箭蹂躏者', 2365630221},
+    ['965EAE5A51ACDD4A'] = {'large_enemy', '猎杀器', 1405979473},
+    ['96BA14C9EBB49CE1'] = {'large_enemy', '巨型者', 790541304},
+    ['98152772A72F7838'] = {'flying_enemy', '运输船', 554367013},
+    ['9926876B2375A1BB'] = {'medium_enemy', '机器人 碉堡炮塔', 3921936527},
+    ['9A8A3AAE287B230C'] = {'small_enemy', '食腐虫 MK3', 4212839382},
+    ['9D8827FED763650E'] = {'medium_enemy', '惑乱者（男）', 1371180916},
+    ['9E2E17F2CCCCAFDD'] = {'giant_enemy', '吐酸泰坦', 2514244534},
+    ['9F57782F00E6ED20'] = {'small_enemy', '装甲兵（炽灼部队）', 4039692928},
+    ['A05BD1EC67B3AC4C'] = {'large_enemy', '巨兽级强袭虫 MK2', 1076678822},
+    ['A1F37BF2A40FBDE4'] = {'medium_enemy', '虫窝护卫', 626718113},
+    ['A35207C6F2150806'] = {'medium_enemy', '爆裂武斗虫', 953392591},
+    ['A381A11C07D3EB94'] = {'medium_enemy', '爆裂喷涌虫', 2270698456},
+    ['A4552F97033392F4'] = {'small_enemy', '喷气机枪奇袭者', 586021653},
+    ['A6A68D8AF177F3A1'] = {'medium_enemy', '狂暴者', 3201222154},
+    ['A71AAFD82C6EBC92'] = {'small_enemy', '机械统帅', 621159586},
+    ['AAB438596F5E8FD9'] = {'small_enemy', '猛扑虫', 908216632},
+    ['ABDB2E2A0479D8CA'] = {'large_enemy', '机器人 加农炮塔 MK2', 478200978},
+    ['AC60E78435098C9D'] = {'flying_enemy', '守望者', 886803190},
+    ['AE57FCDB49F74E98'] = {'small_enemy', '装甲兵 MK2（机枪版）', 4039692928},
+    ['AE63E525853D7044'] = {'medium_enemy', '蹂躏者 MK3', 1649987991},
+    ['AF0F9B3A163787A5'] = {'small_enemy', '喷气装甲兵', 4039692928},
+    ['B056F8FC74ABA02D'] = {'small_enemy', '激光炮装甲兵（废案）', 4039692928},
+    ['B2A6FA1E4284C7E6'] = {'medium_enemy', '狂暴武斗虫', 3564923972},
+    ['B4ED319B39F5457B'] = {'small_enemy', '机枪奇袭者', 586021653},
+    ['B5DBC0C240C921AD'] = {'medium_enemy', '狂暴者 MK3（炽灼部队）', 3201222154},
+    ['B92435FBF60F0748'] = {'medium_enemy', '重型蹂躏者 MK2', 398976798},
+    ['BC242702FB46B7E7'] = {'large_enemy', '噪轰引擎', 4066406510},
+    ['BE39E313A1E46BB9'] = {'medium_enemy', '武斗虫 MK2', 3564923972},
+    ['BE743B2FAA3A6E26'] = {'medium_enemy', '喷气蹂躏者', 1649987991},
+    ['C626D2BB495A202D'] = {'medium_enemy', '蹂躏者', 1649987991},
+    ['C6449FFD9EA3779C'] = {'large_enemy', '碎裂坦克', 2577770154},
+    ['C9BCCCB0A54A82A4'] = {'medium_enemy', '火箭蹂躏者 MK3 （炽灼部队）', 2365630221},
+    ['CBB1BA3366009C3A'] = {'medium_enemy', '激进先锋（女）', 23741406},
+    ['CC188F0C80505C6C'] = {'medium_enemy', '悲怜体', 2118086817},
+    ['CC7022FDD172089B'] = {'medium_enemy', '抚育喷涌虫 MK2', 487985459},
+    ['CCAE5264ACD591B7'] = {'medium_enemy', '胆汁喷涌虫 MK2', 717622970},
+    ['CD28A27A79BE53D5'] = {'medium_enemy', '指挥碉堡 碉堡重机枪', 3921936527},
+    ['D1E990BAF22D5A52'] = {'large_enemy', '掠食追踪虫', 4106686024},
+    ['D37E8D120D2836E3'] = {'giant_enemy', '移动工厂', 1153658728},
+    ['D465D9C7F77A07CB'] = {'giant_enemy', '霸王虫', 3929716830},
+    ['D522FD4748D443A5'] = {'large_enemy', '虫族指挥官', 3077749065},
+    ['D5792F6856B06BA4'] = {'medium_enemy', '喷气狂暴者', 3201222154},
+    ['D63FCBFF0851B7AF'] = {'large_enemy', '猎杀器 MK2', 1405979473},
+    ['D8CBC4A807A6D035'] = {'small_enemy', '乱斗者', 1974334302},
+    ['D9511E9F6BD62E3F'] = {'small_enemy', '追猎虫', 3330362068},
+    ['DA40BB347C7447F2'] = {'medium_enemy', '监视者', 1899936906},
+    ['DB90077E76FAA025'] = {'flying_enemy', '敌方单位', 554367013},
+    ['DB964631BE1CF501'] = {'small_enemy', '孢裂食腐虫', 2842755544},
+    ['DCF8E74212FBEE3B'] = {'large_enemy', '穿刺虫', 1046000873},
+    ['DFBACBD977A948DC'] = {'small_enemy', '食腐虫 MK2（俘虏）', 4212839382},
+    ['E0353177F1329573'] = {'medium_enemy', '烈火蹂躏者', 3498181594},
+    ['E44EC9F9B3FE1D2A'] = {'large_enemy', '喷气巨型炙焰者', 1775662925},
+    ['E683D2CA5618D74A'] = {'small_enemy', '奇袭者（炽灼部队）', 2000862158},
+    ['E8F19A0AA958E46D'] = {'medium_enemy', '新月监视者', 3877563222},
+    ['EACEE39FA017B495'] = {'medium_enemy', '武斗虫', 3564923972},
+    ['EF04CB84D097A497'] = {'giant_enemy', '孢裂泰坦', 2514244534},
+    ['EF570293245A17C2'] = {'large_enemy', '战争纵步者', 523260929},
+    ['F0B26FA9258128D3'] = {'flying_enemy', '敌方单位', 793026793},
+    ['F1610AC48CDC5240'] = {'medium_enemy', '监视者（无包裹模型）', 1899936906},
+    ['F22D027B37BEF107'] = {'giant_enemy', '利维坦', 3097344451},
+    ['F540CA9D9D4A422E'] = {'large_enemy', '追踪虫', 2387277009},
+    ['F66D0BAD8693779A'] = {'medium_enemy', '火箭蹂躏者 MK2', 2365630221},
+    ['F79CD8BB654397DF'] = {'large_enemy', '阿尔法指挥官', 570845236},
+    ['F8131632AA867107'] = {'large_enemy', '侦察纵步者', 20706814},
+    ['F8B5A81A86D5D4EB'] = {'medium_enemy', '重型蹂躏者', 398976798},
+    ['FB9937035D652C43'] = {'small_enemy', '装甲兵', 4039692928},
+    ['FC8DEC78BE8AB47D'] = {'medium_enemy', '蹂躏者 MK2 移动工厂生产', 1649987991},
+    ['FD5247653C897803'] = {'large_enemy', '敌方单位', 1076678822},
+}
+-- END ENEMY TARGET CATALOG
+
 local PING_TARGETS = {
     -- Current EntityComponentMap Spottable identities, cross-checked with
     -- FileDiver ammo_rack/{ammo_rack,supply_box,ammo_box} and frv_supply paths.
@@ -330,85 +480,6 @@ local PING_TARGETS = {
     ['88F61AFFF48AC8A4'] = {'stratagem', "TX-41 Sterilizer"},
     ['FDE262593307CA2F'] = {'stratagem', "LAS-98 激光大炮装备架"},
     ['16474112801385B6'] = {'stratagem', "堡垒坦克"},
-    ['08E6FFC2474287BD'] = {1, "Overseer MK2"},
-    ['09FE0BE51A23396C'] = {1, "Female Agiator"},
-    ['0AB7B92B131C228C'] = {2, "Rupture Charger"},
-    ['10081ACEF6163EF6'] = {1, "Bile Warrior"},
-    ['137988CEA16458F7'] = {2, "Hulk Bruiser"},
-    ['1897BDD32105D2DC'] = {2, "Hulk Scorcher MK2"},
-    ['1A7FCDFF98C664B0'] = {2, "Charger"},
-    ['1E66EE1F6F7FD00E'] = {2, "Hulk Obliterator"},
-    ['20B9C7734DAEAD65'] = {2, "Veracitor"},
-    ['282EB766C1FFA6A1'] = {2, "Gunship"},
-    ['2CF3488C4845F8BD'] = {2, "Cannon Turret"},
-    ['30F2DEE2333F227A'] = {3, "Jammer Factory Strider"},
-    ['31BAE74D2F064D8D'] = {2, "Annihilator Tank MK2"},
-    ['32541FC4EC7C9CDC'] = {1, "Warrior MK3"},
-    ['36AA99CCE5E60146'] = {1, "Bile Spewer"},
-    ['3AFF5FD7D5450B99'] = {2, "Charger Behemoth"},
-    ['3E0537D606438FEA'] = {2, "Hulk Scorcher"},
-    ['453FE22C634EB30F'] = {2, "Gatekeeper"},
-    ['4E97FB073BDC7A4B'] = {1, "Warrior MK2 (Captive)"},
-    ['53D8919D7B8ABD67'] = {2, "Annihilator Tank"},
-    ['54E107DACF6929CB'] = {1, "Berserker MK2"},
-    ['57EED0EAC346CD9D'] = {1, "Incendiary Devastator"},
-    ['58B2B86C11369241'] = {1, "Incendiary MG Devastator"},
-    ['5D142C3A73EBC634'] = {2, "Barrager Tank Ballistic Missile"},
-    ['6021E22338333D88'] = {1, "Nursing Spewer"},
-    ['604A794EC45BB820'] = {1, "Elevated Overseer"},
-    ['63DF3D07B7424588'] = {2, "Barrager Tank"},
-    ['67DC32DCA4F02D33'] = {2, "Fleshmob"},
-    ['6B202392F4AB605E'] = {2, "Spore Charger"},
-    ['6DAB2EADF5D8B692'] = {2, "Hulk Firebomber"},
-    ['728421351D440EBC'] = {1, "Spore Burst Warrior"},
-    ['746A7F3BEDA32699'] = {1, "Male Radical"},
-    ['843D18D4B5512B63'] = {2, "Factory Strider Cannon Turret"},
-    ['905809A4C28D8A45'] = {2, "Crusher"},
-    ['960B48A421A3FAAA'] = {3, "Dragonroach"},
-    ['9647B00CC3A9D36F'] = {1, "Rocket Devastator"},
-    ['965EAE5A51ACDD4A'] = {2, "Harvester"},
-    ['96BA14C9EBB49CE1'] = {2, "Hulk"},
-    ['9D8827FED763650E'] = {1, "Male Agitator"},
-    ['9E2E17F2CCCCAFDD'] = {3, "Bile Titan"},
-    ['A05BD1EC67B3AC4C'] = {2, "Charger Behemoth MK2"},
-    ['A1F37BF2A40FBDE4'] = {1, "Hive Guard"},
-    ['A35207C6F2150806'] = {1, "Rupture Warrior"},
-    ['A381A11C07D3EB94'] = {1, "Rupture Spewer"},
-    ['A6A68D8AF177F3A1'] = {1, "Berserker"},
-    ['ABDB2E2A0479D8CA'] = {2, "Cannon Turret MK2"},
-    ['AC60E78435098C9D'] = {1, "Watcher"},
-    ['AE63E525853D7044'] = {1, "Devastator MK3"},
-    ['B2A6FA1E4284C7E6'] = {1, "Warrior (Spawned)"},
-    ['B5DBC0C240C921AD'] = {1, "Incendiary Berserker"},
-    ['B92435FBF60F0748'] = {1, "Heavy Devastator MK2"},
-    ['BC242702FB46B7E7'] = {2, "Vox Engine"},
-    ['BE39E313A1E46BB9'] = {1, "Warrior MK2"},
-    ['BE743B2FAA3A6E26'] = {1, "Jet Brigade Devastator"},
-    ['C626D2BB495A202D'] = {1, "Devastator"},
-    ['C6449FFD9EA3779C'] = {2, "Shredder Tank"},
-    ['C9BCCCB0A54A82A4'] = {1, "Incendiary Rocket Devastator"},
-    ['CBB1BA3366009C3A'] = {1, "Female Radical"},
-    ['CC188F0C80505C6C'] = {1, "Wretch"},
-    ['CC7022FDD172089B'] = {1, "Nursing Spewer MK2"},
-    ['CCAE5264ACD591B7'] = {1, "Bile Spewer MK2"},
-    ['CD28A27A79BE53D5'] = {1, "Command Bunker HMG"},
-    ['D37E8D120D2836E3'] = {3, "Factory Strider"},
-    ['D522FD4748D443A5'] = {2, "Brood Commander"},
-    ['D5792F6856B06BA4'] = {1, "Jet Brigade Berserker"},
-    ['D63FCBFF0851B7AF'] = {2, "Harvester MK2"},
-    ['DA40BB347C7447F2'] = {1, "Overseer"},
-    ['DCF8E74212FBEE3B'] = {2, "Impaler"},
-    ['E0353177F1329573'] = {1, "Conflagration Devastator"},
-    ['E8F19A0AA958E46D'] = {1, "Crescent Overseer"},
-    ['EACEE39FA017B495'] = {1, "Warrior"},
-    ['EF04CB84D097A497'] = {3, "Spore Burst Bile Titan"},
-    ['EF570293245A17C2'] = {2, "War Strider"},
-    ['F1610AC48CDC5240'] = {1, "Overseer (No Package)"},
-    ['F540CA9D9D4A422E'] = {2, "Stalker"},
-    ['F66D0BAD8693779A'] = {1, "Rocket Devastator MK2"},
-    ['F79CD8BB654397DF'] = {2, "Alpha Commander"},
-    ['F8131632AA867107'] = {2, "Scout Strider"},
-    ['F8B5A81A86D5D4EB'] = {1, "Heavy Devastator"},
 }
 
 -- Current DLL receiver falls back to 330A0E0[kind] for unnamed markers.
@@ -418,9 +489,9 @@ local GENERIC_MISSION_NAMES = {[3585962803]=true, [689074879]=true, [4234884333]
 
 local function build_ping_events(env)
     local ffi = require('ffi')
-    local categories = {[1] = 'medium_enemy', [2] = 'large_enemy', [3] = 'giant_enemy'}
     local state = {scene = nil, seen = {}, generation = 0, serial = 0, status = '等待标记数据'}
-    local api = {state = state, supported = {medium_enemy = true, large_enemy = true,
+    local api = {state = state, supported = {small_enemy = true, flying_enemy = true,
+        medium_enemy = true, large_enemy = true,
         giant_enemy = true, building = true, stratagem = true, map = true}}
     local function reset(reason)
         state.scene, state.session, state.seen = nil, nil, {}
@@ -609,7 +680,7 @@ local function build_ping_events(env)
             local okay, value = pcall(env.localize, key)
             if okay and type(value) == 'string' and #value > 0 and #value <= 256 then
                 value = value:gsub('[%c<>]', '')
-                if value ~= '' then return value end
+                if value ~= '' and not value:match('^#%d+$') then return value end
             end
         end
         local function objective_name(entity)
@@ -704,7 +775,7 @@ local function build_ping_events(env)
             local index = lookup(root+0xf1aeb0, entry.target_id, 2048)
             if not index then return nil, 'retry' end
             local address = root+0xf32f18+index*24
-            local identity = read(address, 24)
+            local identity = guarded(address, 24)
             if u32(identity, 8) ~= entry.target_id then return nil, 'retry' end
             local resource = hex64(identity, 0)
             if EXCLUDED_SUPPLIES[resource] then return nil end
@@ -713,24 +784,25 @@ local function build_ping_events(env)
             -- identity is a reviewed task resource. Empty terrain still exits
             -- above, and arbitrary objects/enemies do not become locations.
             if entry.kind == 0 and not mission then return nil end
-            local info = mission or PING_TARGETS[resource]
+            local enemy = ENEMY_TARGETS[resource]
+            local info = mission or enemy or PING_TARGETS[resource]
             if not info and not (native_category and localized) then
                 if native_category and entry.localization_key > 0 then return nil, 'retry' end
                 return nil
             end
             if read(address, 24) ~= identity then return nil, 'retry' end
             local label = localized or info and info[2]
-            -- The flagpole and other real mission sites share the generic
-            -- location/terminal keys. Use the reviewed unit name in that case;
+            -- Mission sites and enemies can share generic marker keys. Resolve
+            -- the catalog's actual Encyclopedia name before its reviewed fallback;
             -- keep specific native marker text when it is available.
-            if mission and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
+            if (mission or enemy) and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
                 label = localized_name(info[3]) or info[2]
             end
             if info and info[2]:match('^TCS') and localized and not localized:find('TCS',1,true)
                 and not GENERIC_MISSION_NAMES[entry.localization_key] then
                 label = info[2] .. ' / ' .. localized
             end
-            return {category = info and (categories[info[1]] or info[1]) or native_category,
+            return {category = info and info[1] or native_category,
                 target = label, target_id = entry.target_id,
                 creator_id = entry.creator_id, resource = resource, kind = entry.kind, slot = entry.slot,
                 localization_key=entry.localization_key, position=entry.position, action=action,

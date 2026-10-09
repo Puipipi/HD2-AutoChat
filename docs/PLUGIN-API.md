@@ -78,7 +78,7 @@ AutoChat 0.7.1起，可传入当前事件的完整16位hex `creator_id`，按该
 | 字段 | 内容 |
 | --- | --- |
 | `type` | `ping` |
-| `category` | `building / stratagem / medium_enemy / large_enemy / giant_enemy / map` |
+| `category` | `building / stratagem / small_enemy / medium_enemy / large_enemy / giant_enemy / flying_enemy / map`；飞行优先于体型 |
 | `target` | 游戏名称或已核实资源名 |
 | `creator_id` | 完整16位大写十六进制peer ID；共享调用无法归属时缺省，检查anonymous；不要转Lua number |
 | `position` | `{x,y,z}` 世界坐标，可选 |
@@ -87,6 +87,7 @@ AutoChat 0.7.1起，可传入当前事件的完整16位hex `creator_id`，按该
 | `action` | 可选：`summon` 表示战备召唤，`use` 表示原地执行任务战备，`mark` 或缺省表示标记；旧接口兼容 |
 | `objective_name / objective_kind / objective_importance` | 0.7.3地图任务可选字段：游戏名称；`primary / prerequisite / optional / tactical / unknown`；原生当局属性整数 |
 | `anonymous / stratagem_id` | 0.7.8任务战备字段：共享成功记录无法归属时anonymous=true；stratagem_id为稳定战备ID |
+| `stratagem_rule_id / stratagem_group / stratagem_ambiguous` | 0.8.0：同名且呼叫方式相同的变体共用设置规则ID；分组为red/blue/green/other；无法唯一确认具体变体时ambiguous=true且不伪造stratagem_id |
 | `resource / target_id / localization_key / slot` | 可选调查字段 |
 
 这是经过归属与会话检查的本人或队友新标记、战备召唤及任务执行。共享调用不能证明触发者时不提供creator_id，插件应显示“小队”，不可把缺省ID代入本机冒充调用者。普通物资、地面空点、地图空白点不发布，进入房间时已有标记只建基线。

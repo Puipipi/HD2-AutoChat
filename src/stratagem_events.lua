@@ -102,6 +102,13 @@ local function build_stratagem_events(env)
                         -- only 4-aligned; manager pointers above remain 8-aligned.
                         local row=ptr(base+0x37cb600+kind*8,4)
                         local info=guard(row,0x78);local id=word(info,4);local known=catalog[id]
+                        local discovered=env.catalog and env.catalog.lookup(id)
+                        -- Thrown call-ins already have a confirmed HUD producer;
+                        -- observe non-thrown successes here to avoid duplicate warnings.
+                        if not known and discovered and (discovered.call_type==2 or discovered.call_type==3) then
+                            known={discovered.name,discovered.name_key,
+                                (discovered.call_type==2 or (discovered.payload_count or 0)>0) and 'summon' or 'use',discovered.call_type}
+                        end
                         if known and word(info,0)==kind and word(info,0x74)==known[4] then
                             local key=p..':'..id
                             assert(not entries[key],'duplicate task slot')

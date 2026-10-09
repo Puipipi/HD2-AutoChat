@@ -451,6 +451,88 @@ class PingEventsTests(unittest.TestCase):
                 self.mark(); self.header(0, 1); self.poll(1)
                 self.assertEqual(self.events[0][0]['category'], category)
 
+    def test_airborne_targets_use_flying_category_independent_of_their_size(self):
+        for resource in ('64090088502435DD', 'F0B26FA9258128D3',  # Small Shriekers
+                         '604A794EC45BB820', 'AC60E78435098C9D',  # Medium Overseer/Watcher
+                         '282EB766C1FFA6A1', '19E18B46EC55D94A',  # Large Gunship/Stingray
+                         '98152772A72F7838', '960B48A421A3FAAA'):  # Massive Dropship/Dragonroach
+            with self.subTest(resource=resource):
+                self.setUp(); self.target(resource); self.poll(0)
+                self.mark(); self.header(0, 1); self.poll(1)
+                self.assertEqual(len(self.events), 1)
+                self.assertEqual(self.events[0][0]['category'], 'flying_enemy')
+
+    def test_small_ground_enemies_are_distinct_from_airborne_and_medium(self):
+        for resource in ('8FF0A839830A7692', 'D9511E9F6BD62E3F', 'FB9937035D652C43'):
+            with self.subTest(resource=resource):
+                self.setUp(); self.target(resource); self.poll(0)
+                self.mark(); self.header(0, 1); self.poll(1)
+                self.assertEqual(len(self.events), 1)
+                self.assertEqual(self.events[0][0]['category'], 'small_enemy')
+        self.assertTrue(self.adapter.supported.small_enemy)
+        self.assertTrue(self.adapter.supported.flying_enemy)
+
+    def test_generic_enemy_marker_uses_specific_encyclopedia_localization(self):
+        self.target('64090088502435DD')
+        self.localized.update({689074879: '敌方单位', 793026793: '尖啸虫'})
+        self.poll(0); self.mark(localization_key=689074879); self.header(0, 1); self.poll(1)
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual(self.events[0][0]['target'], '尖啸虫')
+        self.assertEqual(self.events[0][0]['category'], 'flying_enemy')
+
+    def test_specific_native_enemy_name_takes_priority_over_catalog_name_key(self):
+        self.target('282EB766C1FFA6A1')
+        self.localized.update({123: '敌方炮艇', 1932062202: '武装运输机'})
+        self.poll(0); self.mark(localization_key=123); self.header(0, 1); self.poll(1)
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual(self.events[0][0]['target'], '敌方炮艇')
+        self.assertEqual(self.events[0][0]['category'], 'flying_enemy')
+
+    def test_unresolved_encyclopedia_placeholder_uses_reviewed_name(self):
+        self.target('64090088502435DD')
+        self.localized.update({689074879: '敌方单位', 793026793: '#793026793'})
+        self.poll(0); self.mark(localization_key=689074879); self.header(0, 1); self.poll(1)
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual(self.events[0][0]['target'], '尖啸虫')
+
+    def test_enemy_identity_change_during_encyclopedia_lookup_discards_event(self):
+        self.target('64090088502435DD')
+        def localize(key):
+            if int(key) == 793026793:
+                self.target('8FF0A839830A7692')
+                return '尖啸虫'
+            return '敌方单位'
+        constructor = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_ping_events')
+        self.adapter = constructor(self.lua.table_from({'base': lambda: self.base,
+            'read': self.read, 'emit': self.emit, 'localize': localize}))
+        self.poll(0); self.mark(localization_key=689074879); self.header(0, 1); self.poll(1)
+        self.assertEqual(self.events, [])
+
+    def test_reviewed_spottable_enemies_all_reach_the_reader(self):
+        catalog = json.loads((SOURCE.parents[1] / 'docs/enemy-catalog.json').read_text(encoding='utf-8'))
+        for row in catalog['entries']:
+            if not row['spottable']:
+                continue
+            with self.subTest(resource=row['resource_id']):
+                self.setUp(); self.target(row['resource_id']); self.poll(0)
+                self.mark(); self.header(0, 1); self.poll(1)
+                self.assertEqual(len(self.events), 1)
+                self.assertTrue(self.events[0][0]['category'].endswith('_enemy'))
+
+    def test_friendly_and_nonspottable_resources_are_not_promoted_to_enemies(self):
+        for resource in ('14453B8FCB040099', '4ABCF54464695EFA',  # SEAF/civilian
+                         '304C3124208291E9', '684284354532CC0E',  # Nonspottable drones
+                         '5D142C3A73EBC634'):  # Nonspottable tank launcher subresource
+            with self.subTest(resource=resource):
+                self.setUp(); self.target(resource); self.localized[689074879] = '敌方单位'
+                self.poll(0); self.mark(localization_key=689074879); self.header(0, 1); self.poll(1)
+                self.assertEqual(self.events, [])
+
+    def test_unknown_enemy_marker_with_a_name_does_not_assume_size_or_flight(self):
+        self.target('DEADBEEFDEADBEEF'); self.localized[123] = '未知敌人'
+        self.poll(0); self.mark(localization_key=123); self.header(0, 1); self.poll(1)
+        self.assertEqual(self.events, [])
+
     def test_existing_marks_on_first_poll_are_baseline_only(self):
         self.mark(); self.header(0, 1); self.poll(0); self.poll(1)
         self.assertEqual(self.events, [])

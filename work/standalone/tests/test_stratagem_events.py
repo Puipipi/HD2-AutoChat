@@ -72,6 +72,30 @@ class StratagemEventsTests(unittest.TestCase):
         self.assertEqual(self.f.events[0][0]['action'], 'use')
         self.assertEqual(self.f.events[0][0]['target'], '上传数据')
 
+    def test_discovered_catalog_preserves_known_flag_summon_action(self):
+        constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+        discovered=self.f.lua.table_from({'call_type':3,'payload_count':1,'name':'超级地球旗帜','name_key':2281165846})
+        self.reader=constructor(self.f.lua.table_from({
+            'base':lambda:self.f.base,'read':self.f.read,'session':lambda:self.f.session,
+            'localize':lambda key:self.f.localized.get(int(key)),'emit':self.f.emit,
+            'catalog':self.f.lua.table_from({'lookup':lambda identity:discovered})}))
+        self.poll(0);self.success();self.poll(1)
+        self.assertEqual('summon',self.f.events[0][0]['action'])
+
+    def test_future_nonthrown_rows_inherit_payload_action_and_throws_stay_on_hud_path(self):
+        for call_type,payload_count,expected in ((3,0,'use'),(3,1,'summon'),(2,0,'summon'),(0,1,None)):
+            with self.subTest(call_type=call_type,payload_count=payload_count):
+                self.setUp();self.entry(0,0,200,123456,77)
+                self.f.put(ROW+200*0x200+0x74,'<I',call_type)
+                discovered=self.f.lua.table_from({'call_type':call_type,'payload_count':payload_count,'name':'未来战备','name_key':77})
+                constructor=self.f.lua.execute(SOURCE.read_text(encoding='utf-8')+'\nreturn build_stratagem_events')
+                self.reader=constructor(self.f.lua.table_from({
+                    'base':lambda:self.f.base,'read':self.f.read,'session':lambda:self.f.session,
+                    'emit':self.f.emit,'catalog':self.f.lua.table_from({'lookup':lambda identity:discovered})}))
+                self.poll(0);self.success(200,123456,77);self.f.put(ROW+200*0x200+0x74,'<I',call_type);self.poll(1)
+                if expected:self.assertEqual(expected,self.f.events[0][0]['action'])
+                else:self.assertEqual([],self.f.events)
+
     def test_current_game_stratagem_rows_can_be_four_byte_aligned(self):
         row = ROW + 11 * 0x200
         data = self.f.read(row, 0x80)

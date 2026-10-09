@@ -12,9 +12,27 @@ sys.path.insert(0, str(ROOT / "work/standalone/tests"))
 from test_auto_chat_probe import fresh_image, SOURCE
 
 
-def render(output, populated=False, automation=False, view=None, plugin=False, profile=None):
+def render(output, populated=False, automation=False, view=None, plugin=False, profile=None, rule_view=None, preset=False):
     lua, h = fresh_image(font_ids=True)
     mod = h.load(SOURCE)
+    if rule_view:
+        # Representative rows for layout QA only; real names/icons come from the
+        # guarded game catalog. No game icons are fabricated in this offline image.
+        lua.execute('''local c=(...).debug_stratagem_catalog()
+            local rows={
+                {id=4119049995,name='500千克炸弹',debug_name='EAGLE.500KG',group='red',cooldown=15},
+                {id=2902516083,name='轨道凝固汽油弹幕',debug_name='ORBITAL.NAPALM',group='red',cooldown=120},
+                {id=867876502,name='重新补给',debug_name='CONSUMABLES.RESUPPLY',group='blue',cooldown=180,variant_ids={867876502,1295431756}},
+                {id=3,name='机枪哨戒炮',debug_name='SENTRYS.MACHINEGUN',group='green',cooldown=180}}
+            c.scan=function()return #rows,c.state.status end;c.list=function()return rows end;c.list_rules=c.list
+            c.state.status='离线布局示例；游戏中读取名称和已加载图标'
+        ''',mod)
+    if preset:
+        ok, _, preset_id = mod.debug_preset_library().save('小队欢迎', 'host')
+        if not ok:
+            raise RuntimeError('could not create preview preset')
+        mod.debug_panel()['preset_view'] = True
+        mod.debug_panel()['preset_selected'] = preset_id
     if plugin:
         lua.execute((ROOT / 'src/examples/interface_demo.lua').read_text(encoding='utf-8'))
         mod.debug_panel()['active_plugin'] = 'auto_chat_demo'
@@ -58,6 +76,10 @@ def render(output, populated=False, automation=False, view=None, plugin=False, p
         mod.debug_panel()['settings_view'] = view
     if profile:
         mod.debug_panel()['profile'] = profile
+    if rule_view:
+        mod.debug_panel()['rule_view'] = rule_view
+        if rule_view=='enemy':
+            mod.debug_panel()['rule_selected']='flying_enemy'
     lua.execute("for i=1,601 do update() end")
     if mod.draw_errors or mod.panel_errors:
         raise RuntimeError(str(mod.debug_panel()["hint"]) + str(mod.draw_error_text))
@@ -89,3 +111,6 @@ if __name__ == "__main__":
     render(ROOT / "docs/ping-preview.png", populated=True, view="pings")
     render(ROOT / "docs/plugin-demo-preview.png", plugin=True)
     render(ROOT / "docs/client-profile-preview.png", automation=True, profile='client')
+    render(ROOT / "docs/stratagem-rules-preview.png", rule_view='stratagem')
+    render(ROOT / "docs/enemy-rules-preview.png", rule_view='enemy')
+    render(ROOT / "docs/preset-preview.png", preset=True)

@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.7.9', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.8.0', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -33,7 +33,7 @@ rawset(_G, KEY, M)
 -- Declared here, above every function that reads them: a `local` declared below
 -- its reader is not in scope there and the name silently becomes a global read.
 local game, game_base, send_fn = nil, nil, nil
-local automation, peer_identity, REGISTRY
+local automation, preset_library, peer_identity, REGISTRY
 local chat_buffer = nil
 local verified, verify_reason = false, 'not run'
 local sr, Gui, Vector3, Vector2, Color = nil, nil, nil, nil, nil
@@ -761,15 +761,16 @@ local function build_chat_automation(env)
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
+        ping_small_enemy = false, ping_flying_enemy = true,
         ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
         task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
-        ping_giant_enemy=true, ping_summon=true}
+        ping_giant_enemy=true, ping_small_enemy=true, ping_flying_enemy=true, ping_summon=true}
     local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil, status = '等待会话'}
     local api = {options = options, state = state}
 
@@ -816,27 +817,90 @@ local function build_chat_automation(env)
             return string.char(tonumber(h, 16))
         end))
     end
+    local function valid_utf8(text)
+        local i,n=1,#text
+        while i<=n do
+            local a=text:byte(i)
+            if a<0x80 then i=i+1
+            elseif a>=0xC2 and a<=0xDF then
+                local b=text:byte(i+1);if not b or b<0x80 or b>0xBF then return false end;i=i+2
+            elseif a>=0xE0 and a<=0xEF then
+                local b,c=text:byte(i+1,i+2)
+                if not b or not c or c<0x80 or c>0xBF or b<0x80 or b>0xBF
+                    or (a==0xE0 and b<0xA0) or (a==0xED and b>0x9F) then return false end
+                i=i+3
+            elseif a>=0xF0 and a<=0xF4 then
+                local b,c,d=text:byte(i+1,i+3)
+                if not b or not c or not d or c<0x80 or c>0xBF or d<0x80 or d>0xBF
+                    or b<0x80 or b>0xBF or (a==0xF0 and b<0x90) or (a==0xF4 and b>0x8F) then return false end
+                i=i+4
+            else return false end
+        end
+        return true
+    end
     local function copy(source)
         local result = {}; for _, key in ipairs(keys) do result[key] = source[key] end
+        result.rules = {}
+        for id,rule in pairs(source.rules or {}) do
+            result.rules[id] = {};for key,value in pairs(rule) do result.rules[id][key]=value end
+        end
         return result
+    end
+    local enemy_rules = {small_enemy=true,medium_enemy=true,large_enemy=true,giant_enemy=true,flying_enemy=true}
+    local rule_fields = {enabled=true,mark_message=true,call_message=true,cooldown=true}
+    local function rule_key(kind,id)
+        if kind=='enemy' and enemy_rules[id] then return 'enemy_'..id end
+        id=tonumber(id)
+        if kind=='stratagem' and id and id%1==0 and id>0 and id<4294967296 then
+            return 'stratagem_'..string.format('%.0f',id)
+        end
+    end
+    local function rule_value(field,value)
+        if not rule_fields[field] then return false end
+        if value==nil or value=='' then return true,nil end
+        if field=='enabled' then return type(value)=='boolean',value end
+        if field=='cooldown' then
+            return type(value)=='number' and value==value and value%1==0 and value>=0 and value<=3600,value
+        end
+        return type(value)=='string' and #value<=512 and not value:find('%z') and value:find('%S')~=nil,value
     end
     local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v3'}
+        local lines = {'# AutoChat automation settings v4'}
         for _, role in ipairs({'host','client'}) do
             for _, key in ipairs(keys) do
                 lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
+            end
+            local ids={};for id in pairs(candidate[role].rules or {}) do ids[#ids+1]=id end;table.sort(ids)
+            for _,id in ipairs(ids) do
+                for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
+                    local value=candidate[role].rules[id][field]
+                    if value~=nil then lines[#lines+1]=role..'.rule_'..id..'.'..field..'='..escape(tostring(value)) end
+                end
             end
         end
         return table.concat(lines, '\n') .. '\n'
     end
     local saved_keys, legacy = {}, {}
     local role_values = {host={},client={}}
+    local saved_rules = {host={},client={}}
     local saved = attempt(env.read_file)
     if type(saved) == 'string' then
         for line in saved:gmatch('[^\r\n]+') do
             local key, raw = line:match('^([%w_%.]+)=(.*)$')
             if key then
+                local rr,rk,ri,rf=key:match('^(%a+)%.rule_(%a+)_([%w_]+)%.([%w_]+)$')
+                if saved_rules[rr] and rule_key(rk,ri) then
+                    local value=unescape(raw)
+                    if rf=='enabled' then
+                        if value=='true' then value=true elseif value=='false' then value=false else value=nil end
+                    elseif rf=='cooldown' then value=tonumber(value) end
+                    local valid,converted=rule_value(rf,value)
+                    if valid and converted~=nil then
+                        local id=rule_key(rk,ri);saved_rules[rr][id]=saved_rules[rr][id] or {}
+                        saved_rules[rr][id][rf]=converted
+                    end
+                end
                 local role, name = key:match('^(%a+)%.([%w_]+)$')
                 if role then key = name end
                 local value = unescape(raw)
@@ -869,10 +933,105 @@ local function build_chat_automation(env)
     profiles.client.welcome, profiles.client.output, profiles.client.scope = false, 'local', 'all'
     for _, role in ipairs({'host','client'}) do
         for key,value in pairs(role_values[role]) do profiles[role][key] = value end
+        profiles[role].rules=saved_rules[role]
+        if (saved_version or 1)<4 then
+            -- First upgrade seeds the requested high-TK-risk alerts only. Once
+            -- v4 is saved, clearing these fields really restores global timing.
+            for _,id in ipairs({4119049995,2902516083}) do
+                local key=rule_key('stratagem',id)
+                profiles[role].rules[key]=profiles[role].rules[key] or {cooldown=0}
+            end
+        end
     end
     for _,key in ipairs(keys) do options[key] = profiles.host[key] end
     state.active_role = 'host'
     function api.profile(role) return profiles[role or state.active_role] end
+
+    -- Portable named-profile format is deliberately data-only and parsed strictly.
+    function api.export_profile(role)
+        local source=profiles[role]
+        if not source then return nil,'未知预设' end
+        local lines={'# AutoChat profile v1'}
+        for _,key in ipairs(keys) do lines[#lines+1]=key..'='..escape(tostring(source[key])) end
+        local ids={};for id in pairs(source.rules or {}) do ids[#ids+1]=id end;table.sort(ids)
+        for _,id in ipairs(ids) do
+            for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
+                local value=source.rules[id][field]
+                if value~=nil then lines[#lines+1]='rule_'..id..'.'..field..'='..escape(tostring(value)) end
+            end
+        end
+        local payload=table.concat(lines,'\n')..'\n'
+        if #payload>1048576 then return nil,'预设超过 1 MiB' end
+        return payload
+    end
+    function api.validate_profile(payload)
+        if type(payload)~='string' or #payload>1048576 then return false,'预设格式无效或超过 1 MiB' end
+        if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
+        local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
+        if lines[1]~='# AutoChat profile v1' then return false,'预设版本无效' end
+        local values,rules,seen={}, {}, {}
+        local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
+        for i=2,#lines do
+            local key,raw=lines[i]:match('^([%w_%.]+)=(.*)$')
+            if not key or key=='' or seen[key] then return false,'预设包含空白、重复或无效行' end
+            seen[key]=true
+            local value=unescape(raw)
+            if value==nil or escape(value)~=raw then return false,'预设转义无效' end
+            if not valid_utf8(value) then return false,'预设包含无效 UTF-8' end
+            if scalar_set[key] then
+                if booleans[key] then
+                    if value=='true' then value=true elseif value=='false' then value=false else return false,'开关值无效' end
+                elseif key=='cooldown' or key=='welcome_delay' then
+                    if not value:match('^%d+$') then return false,'冷却值无效' end
+                    value=tonumber(value)
+                end
+                local ok=validate(key,value);if not ok then return false,'设置值无效：'..key end
+                values[key]=value
+            else
+                local kind,field=key:match('^rule_(.+)%.([%a_]+)$')
+                if not kind then return false,'预设包含未知字段' end
+                local rk,ri=kind:match('^(stratagem)_(%d+)$')
+                if not rk then
+                    for enemy in pairs(enemy_rules) do
+                        if kind=='enemy_'..enemy then rk,ri='enemy',enemy;break end
+                    end
+                end
+                local stable=rule_key(rk,ri)
+                if not stable or stable~=kind or not rule_fields[field] or value=='' then return false,'规则无效' end
+                if field=='enabled' then
+                    if value=='true' then value=true elseif value=='false' then value=false else return false,'规则开关无效' end
+                elseif field=='cooldown' then
+                    if not value:match('^%d+$') then return false,'规则冷却无效' end
+                    value=tonumber(value)
+                end
+                local ok,converted=rule_value(field,value)
+                if not ok or converted==nil then return false,'规则值无效' end
+                rules[stable]=rules[stable] or {};rules[stable][field]=converted
+            end
+        end
+        for _,key in ipairs(keys) do if values[key]==nil then return false,'缺少设置：'..key end end
+        local count=0;for _ in pairs(rules) do count=count+1 end
+        if count>512 then return false,'规则数量超过 512' end
+        return true,{values=values,rules=rules}
+    end
+    function api.import_profile(payload,role)
+        if role~='host' and role~='client' then return false,'未知预设' end
+        local valid,parsed=api.validate_profile(payload)
+        if not valid then return false,parsed end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        for _,key in ipairs(keys) do candidate[role][key]=parsed.values[key] end
+        candidate[role].rules=parsed.rules
+        if attempt(env.write_file,serialize(candidate))~=true then return false,'设置保存失败，已保留原设置' end
+        profiles[role]=candidate[role]
+        state.rule_revision=(state.rule_revision or 0)+1
+        if role==state.active_role then
+            for _,key in ipairs(keys) do options[key]=profiles[role][key] end
+            state.pending,state.pings,state.ping_seen,state.last_by_peer,state.last_by_rule={},{},{},{},{}
+            state.baseline,state.last_send=nil,nil
+        end
+        state.status='设置已保存'
+        return true,state.status
+    end
 
     local function peer_key(value)
         local kind = type(value)
@@ -927,7 +1086,7 @@ local function build_chat_automation(env)
         if role ~= state.active_role then
             state.active_role = role
             for _, key in ipairs(keys) do options[key] = profiles[role][key] end
-            state.pending, state.pings, state.ping_seen, state.last_by_peer = {}, {}, {}, {}
+            state.pending, state.pings, state.ping_seen, state.last_by_peer, state.last_by_rule = {}, {}, {}, {}, {}
             state.baseline, state.last_send = nil, nil
             state.status = role == 'host' and '已切换主机预设' or '已切换客机预设'
         end
@@ -946,7 +1105,7 @@ local function build_chat_automation(env)
     end
 
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
-        medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
+        small_enemy='小型敌人', flying_enemy='飞行敌人', medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
     local function clipped(value, limit)
         if #value <= limit then return value end
         local at = limit + 1
@@ -1041,7 +1200,7 @@ local function build_chat_automation(env)
         local token = snapshot and table.concat({tostring(snapshot.session),tostring(snapshot.context),
             tostring(snapshot.mine),tostring(snapshot.host)},'|') or '@unavailable'
         if state.limit_session ~= token then
-            state.limit_session, state.last_by_peer, state.last_send = token, {}, nil
+            state.limit_session, state.last_by_peer, state.last_send, state.last_by_rule = token, {}, nil, {}
         end
         if snapshot then
             local present = {}
@@ -1049,9 +1208,12 @@ local function build_chat_automation(env)
             for key in pairs(state.last_by_peer) do
                 if not present[key] then state.last_by_peer[key]=nil end
             end
+            for key in pairs(state.last_by_rule or {}) do
+                if not present[key] then state.last_by_rule[key]=nil end
+            end
         end
     end
-    local function policy(now, others, snapshot, peer)
+    local function policy(now, others, snapshot, peer, rule_id, cooldown)
         limits(snapshot)
         if not options.enabled then return false, '自动发送已关闭' end
         if options.scope == 'host' then
@@ -1064,8 +1226,11 @@ local function build_chat_automation(env)
         if type(now) ~= 'number' or now ~= now or now == math.huge or now == -math.huge then
             return false, '等待：计时尚未就绪'
         end
-        local last = state.last_by_peer[bucket(peer,snapshot)]
-        if last and now - last < options.cooldown then
+        local key=bucket(peer,snapshot)
+        local independent=rule_id and cooldown~=nil
+        local last=independent and (state.last_by_rule[key] or {})[rule_id] or nil
+        if not independent then last=state.last_by_peer[key] end
+        if last and now - last < (independent and cooldown or options.cooldown) then
             return false, '等待：该玩家的自动消息间隔中'
         end
         return true, '可以自动发送'
@@ -1104,6 +1269,52 @@ local function build_chat_automation(env)
         if key == 'output' then reset() end
         state.status = '设置已保存'
         return true, state.status
+    end
+    function api.rule(kind,id,role)
+        local key=rule_key(kind,id);local profile=profiles[role or state.active_role]
+        local result={};for field,value in pairs(profile and key and profile.rules[key] or {}) do result[field]=value end
+        return result
+    end
+    local function save_rules(candidate,role)
+        if attempt(env.write_file,serialize(candidate))~=true then return false,'设置保存失败，已保留原设置' end
+        profiles[role].rules=candidate[role].rules
+        state.rule_revision=(state.rule_revision or 0)+1
+        if role==state.active_role then state.pings={} end -- Do not send an old template after editing.
+        return true,'设置已保存'
+    end
+    function api.set_rule(kind,id,field,value,role)
+        api.sync();role=role or state.active_role
+        local key=rule_key(kind,id);local valid,converted=rule_value(field,value)
+        if not profiles[role] or not key or not valid then return false,'无效规则；冷却须为 0–3600 秒，消息最多 512 字节' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        candidate[role].rules[key]=candidate[role].rules[key] or {}
+        candidate[role].rules[key][field]=converted
+        if not next(candidate[role].rules[key]) then candidate[role].rules[key]=nil end
+        return save_rules(candidate,role)
+    end
+    function api.set_rules(kind,ids,enabled,role)
+        api.sync();role=role or state.active_role
+        if not profiles[role] or type(ids)~='table' or type(enabled)~='boolean' then return false,'无效批量设置' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        for _,id in ipairs(ids) do
+            local key=rule_key(kind,id);if not key then return false,'无效战备 ID' end
+            candidate[role].rules[key]=candidate[role].rules[key] or {};candidate[role].rules[key].enabled=enabled
+        end
+        return save_rules(candidate,role)
+    end
+    function api.reset_rule(kind,id,role)
+        api.sync();role=role or state.active_role
+        local key=rule_key(kind,id)
+        if not profiles[role] or not key then return false,'无效规则' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        local old=candidate[role].rules[key]
+        candidate[role].rules[key]=old and {enabled=old.enabled} or nil
+        return save_rules(candidate,role)
+    end
+    local function event_rule(event)
+        local key=event.rule_id or (event.category=='stratagem' and rule_key('stratagem',event.stratagem_rule_id or event.stratagem_id)
+            or rule_key('enemy',event.category))
+        return key,key and profiles[state.active_role].rules[key] or {}
     end
     local function same_session(a, b)
         return a and b and a.session == b.session and a.context == b.context
@@ -1172,11 +1383,20 @@ local function build_chat_automation(env)
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then return false end
         if not options.enabled or not options.ping or not ping_enabled(event.category,event.action) then return false end
+        local rule_id,rule=event_rule(event)
+        if rule.enabled==false then return false end
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
-        if state.ping_seen[event.key] or #state.pings >= 16 then return false end
+        if state.ping_seen[event.key] then return false end
         local snapshot = api.snapshot()
         if options.scope == 'host' and (not snapshot or snapshot.is_host ~= true) then return false end
         if not creator_present(event.creator_id, snapshot) then return false end
+        if #state.pings>=16 then
+            if rule.cooldown~=0 then return false end
+            local evict
+            for i,pending in ipairs(state.pings) do if pending.cooldown~=0 then evict=i;break end end
+            if not evict then return false end
+            table.remove(state.pings,evict)
+        end
         local label = categories[event.category]
         local target = type(event.target) == 'string' and plain(event.target,200) or label
         local identity = identity_for(event.creator_id)
@@ -1192,6 +1412,7 @@ local function build_chat_automation(env)
             ['{任务类型}']=objective_types[event.objective_kind] or label,
             ['{位置}']=position_text(event)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
+        template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
         local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
         local prefix = ''
         if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
@@ -1203,13 +1424,13 @@ local function build_chat_automation(env)
             prefix = prefix .. ' '
         end
         text = prefix .. clipped(text, math.max(0, 512 - #prefix))
-        state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, text=text, expires=now+15, retry=now,
+        state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, rule_id=rule_id, cooldown=rule.cooldown, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
         state.ping_seen[event.key] = now + 30
         return true
     end
-    local function poll_ping(now)
+    local function poll_ping(now, urgent_only)
         if not options.enabled or not options.ping then state.pings = {}; return false end
         if type(now) ~= 'number' or now ~= now then return false end
         local snapshot = api.snapshot()
@@ -1225,8 +1446,8 @@ local function build_chat_automation(env)
         end
         local pending, index
         for i,p in ipairs(state.pings) do
-            if now>=p.retry then
-                local allowed,why=policy(now,snapshot and #snapshot.remote or nil,snapshot,p.creator_id)
+            if now>=p.retry and (not urgent_only or p.cooldown==0) then
+                local allowed,why=policy(now,snapshot and #snapshot.remote or nil,snapshot,p.creator_id,p.rule_id,p.cooldown)
                 if allowed then pending,index=p,i;break end
                 state.status=why
             end
@@ -1234,7 +1455,11 @@ local function build_chat_automation(env)
         if not pending then return false end
         local sent = api.send(pending.text, pending.role)
         if sent == true then
-            table.remove(state.pings,index); api.record(now,pending.creator_id)
+            table.remove(state.pings,index)
+            if pending.rule_id and pending.cooldown~=nil then
+                limits(snapshot);local key=bucket(pending.creator_id,snapshot)
+                state.last_by_rule[key]=state.last_by_rule[key] or {};state.last_by_rule[key][pending.rule_id]=now
+            else api.record(now,pending.creator_id) end
             state.status='已发送玩家标记提示'; return true, state.status
         end
         pending.retry=now+5
@@ -1243,6 +1468,8 @@ local function build_chat_automation(env)
     end
     function api.poll(now)
         api.sync()
+        local urgent,urgent_why=poll_ping(now,true)
+        if urgent then return urgent,urgent_why end
         local sent, why = poll_welcome(now)
         if sent then return sent, why end
         local ping_sent, ping_why = poll_ping(now)
@@ -1251,6 +1478,246 @@ local function build_chat_automation(env)
     return api
 end
 -- END CHAT AUTOMATION
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- BEGIN PRESET LIBRARY
+-- Data-only preset storage. All game/config semantics are supplied by env.
+local function build_preset_library(env)
+    local MAX_PRESETS, MAX_NAME, MAX_PAYLOAD, MAX_SERIAL = 32, 96, 1024 * 1024, 99999999
+    local MAX_LIBRARY = 16 * 1024 * 1024
+    local LIB_MAGIC = "# AutoChat preset library v1\n"
+    local FILE_MAGIC = "# AutoChat preset v1\n"
+    local state = {error = nil, revision = 0}
+    local entries, serial = {}, 0
+
+    local function utf8_valid(s)
+        if type(s) ~= "string" then return false end
+        local i, n = 1, #s
+        while i <= n do
+            local a = s:byte(i)
+            if a < 0x80 then i = i + 1
+            elseif a >= 0xC2 and a <= 0xDF then
+                local b = s:byte(i + 1); if not b or b < 0x80 or b > 0xBF then return false end; i = i + 2
+            elseif a >= 0xE0 and a <= 0xEF then
+                local b, c = s:byte(i + 1), s:byte(i + 2)
+                if not b or not c or b < 0x80 or b > 0xBF or c < 0x80 or c > 0xBF then return false end
+                if (a == 0xE0 and b < 0xA0) or (a == 0xED and b >= 0xA0) then return false end
+                i = i + 3
+            elseif a >= 0xF0 and a <= 0xF4 then
+                local b, c, d = s:byte(i + 1), s:byte(i + 2), s:byte(i + 3)
+                if not b or not c or not d or b < 0x80 or b > 0xBF or c < 0x80 or c > 0xBF or d < 0x80 or d > 0xBF then return false end
+                if (a == 0xF0 and b < 0x90) or (a == 0xF4 and b > 0x8F) then return false end
+                i = i + 4
+            else return false end
+        end
+        return true
+    end
+    local function valid_name(name)
+        if type(name) ~= "string" or #name == 0 or #name > MAX_NAME or not utf8_valid(name) or not name:find("%S") then return false end
+        for i = 1, #name do local b = name:byte(i); if b < 32 or b == 127 then return false end end
+        return true
+    end
+    local function validate_payload(payload)
+        if type(payload) ~= "string" or #payload == 0 or #payload > MAX_PAYLOAD then return false, "预设数据长度无效" end
+        if env.validate == nil then return false, "预设校验器不可用" end
+        local ok, valid, why = pcall(env.validate, payload)
+        if not ok then return false, "预设数据校验失败" end
+        if valid ~= true then return false, why or "预设数据无效" end
+        return true
+    end
+    local function fail(reason) return false, reason end
+    local function call(fn, ...)
+        if fn == nil then return false, "预设操作不可用" end
+        local ok, a, b, c = pcall(fn, ...)
+        if not ok then return false, "文件操作失败" end
+        return true, a, b, c
+    end
+    local function find(id)
+        for i = 1, #entries do if entries[i].id == id then return i, entries[i] end end
+    end
+    local function duplicate_name(name, except)
+        for i = 1, #entries do if i ~= except and entries[i].name == name then return true end end
+        return false
+    end
+    local function encode_library(items, next_serial)
+        local out = {LIB_MAGIC, tostring(next_serial), "\n", tostring(#items), "\n"}
+        for i = 1, #items do
+            local e = items[i]
+            out[#out + 1] = e.id .. "\n" .. tostring(#e.name) .. "\n" .. tostring(#e.payload) .. "\n"
+            out[#out + 1] = e.name; out[#out + 1] = e.payload
+        end
+        return table.concat(out)
+    end
+    local function parse_uint_line(data, pos, max)
+        local e = data:find("\n", pos, true)
+        if not e or e == pos or e - pos > 10 then return nil end
+        local text = data:sub(pos, e - 1)
+        if not text:match("^%d+$") or (#text > 1 and text:sub(1, 1) == "0") then return nil end
+        local value = tonumber(text)
+        if not value or value > max then return nil end
+        return value, e + 1
+    end
+    local function parse_library(data)
+        if type(data) ~= "string" or #data > MAX_LIBRARY or data:sub(1, #LIB_MAGIC) ~= LIB_MAGIC then return nil, nil, "预设库格式损坏" end
+        local pos = #LIB_MAGIC + 1
+        local saved_serial; saved_serial, pos = parse_uint_line(data, pos, MAX_SERIAL)
+        if not saved_serial then return nil, nil, "预设库序号无效" end
+        local count; count, pos = parse_uint_line(data, pos, MAX_PRESETS)
+        if count == nil then return nil, nil, "预设库数量无效" end
+        local result, ids, names, highest = {}, {}, {}, 0
+        for _ = 1, count do
+            local id_end = data:find("\n", pos, true)
+            if not id_end or id_end - pos ~= 9 then return nil, nil, "预设编号无效" end
+            local id = data:sub(pos, id_end - 1)
+            local digits = id:match("^P(%d%d%d%d%d%d%d%d)$")
+            local number = digits and tonumber(digits)
+            if not number or number < 1 or number > MAX_SERIAL or ids[id] then return nil, nil, "预设编号重复或无效" end
+            ids[id] = true; if number > highest then highest = number end
+            pos = id_end + 1
+            local nl; nl, pos = parse_uint_line(data, pos, MAX_NAME)
+            if not nl then return nil, nil, "预设名称长度无效" end
+            local pl; pl, pos = parse_uint_line(data, pos, MAX_PAYLOAD)
+            if nl == 0 or not pl or pl == 0 or pos + nl + pl - 1 > #data then return nil, nil, "预设长度无效" end
+            local name = data:sub(pos, pos + nl - 1); pos = pos + nl
+            local payload = data:sub(pos, pos + pl - 1); pos = pos + pl
+            if not valid_name(name) or names[name] then return nil, nil, "预设名称重复或无效" end
+            names[name] = true
+            local valid = validate_payload(payload)
+            if not valid then return nil, nil, "库内预设数据无效" end
+            result[#result + 1] = {id = id, name = name, payload = payload}
+        end
+        if pos ~= #data + 1 or highest > saved_serial then return nil, nil, "预设库含有多余数据或无效序号" end
+        return result, saved_serial
+    end
+    local function persist(next_entries, next_serial)
+        local bytes = encode_library(next_entries, next_serial)
+        if #bytes > MAX_LIBRARY then return false, "预设库超过大小限制" end
+        local ok, wrote, why = call(env.write_file, bytes)
+        if not ok or wrote ~= true then return false, why or "保存预设库失败" end
+        entries, serial = next_entries, next_serial
+        state.revision = state.revision + 1
+        return true
+    end
+    do
+        local ok, data, why = call(env.read_file)
+        if not ok then state.error = "读取预设库失败"
+        elseif data == nil then
+            if why ~= nil then state.error = why end
+        else
+            local loaded, loaded_serial, err = parse_library(data)
+            if not loaded then state.error = err else entries, serial = loaded, loaded_serial end
+        end
+    end
+    local api = {state = state}
+    function api.list()
+        local result = {}
+        for i = 1, #entries do result[i] = {id = entries[i].id, name = entries[i].name, payload = entries[i].payload} end
+        return result
+    end
+    local function ready() if state.error then return false, "预设库不可用：" .. tostring(state.error) end; return true end
+    function api.save(name, role)
+        local r, reason = ready(); if not r then return false, reason end
+        if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
+        if duplicate_name(name) then return fail("预设名称已存在，请先重命名现有预设") end
+        if #entries >= MAX_PRESETS then return fail("最多保存32个预设") end
+        local ok, payload, why = call(env.capture, role)
+        if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
+        local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
+        if serial >= MAX_SERIAL then return fail("预设编号已用尽") end
+        local next_serial = serial + 1
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
+        local id = string.format("P%08d", next_serial)
+        next_entries[#next_entries + 1] = {id = id, name = name, payload = payload}
+        local saved, savewhy = persist(next_entries, next_serial)
+        if not saved then return fail(savewhy) end
+        return true, nil, id
+    end
+    function api.replace(id, role)
+        local r, reason = ready(); if not r then return false, reason end
+        local index, old = find(id); if not index then return fail("找不到该预设") end
+        local ok, payload, why = call(env.capture, role)
+        if not ok or type(payload) ~= "string" then return fail(why or "读取当前配置失败") end
+        local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, name = old.name, payload = payload} or entries[i] end
+        local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
+        return true
+    end
+    function api.remove(id)
+        local r, reason = ready(); if not r then return false, reason end
+        local index = find(id); if not index then return fail("找不到该预设") end
+        local next_entries = {}; for i = 1, #entries do if i ~= index then next_entries[#next_entries + 1] = entries[i] end end
+        local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
+        return true
+    end
+    function api.rename(id, name)
+        local r, reason = ready(); if not r then return false, reason end
+        local index, old = find(id); if not index then return fail("找不到该预设") end
+        if not valid_name(name) then return fail("名称不能为空，且须为有效UTF-8（最多96字节）") end
+        if duplicate_name(name, index) then return fail("预设名称已存在") end
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = i == index and {id = old.id, name = name, payload = old.payload} or entries[i] end
+        local saved, savewhy = persist(next_entries, serial); if not saved then return fail(savewhy) end
+        return true
+    end
+    function api.apply(id, role)
+        local r, reason = ready(); if not r then return false, reason end
+        local _, item = find(id); if not item then return fail("找不到该预设") end
+        local valid, why = validate_payload(item.payload); if not valid then return fail(why) end
+        local ok, applied, detail = call(env.apply, item.payload, role)
+        if not ok or applied ~= true then return fail(detail or "应用预设失败") end
+        return true
+    end
+    function api.export(id)
+        local r, reason = ready(); if not r then return false, reason end
+        local _, item = find(id); if not item then return fail("找不到该预设") end
+        local valid, why = validate_payload(item.payload); if not valid then return fail(why) end
+        local data = FILE_MAGIC .. tostring(#item.name) .. "\n" .. tostring(#item.payload) .. "\n" .. item.name .. item.payload
+        local filename = "preset-" .. item.id .. ".autochat"
+        local ok, wrote, detail, path = call(env.export_file, filename, data)
+        if not ok or wrote ~= true then return fail(detail or "导出预设失败") end
+        return true, nil, path or detail
+    end
+    function api.import(path)
+        local r, reason = ready(); if not r then return false, reason end
+        local ok, data, why = call(env.import_file, path)
+        if not ok or type(data) ~= "string" then return fail(why or "读取预设文件失败") end
+        if #data > MAX_PAYLOAD + MAX_NAME + 64 or data:sub(1, #FILE_MAGIC) ~= FILE_MAGIC then return fail("预设文件格式无效或过大") end
+        local pos = #FILE_MAGIC + 1
+        local nl; nl, pos = parse_uint_line(data, pos, MAX_NAME)
+        if not nl then return fail("预设名称长度无效") end
+        local pl; pl, pos = parse_uint_line(data, pos, MAX_PAYLOAD)
+        if nl == 0 or not pl or pl == 0 or pos + nl + pl - 1 ~= #data then return fail("预设文件长度无效") end
+        local name = data:sub(pos, pos + nl - 1); pos = pos + nl
+        local payload = data:sub(pos, pos + pl - 1)
+        if not valid_name(name) then return fail("预设名称无效") end
+        if duplicate_name(name) then return fail("预设名称已存在，请先重命名现有预设") end
+        local valid, vwhy = validate_payload(payload); if not valid then return fail(vwhy) end
+        if #entries >= MAX_PRESETS then return fail("最多保存32个预设") end
+        if serial >= MAX_SERIAL then return fail("预设编号已用尽") end
+        local next_serial = serial + 1
+        local next_entries = {}; for i = 1, #entries do next_entries[i] = entries[i] end
+        local id = string.format("P%08d", next_serial)
+        next_entries[#next_entries + 1] = {id = id, name = name, payload = payload}
+        local saved, savewhy = persist(next_entries, next_serial); if not saved then return fail(savewhy) end
+        return true, nil, id
+    end
+    return api
+end
+-- END PRESET LIBRARY
+
 automation = build_chat_automation({
     engine = function() return rawget(_G, 'stingray') end,
     context = function() return game_base and u64(game_base + M.CONTEXT_PTR) or nil end,
@@ -1280,6 +1747,70 @@ automation = build_chat_automation({
     send = function(text) return M.send_text(text, true, true) end,
     send_local = function(text) return M.display_local(text) end,
 })
+local PRESET_LIBRARY_PATH = HOME .. 'AutoChat/presets.txt'
+local PRESET_EXPORT_DIR = HOME .. 'AutoChat/exports/'
+local function preset_read(path, limit, missing_ok)
+    local f, open_err, open_code = io.open(path, 'rb')
+    if not f then
+        -- The offline harness uses nil,nil for an absent file; native Lua provides
+        -- errno 2. Other open errors must lock the library against overwrites.
+        if missing_ok and (open_code == 2 or (open_err == nil and open_code == nil)) then return nil end
+        return nil, '无法读取预设文件'
+    end
+    local read_ok, data = pcall(function() return f:read(limit) end)
+    local close_ok, closed = pcall(function() return f:close() end)
+    if not read_ok or type(data) ~= 'string' then return nil, '读取预设文件失败' end
+    if not close_ok or closed ~= true then return nil, '关闭预设文件失败' end
+    if #data >= limit then return nil, '预设文件超过大小限制' end
+    return data
+end
+local function preset_atomic_write(path, data)
+    local temp = path .. '.tmp'
+    local f = io.open(temp, 'wb')
+    if not f then return false, '无法创建预设文件' end
+    local ok, wrote = pcall(function()
+        local result = f:write(data)
+        if not result then f:close(); return false end
+        if not f:close() then return false end
+        return kernel.MoveFileExA(temp, path, 9) ~= 0
+    end)
+    if not ok then pcall(f.close, f) end
+    if not ok or wrote ~= true then return false, '原子保存预设文件失败' end
+    return true
+end
+preset_library = build_preset_library({
+    read_file = function()
+        return preset_read(PRESET_LIBRARY_PATH, 16 * 1024 * 1024 + 1, true)
+    end,
+    write_file = function(data) return preset_atomic_write(PRESET_LIBRARY_PATH, data) end,
+    capture = function(role) return automation.export_profile(role) end,
+    validate = function(payload) return automation.validate_profile(payload) end,
+    apply = function(payload, role) return automation.import_profile(payload, role) end,
+    export_file = function(filename, data)
+        if type(filename) ~= 'string' or not filename:match('^preset%-P%d%d%d%d%d%d%d%d%.autochat$')
+            or filename:find('[/\\:]') or filename:find('%z') then
+            return false, '无效的导出文件名'
+        end
+        mkdir(HOME .. 'AutoChat')
+        mkdir(HOME .. 'AutoChat/exports')
+        if #data > 1024 * 1024 + 256 then return false, '导出文件超过大小限制' end
+        local path = PRESET_EXPORT_DIR .. filename
+        local ok, why = preset_atomic_write(path, data)
+        return ok, why, path
+    end,
+    import_file = function(path)
+        if type(path) ~= 'string' then return nil, '请输入导入文件路径' end
+        path = path:match('^%s*(.-)%s*$')
+        if path:sub(1,1) == '"' and path:sub(-1) == '"' and #path >= 2 then
+            path = path:sub(2,-2):match('^%s*(.-)%s*$')
+        end
+        if path == '' or path:find('%z') or path:match('[/\\]$') then
+            return nil, '导入路径无效；请选择文件路径'
+        end
+        return preset_read(path, 1024 * 1024 + 257, false)
+    end,
+})
+M.debug_preset_library = function() return preset_library end
 M.options = automation.options
 function M.debug_automation() return automation end
 
@@ -1289,6 +1820,8 @@ local function session_token()
     return table.concat({tostring(snapshot.session), tostring(snapshot.context), snapshot.mine,
         snapshot.host or '?'}, '|')
 end
+
+
 -- BEGIN PEER IDENTITY
 -- Inlined fragment. env.base() supplies only the caller's verified game build.
 -- Reads only; creator peer IDs stay as 16 hex characters (never Lua numbers).
@@ -1521,6 +2054,269 @@ local marker_localization = build_marker_localization({
 })
 function M.debug_localization() return marker_localization end
 
+-- BEGIN STRATAGEM CATALOG
+-- Read-only StratagemInfo discovery for Steam build 25480438.
+-- env.base() must enforce the supported game.dll fingerprint. Extra pins prove
+-- the row/name/icon consumers. Layout facts and provenance: docs/STRATAGEM-REFERENCE-0.8.0.md.
+-- No game calls, writes, asset loading, or static native-type identity mapping.
+local function build_stratagem_catalog(env)
+    -- Current native payload -> HellpodRack.payloads.item -> EntityComponentMap
+    -- identity graph. Provenance/collisions: docs/stratagem-resource-aliases.json.
+    -- Shared variants are absent from this exact-ID index and handled separately
+    -- by the visible-rule index without claiming which native ID created them.
+    local verified_aliases={
+        ['02EECD0B1FA49630']=3343676429, ['09183066C4EBCE28']=272480476,
+        ['12C8D71AC3897A5C']=3843705076, ['16474112801385B6']=2002187052,
+        ['2152D5147B0AC418']=533318241, ['25AA2FD4643CF4EE']=3923676543,
+        ['26E40437EA275296']=2007887745, ['2E9D0BDC48B09E60']=3078242205,
+        ['31400A6A3003E29C']=1907808218, ['35A61296619CC47E']=2625074523,
+        ['3828E2051AA9E897']=336693041, ['3A50B58B0553056A']=3353508219,
+        ['43A58CB89CFA197C']=3455841218, ['5990123D142B16CB']=2232989803,
+        ['5F3EC9BDA2BD8553']=3330450692, ['6CFCC7F8801A0266']=774795224,
+        ['7617642765AC38C7']=2934950455, ['78A8185F63A70795']=2271469939,
+        ['88C2D09AD85A7C9F']=512147393, ['88F61AFFF48AC8A4']=4152191751,
+        ['967ED15E0BAE363B']=3353508219, ['96DE9CD50F7306E6']=992079466,
+        ['9B2140378640432E']=2636699686, ['9F80D67A12A7E40F']=1298599997,
+        ['A4E796F84801B40A']=272480476, ['A6A735ACCB4A327F']=14345846,
+        ['A8CFFB316F0B5C5F']=875551083, ['B0F1B354BA1D38D8']=2265180087,
+        ['B16C9D490AA59B77']=3288352984, ['B2B5E0D185605F9E']=1813634375,
+        ['BF4CFD2AEABFB5A4']=3572024208, ['CC786F6491FE7E65']=890972990,
+        ['D54B9505C0F72873']=2822568285, ['DE18775FA447A9BF']=1337271929,
+        ['E8D5F49AD7780E54']=4261593827, ['F88D61A8FE1E0766']=3843705076,
+        ['FDE262593307CA2F']=2822568285, ['FE3B29B2CFA63F9B']=153819019,
+    }
+    local verified_candidates={
+        ['11C27D3BABB38956']={458198946,1567517764,3868299561},
+        ['39AB99895147A3BF']={1432571981,3868299561},
+        ['4EF9A47109239A58']={1907808218,3868299561},
+        ['5052EC6A928CCF1A']={867876502,1295431756},
+        ['80932FA0ED6901D3']={3413606544,3753216434},
+        ['89C5493E08CA4207']={2207713849,3868299561},
+        ['A94913CA014F7579']={867876502,1295431756},
+    }
+    local state={ready=false,status='等待战备目录',entries={},rules={},generation=0}
+    local api={state=state}
+    local by_id,by_name,by_resource={},{},{}
+    local rule_names,rule_resources={},{},{}
+    local pins={
+        {0x66d54c,string.char(0x4b,0x8b,0x84,0xfd,0,0xb6,0x7c,3)},
+        {0x179d962,string.char(0x8b,0x75,0x2c)},
+        {0x183a1e5,string.char(0x49,0x8b,0x96,0xb0,0,0,0)},
+    }
+    local function word(s,at)
+        local a,b,c,d=s:byte(at+1,at+4);assert(d,'short catalog word')
+        return a+b*256+c*65536+d*16777216
+    end
+    local function pointer(s,at,alignment)
+        local n=word(s,at)+word(s,at+4)*4294967296
+        assert(n>=65536 and n<2^47 and n%(alignment or 4)==0,'invalid catalog pointer')
+        return n
+    end
+    local function hex(s,at) return string.format('%08X%08X',word(s,at+4),word(s,at)) end
+    local function f32(s,at)
+        local bits=word(s,at);local sign=bits>=2147483648 and -1 or 1
+        local exponent=math.floor(bits/8388608)%256;local fraction=bits%8388608
+        assert(exponent<255,'nonfinite catalog float')
+        return sign*(exponent==0 and fraction*2^-149 or (1+fraction/8388608)*2^(exponent-127))
+    end
+    local function label(value)
+        return type(value)=='string' and value~='' and #value<=200 and not value:find('[%c<>]')
+    end
+    local function group(name)
+        -- Same family decisions as StratagemCooldown's classify/in_scope;
+        -- beacon_color is red/blue/yellow and cannot identify green equipment.
+        -- Correct its broad SHIELD GENERATOR keyword: a shield backpack is
+        -- blue support equipment, whereas the deployed relay stays green.
+        if name:match('^BACKPACK%.') then return 'blue','support' end
+        if name:find('COMBAT WALKER',1,true) then return 'blue','mech' end
+        if name:find('MINE',1,true) or name:find('TESLA',1,true)
+            or name:find('SHIELD GENERATOR',1,true) or name:find('RELAY',1,true) then return 'green','green' end
+        local prefix=name:match('^([^.]+)')
+        if prefix=='ORBITAL' then return 'red','orbital' end
+        if prefix=='EAGLE' then return 'red','eagle' end
+        if prefix=='TEAM WEAPONS' or prefix=='BACKPACK' or prefix=='CONSUMABLES' then return 'blue','support' end
+        if prefix=='VEHICLES' then return 'blue','vehicle' end
+        if prefix=='SENTRYS' or prefix=='SENTRIES' or prefix=='EMPLACEMENTS' then return 'green','green' end
+        if prefix=='PRESIDENT REWARDS' then
+            if name:find('MACHINEGUN',1,true) or name:find('BACKPACK',1,true) then return 'blue','support' end
+            if name:find('SENTRY',1,true) then return 'green','green' end
+        end
+        return 'other',(prefix=='MISSIONS' or prefix=='MISSIONS CLAN STATION') and 'mission' or 'other'
+    end
+    local function capture(base)
+        local guards,budget={},0
+        local function read(at,n)
+            assert(type(at)=='number' and at%1==0 and at>=65536 and at+n<2^47
+                and n>0 and n<=65536,'invalid catalog read bounds')
+            budget=budget+1;assert(budget<=2048,'catalog read budget')
+            local s=env.read(at,n);assert(type(s)=='string' and #s==n,'catalog data unreadable')
+            return s
+        end
+        local function guard(at,n)
+            local s=read(at,n);guards[#guards+1]={at,s};return s
+        end
+        for _,pin in ipairs(pins) do assert(guard(base+pin[1],#pin[2])==pin[2],'catalog signature changed') end
+        -- StratagemCooldown scans 0..255; every optional slot is independently
+        -- qualified. A non-null pointer is never sufficient proof of a row.
+        local slots=guard(base+0x37cb600,256*8)
+        local entries,ids,keys,aliases={},{},{},{}
+        local function unique(index,key,row)
+            if key==0 or key=='0000000000000000' then return end
+            if index[key]==nil then index[key]=row elseif index[key]~=row then index[key]=false end
+        end
+        for kind=1,255 do
+            if word(slots,kind*8)~=0 or word(slots,kind*8+4)~=0 then
+                local ok,at=pcall(pointer,slots,kind*8)
+                local raw=ok and env.read(at,0xb8) or nil
+                if type(raw)=='string' and #raw==0xb8 and word(raw,0)==kind and word(raw,4)~=0
+                    and word(raw,0x74)<=3 then
+                    guards[#guards+1]={at,raw}
+                    local name_at=pointer(raw,0x10,1)
+                    local text=guard(name_at,160);local ending=text:find('\0',1,true)
+                    assert(ending,'unterminated catalog name')
+                    local debug_name=text:sub(1,ending-1)
+                    assert(#debug_name>=2 and not debug_name:find('[^ -~]'),'invalid catalog name')
+                    local id=word(raw,4);assert(not ids[id],'duplicate stable stratagem id')
+                    local name_key,upper_key=word(raw,0x2c),word(raw,0x28)
+                    local localized,name=pcall(function() return env.localize and env.localize(name_key) end)
+                    if not localized or not label(name) then name=debug_name end
+                    local color,family=group(debug_name:upper())
+                    local icon=hex(raw,0xb0)
+                    local cd=f32(raw,0x68);assert(cd>=0 and cd<=86400,'invalid catalog cooldown')
+                    local payload_count=word(raw,0xa0);assert(payload_count<=64,'invalid catalog payload count')
+                    local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=name,
+                        debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
+                        icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
+                        cooldown=cd,payload_count=payload_count,resource_aliases={}}
+                    entries[#entries+1]=row;ids[id]=row
+                    unique(keys,name_key,row);unique(keys,upper_key,row)
+                end
+            end
+        end
+        assert(#entries>0,'empty catalog')
+        -- Visible configuration identity is stricter than a single marker key:
+        -- both native name keys and the call type must match exactly. The rule
+        -- ID names the settings representative, never the observed caller ID.
+        local groups,rules,rule_keys,rule_aliases={},{},{},{}
+        local function preferred(a,b)
+            local function variant(row)
+                local name=row.debug_name:upper()
+                return name:match('^PRESIDENT REWARDS%.') or name:match('^%[TUTORIAL%]')
+                    or name:match('^TUTORIAL')
+            end
+            local av,bv=variant(a) and 1 or 0,variant(b) and 1 or 0
+            if av~=bv then return av<bv end
+            local ai,bi=a.icon and 1 or 0,b.icon and 1 or 0
+            if ai~=bi then return ai>bi end
+            return a.id<b.id
+        end
+        for _,row in ipairs(entries) do
+            local identity=row.name_upper_key>0 and row.name_key>0
+                and table.concat({row.name_upper_key,row.name_key,row.call_type},':') or 'id:'..row.id
+            groups[identity]=groups[identity] or {};local members=groups[identity]
+            members[#members+1]=row
+        end
+        for _,members in pairs(groups) do
+            table.sort(members,preferred)
+            local representative=members[1];local variants={}
+            for _,row in ipairs(members) do variants[#variants+1]=row.id end
+            table.sort(variants);representative.variant_ids=variants
+            rules[#rules+1]=representative
+            for _,row in ipairs(members) do
+                row.rule_id=representative.id
+                row.group,row.family=representative.group,representative.family
+                unique(rule_keys,row.name_key,representative)
+                unique(rule_keys,row.name_upper_key,representative)
+            end
+        end
+        table.sort(rules,function(a,b) return a.type<b.type end)
+        -- A payload may identify the rack rather than its contained equipment;
+        -- package/stratagem identity is not a world target identity. Only the
+        -- reviewed entity graph and externally VERIFIED aliases enter this index.
+        local function aliases_from(source)
+            for resource,id in pairs(source) do
+                local row=ids[id]
+                if row and type(resource)=='string' and resource:match('^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$') then
+                    resource=resource:upper();unique(aliases,resource,row)
+                    unique(rule_aliases,resource,ids[row.rule_id])
+                    row.resource_aliases[#row.resource_aliases+1]=resource
+                end
+            end
+        end
+        aliases_from(verified_aliases)
+        aliases_from(env.resource_aliases or {})
+        -- A shared resource can resolve only a shared visible policy, and only
+        -- when its ENTIRE reviewed candidate set is observed in that one rule.
+        -- Missing candidates or different key pairs/call types remain unknown.
+        for resource,candidates in pairs(verified_candidates) do
+            local representative,complete=nil,true
+            for _,id in ipairs(candidates) do
+                local row=ids[id]
+                if not row then complete=false;break end
+                local rule=ids[row.rule_id]
+                if representative and representative~=rule then complete=false;break end
+                representative=rule
+            end
+            if complete and representative then unique(rule_aliases,resource,representative)
+            else rule_aliases[resource]=false end
+        end
+        assert(env.base()==base,'catalog build changed')
+        for _,g in ipairs(guards) do assert(read(g[1],#g[2])==g[2],'catalog changed during scan') end
+        return entries,ids,keys,aliases,rules,rule_keys,rule_aliases
+    end
+    function api.reset()
+        state.ready=false;state.entries={};state.rules={};state.status='等待战备目录'
+        state.last_scan=nil;by_id,by_name,by_resource={},{},{}
+        rule_names,rule_resources={},{}
+    end
+    function api.scan(now)
+        if now~=nil and (type(now)~='number' or now~=now or math.abs(now)==math.huge) then return 0,state.status end
+        local base=env.base()
+        if not base then api.reset();state.status='战备目录：不支持的游戏版本';return 0,state.status end
+        if now and state.ready and state.base==base and state.last_scan
+            and now>=state.last_scan and now-state.last_scan<5 then return #state.entries,state.status end
+        local ok,entries,ids,keys,aliases,rules,rule_keys,rule_aliases=pcall(capture,base)
+        if not ok then api.reset();state.status='战备目录数据暂不可读';return 0,state.status end
+        state.entries,by_id,by_name,by_resource=entries,ids,keys,aliases
+        state.rules,rule_names,rule_resources=rules,rule_keys,rule_aliases
+        state.base=base;state.ready=true;state.last_scan=now;state.generation=state.generation+1
+        state.status='战备目录读取就绪（'..#entries..'）'
+        return #entries,state.status
+    end
+    function api.list() return state.entries end
+    function api.list_rules() return state.rules end
+    function api.lookup(id) return by_id[tonumber(id)] end
+    function api.resolve_name_key(key) return by_name[tonumber(key)] or nil end
+    function api.resolve_resource(resource)
+        return type(resource)=='string' and by_resource[resource:upper()] or nil
+    end
+    function api.resolve_rule_name_key(key) return rule_names[tonumber(key)] or nil end
+    function api.resolve_rule_resource(resource)
+        return type(resource)=='string' and rule_resources[resource:upper()] or nil
+    end
+    return api
+end
+-- END STRATAGEM CATALOG
+
+local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,
+    localize=function(key)return marker_localization.lookup(key)end})
+function M.debug_stratagem_catalog()return stratagem_catalog end
+local function enrich_stratagem_event(event,now)
+    if event.category~='stratagem' then return end
+    stratagem_catalog.scan(now)
+    local row=stratagem_catalog.lookup(event.stratagem_id)
+        or stratagem_catalog.resolve_resource(event.resource)
+        or stratagem_catalog.resolve_name_key(event.localization_key)
+    if row then
+        event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group
+    else
+        local rule=stratagem_catalog.resolve_rule_resource(event.resource)
+            or stratagem_catalog.resolve_rule_name_key(event.localization_key)
+        if rule then event.stratagem_rule_id=rule.id;event.stratagem_group=rule.group;event.stratagem_ambiguous=true end
+    end
+end
+function M.debug_enrich_stratagem_event(event,now)enrich_stratagem_event(event,now)end
+
 -- BEGIN NATIVE PING EVENTS
 -- Third-party reference license (etxp HD2-G60-Smart-Targeting):
 --[[
@@ -1556,7 +2352,8 @@ SOFTWARE.
 -- https://github.com/SkyeShade/HD2Runtime/blob/master/runtime/event_world.lua
 -- https://github.com/SkyeShade/HD2Runtime/blob/master/domains/event_natives.lua
 -- Classification facts: current-build enemy kind intersected with AiEnemyComponentData;
--- HealthComponentData.unit_size: 1 Medium, 2 Large, 3 Massive (2026-09-22 data).
+-- HealthComponentData.unit_size: 0 Small, 1 Medium, 2 Large, 3 Massive (2026-09-22).
+-- Hostile faction + Spottable membership are required; flying components take priority.
 -- https://github.com/Darctor/Helldivers2_RawData/tree/main/Data/entities
 -- https://github.com/Darctor/Helldivers2_RawData/blob/main/Data/enums/UnitSize.txt
 -- Tactical map pins use replicated actor state, not the HUD ping ring. Current
@@ -1811,6 +2608,155 @@ local MISSION_TARGETS = {
 }
 -- END MISSION TARGET CATALOG
 
+-- BEGIN ENEMY TARGET CATALOG
+-- Generated offline by tools/generate_enemy_catalog.py from docs/enemy-catalog.json.
+-- Game 1.007.100, 2026-09-22; hostile + Spottable only; flight before size.
+local ENEMY_TARGETS = {
+    ['0002BA767DF856F3'] = {'small_enemy', '劫掠者', 2454424572},
+    ['0883366204E1CCC5'] = {'medium_enemy', '凝视者', 1661895142},
+    ['089833D2880D9E06'] = {'small_enemy', '机枪奇袭者（炽灼部队）', 586021653},
+    ['08E6FFC2474287BD'] = {'medium_enemy', '监视者 MK2', 3363066353},
+    ['09DFB04B2E578BC3'] = {'small_enemy', '激光装甲兵', 4039692928},
+    ['09FE0BE51A23396C'] = {'medium_enemy', '惑乱者（女）', 1371180916},
+    ['0AB7B92B131C228C'] = {'large_enemy', '爆裂强袭虫', 3903153972},
+    ['0ADC9F9173AD8E1D'] = {'small_enemy', '无票者（中型）', 4211847317},
+    ['10081ACEF6163EF6'] = {'medium_enemy', '酸液武斗虫', 3365898186},
+    ['137988CEA16458F7'] = {'large_enemy', '巨型碾压者', 613980508},
+    ['1448D494665D01A0'] = {'small_enemy', '凝视者 MK2', 2259733865},
+    ['1897BDD32105D2DC'] = {'large_enemy', '巨型炙焰者 MK2（炽灼部队）', 1775662925},
+    ['19E18B46EC55D94A'] = {'flying_enemy', '刺魟', 4160806915},
+    ['1A7FCDFF98C664B0'] = {'large_enemy', '强袭虫', 1299714559},
+    ['1B5B9AC4F96B36E5'] = {'small_enemy', '机械统帅（炽灼部队）', 621159586},
+    ['1E66EE1F6F7FD00E'] = {'large_enemy', '巨型抹煞者', 1560770730},
+    ['1F0A91729C0004E0'] = {'small_enemy', '孢裂追猎虫', 1210082392},
+    ['20B9C7734DAEAD65'] = {'large_enemy', '证真者', 3776682558},
+    ['215CE160A17BE4CD'] = {'small_enemy', '喷气机械统帅', 621159586},
+    ['257D805CAA7E10C0'] = {'small_enemy', '装甲兵 霰弹（废案）', 4039692928},
+    ['262351741C53FF0C'] = {'small_enemy', '凝视者 尖塔', 2259733865},
+    ['282EB766C1FFA6A1'] = {'flying_enemy', '炮艇', 1932062202},
+    ['2A12104F2853AE16'] = {'small_enemy', '火箭奇袭者', 3112705780},
+    ['2AD2E055DAD21F6E'] = {'flying_enemy', '入侵的穿梭舰', 3579113113},
+    ['2CF3488C4845F8BD'] = {'large_enemy', '机器人 加农炮塔', 478200978},
+    ['30CF04B2EC8C9BD4'] = {'small_enemy', '侦察奇袭者', 2319746535},
+    ['30F2DEE2333F227A'] = {'giant_enemy', '移动工厂 带干扰塔', 1153658728},
+    ['31BAE74D2F064D8D'] = {'large_enemy', '湮灭坦克 MK2', 3455009224},
+    ['32541FC4EC7C9CDC'] = {'medium_enemy', '武斗虫 MK3', 3564923972},
+    ['32CDEADA234FB8DF'] = {'large_enemy', '喷气巨型碾压者', 613980508},
+    ['34DFD23365472E9E'] = {'flying_enemy', '突入者', 3621116014},
+    ['36AA99CCE5E60146'] = {'medium_enemy', '胆汁喷涌虫', 717622970},
+    ['3AFF5FD7D5450B99'] = {'large_enemy', '巨兽级强袭虫', 1076678822},
+    ['3D0E03E2D574E1CA'] = {'small_enemy', '追猎虫 MK2', 3330362068},
+    ['3E0537D606438FEA'] = {'large_enemy', '巨型炙焰者', 1775662925},
+    ['4019623142351CB6'] = {'small_enemy', '装甲兵 MK3', 4039692928},
+    ['44458A2C52B002FB'] = {'small_enemy', '无票者（重型）', 4211847317},
+    ['453FE22C634EB30F'] = {'large_enemy', '御门者', 1870840792},
+    ['4E97FB073BDC7A4B'] = {'medium_enemy', '武斗虫 MK2（俘虏）', 3564923972},
+    ['51EEA86BF6997E4E'] = {'small_enemy', '食腐虫 MK2', 4212839382},
+    ['52018DEB9AB6827E'] = {'small_enemy', '喷气装甲兵（崩溃）', 4039692928},
+    ['53D8919D7B8ABD67'] = {'large_enemy', '湮灭坦克', 3455009224},
+    ['54E107DACF6929CB'] = {'medium_enemy', '狂暴者 MK2', 3201222154},
+    ['57EED0EAC346CD9D'] = {'medium_enemy', '蹂躏者 MK3（炽灼部队）', 1649987991},
+    ['58B2B86C11369241'] = {'medium_enemy', '燃烧机枪蹂躏者', 75849082},
+    ['5CA832447445C0BA'] = {'small_enemy', '追猎虫 MK3', 3330362068},
+    ['6021E22338333D88'] = {'medium_enemy', '抚育喷涌虫', 487985459},
+    ['604A794EC45BB820'] = {'flying_enemy', '崇高监视者', 2745056259},
+    ['611BA777783B08A2'] = {'large_enemy', '噪轰引擎 速射加农炮', 4066406510},
+    ['63DF3D07B7424588'] = {'large_enemy', '铁幕坦克', 3921592399},
+    ['64090088502435DD'] = {'flying_enemy', '尖啸虫', 793026793},
+    ['64BA5F030B114EC1'] = {'small_enemy', '奇袭者', 2000862158},
+    ['672F7DA17F3BA34A'] = {'small_enemy', '穿刺虫触手', 1046000873},
+    ['67DC32DCA4F02D33'] = {'large_enemy', '肉瘤体', 2880434041},
+    ['6B202392F4AB605E'] = {'large_enemy', '孢子强袭虫', 1939105083},
+    ['6DAB2EADF5D8B692'] = {'large_enemy', '巨型烈焰轰炸者', 2090691137},
+    ['728421351D440EBC'] = {'medium_enemy', '孢裂武斗虫', 2115960485},
+    ['72A83E49CED6DB3D'] = {'small_enemy', '胆汁吐沫虫', 444529084},
+    ['746A7F3BEDA32699'] = {'medium_enemy', '激进先锋（男）', 23741406},
+    ['74E2285C01DA4F71'] = {'flying_enemy', '增援穿梭舰', 3579113113},
+    ['78E1497571012C47'] = {'small_enemy', '无票者（轻型）', 4211847317},
+    ['7B48CACDBACB3881'] = {'small_enemy', '装甲兵 MK2', 4039692928},
+    ['7ECE5304F868F6B3'] = {'small_enemy', '装甲兵（无包裹）', 4039692928},
+    ['82A87AD8D595B2BA'] = {'small_enemy', '炙焰装甲兵', 2861014363},
+    ['843D18D4B5512B63'] = {'large_enemy', '移动工厂 连发加农炮', 478200978},
+    ['856E9710E45E760F'] = {'small_enemy', '特攻奇袭者', 1467464627},
+    ['883401AF2A98A5F6'] = {'small_enemy', '掠食追猎虫', 3029738043},
+    ['8FF0A839830A7692'] = {'small_enemy', '食腐虫', 4212839382},
+    ['905809A4C28D8A45'] = {'large_enemy', '粉碎者', 3922421925},
+    ['9076EEED17FCEE35'] = {'large_enemy', '强化侦察纵步者', 1871700431},
+    ['91EBD77931110AFC'] = {'medium_enemy', '重型蹂躏者 MK3', 1649987991},
+    ['960B48A421A3FAAA'] = {'flying_enemy', '蟑龙', 1378841226},
+    ['96110F9D6B010E02'] = {'large_enemy', '敌方单位', 478200978},
+    ['9647B00CC3A9D36F'] = {'medium_enemy', '火箭蹂躏者', 2365630221},
+    ['965EAE5A51ACDD4A'] = {'large_enemy', '猎杀器', 1405979473},
+    ['96BA14C9EBB49CE1'] = {'large_enemy', '巨型者', 790541304},
+    ['98152772A72F7838'] = {'flying_enemy', '运输船', 554367013},
+    ['9926876B2375A1BB'] = {'medium_enemy', '机器人 碉堡炮塔', 3921936527},
+    ['9A8A3AAE287B230C'] = {'small_enemy', '食腐虫 MK3', 4212839382},
+    ['9D8827FED763650E'] = {'medium_enemy', '惑乱者（男）', 1371180916},
+    ['9E2E17F2CCCCAFDD'] = {'giant_enemy', '吐酸泰坦', 2514244534},
+    ['9F57782F00E6ED20'] = {'small_enemy', '装甲兵（炽灼部队）', 4039692928},
+    ['A05BD1EC67B3AC4C'] = {'large_enemy', '巨兽级强袭虫 MK2', 1076678822},
+    ['A1F37BF2A40FBDE4'] = {'medium_enemy', '虫窝护卫', 626718113},
+    ['A35207C6F2150806'] = {'medium_enemy', '爆裂武斗虫', 953392591},
+    ['A381A11C07D3EB94'] = {'medium_enemy', '爆裂喷涌虫', 2270698456},
+    ['A4552F97033392F4'] = {'small_enemy', '喷气机枪奇袭者', 586021653},
+    ['A6A68D8AF177F3A1'] = {'medium_enemy', '狂暴者', 3201222154},
+    ['A71AAFD82C6EBC92'] = {'small_enemy', '机械统帅', 621159586},
+    ['AAB438596F5E8FD9'] = {'small_enemy', '猛扑虫', 908216632},
+    ['ABDB2E2A0479D8CA'] = {'large_enemy', '机器人 加农炮塔 MK2', 478200978},
+    ['AC60E78435098C9D'] = {'flying_enemy', '守望者', 886803190},
+    ['AE57FCDB49F74E98'] = {'small_enemy', '装甲兵 MK2（机枪版）', 4039692928},
+    ['AE63E525853D7044'] = {'medium_enemy', '蹂躏者 MK3', 1649987991},
+    ['AF0F9B3A163787A5'] = {'small_enemy', '喷气装甲兵', 4039692928},
+    ['B056F8FC74ABA02D'] = {'small_enemy', '激光炮装甲兵（废案）', 4039692928},
+    ['B2A6FA1E4284C7E6'] = {'medium_enemy', '狂暴武斗虫', 3564923972},
+    ['B4ED319B39F5457B'] = {'small_enemy', '机枪奇袭者', 586021653},
+    ['B5DBC0C240C921AD'] = {'medium_enemy', '狂暴者 MK3（炽灼部队）', 3201222154},
+    ['B92435FBF60F0748'] = {'medium_enemy', '重型蹂躏者 MK2', 398976798},
+    ['BC242702FB46B7E7'] = {'large_enemy', '噪轰引擎', 4066406510},
+    ['BE39E313A1E46BB9'] = {'medium_enemy', '武斗虫 MK2', 3564923972},
+    ['BE743B2FAA3A6E26'] = {'medium_enemy', '喷气蹂躏者', 1649987991},
+    ['C626D2BB495A202D'] = {'medium_enemy', '蹂躏者', 1649987991},
+    ['C6449FFD9EA3779C'] = {'large_enemy', '碎裂坦克', 2577770154},
+    ['C9BCCCB0A54A82A4'] = {'medium_enemy', '火箭蹂躏者 MK3 （炽灼部队）', 2365630221},
+    ['CBB1BA3366009C3A'] = {'medium_enemy', '激进先锋（女）', 23741406},
+    ['CC188F0C80505C6C'] = {'medium_enemy', '悲怜体', 2118086817},
+    ['CC7022FDD172089B'] = {'medium_enemy', '抚育喷涌虫 MK2', 487985459},
+    ['CCAE5264ACD591B7'] = {'medium_enemy', '胆汁喷涌虫 MK2', 717622970},
+    ['CD28A27A79BE53D5'] = {'medium_enemy', '指挥碉堡 碉堡重机枪', 3921936527},
+    ['D1E990BAF22D5A52'] = {'large_enemy', '掠食追踪虫', 4106686024},
+    ['D37E8D120D2836E3'] = {'giant_enemy', '移动工厂', 1153658728},
+    ['D465D9C7F77A07CB'] = {'giant_enemy', '霸王虫', 3929716830},
+    ['D522FD4748D443A5'] = {'large_enemy', '虫族指挥官', 3077749065},
+    ['D5792F6856B06BA4'] = {'medium_enemy', '喷气狂暴者', 3201222154},
+    ['D63FCBFF0851B7AF'] = {'large_enemy', '猎杀器 MK2', 1405979473},
+    ['D8CBC4A807A6D035'] = {'small_enemy', '乱斗者', 1974334302},
+    ['D9511E9F6BD62E3F'] = {'small_enemy', '追猎虫', 3330362068},
+    ['DA40BB347C7447F2'] = {'medium_enemy', '监视者', 1899936906},
+    ['DB90077E76FAA025'] = {'flying_enemy', '敌方单位', 554367013},
+    ['DB964631BE1CF501'] = {'small_enemy', '孢裂食腐虫', 2842755544},
+    ['DCF8E74212FBEE3B'] = {'large_enemy', '穿刺虫', 1046000873},
+    ['DFBACBD977A948DC'] = {'small_enemy', '食腐虫 MK2（俘虏）', 4212839382},
+    ['E0353177F1329573'] = {'medium_enemy', '烈火蹂躏者', 3498181594},
+    ['E44EC9F9B3FE1D2A'] = {'large_enemy', '喷气巨型炙焰者', 1775662925},
+    ['E683D2CA5618D74A'] = {'small_enemy', '奇袭者（炽灼部队）', 2000862158},
+    ['E8F19A0AA958E46D'] = {'medium_enemy', '新月监视者', 3877563222},
+    ['EACEE39FA017B495'] = {'medium_enemy', '武斗虫', 3564923972},
+    ['EF04CB84D097A497'] = {'giant_enemy', '孢裂泰坦', 2514244534},
+    ['EF570293245A17C2'] = {'large_enemy', '战争纵步者', 523260929},
+    ['F0B26FA9258128D3'] = {'flying_enemy', '敌方单位', 793026793},
+    ['F1610AC48CDC5240'] = {'medium_enemy', '监视者（无包裹模型）', 1899936906},
+    ['F22D027B37BEF107'] = {'giant_enemy', '利维坦', 3097344451},
+    ['F540CA9D9D4A422E'] = {'large_enemy', '追踪虫', 2387277009},
+    ['F66D0BAD8693779A'] = {'medium_enemy', '火箭蹂躏者 MK2', 2365630221},
+    ['F79CD8BB654397DF'] = {'large_enemy', '阿尔法指挥官', 570845236},
+    ['F8131632AA867107'] = {'large_enemy', '侦察纵步者', 20706814},
+    ['F8B5A81A86D5D4EB'] = {'medium_enemy', '重型蹂躏者', 398976798},
+    ['FB9937035D652C43'] = {'small_enemy', '装甲兵', 4039692928},
+    ['FC8DEC78BE8AB47D'] = {'medium_enemy', '蹂躏者 MK2 移动工厂生产', 1649987991},
+    ['FD5247653C897803'] = {'large_enemy', '敌方单位', 1076678822},
+}
+-- END ENEMY TARGET CATALOG
+
 local PING_TARGETS = {
     -- Current EntityComponentMap Spottable identities, cross-checked with
     -- FileDiver ammo_rack/{ammo_rack,supply_box,ammo_box} and frv_supply paths.
@@ -1854,85 +2800,6 @@ local PING_TARGETS = {
     ['88F61AFFF48AC8A4'] = {'stratagem', "TX-41 Sterilizer"},
     ['FDE262593307CA2F'] = {'stratagem', "LAS-98 激光大炮装备架"},
     ['16474112801385B6'] = {'stratagem', "堡垒坦克"},
-    ['08E6FFC2474287BD'] = {1, "Overseer MK2"},
-    ['09FE0BE51A23396C'] = {1, "Female Agiator"},
-    ['0AB7B92B131C228C'] = {2, "Rupture Charger"},
-    ['10081ACEF6163EF6'] = {1, "Bile Warrior"},
-    ['137988CEA16458F7'] = {2, "Hulk Bruiser"},
-    ['1897BDD32105D2DC'] = {2, "Hulk Scorcher MK2"},
-    ['1A7FCDFF98C664B0'] = {2, "Charger"},
-    ['1E66EE1F6F7FD00E'] = {2, "Hulk Obliterator"},
-    ['20B9C7734DAEAD65'] = {2, "Veracitor"},
-    ['282EB766C1FFA6A1'] = {2, "Gunship"},
-    ['2CF3488C4845F8BD'] = {2, "Cannon Turret"},
-    ['30F2DEE2333F227A'] = {3, "Jammer Factory Strider"},
-    ['31BAE74D2F064D8D'] = {2, "Annihilator Tank MK2"},
-    ['32541FC4EC7C9CDC'] = {1, "Warrior MK3"},
-    ['36AA99CCE5E60146'] = {1, "Bile Spewer"},
-    ['3AFF5FD7D5450B99'] = {2, "Charger Behemoth"},
-    ['3E0537D606438FEA'] = {2, "Hulk Scorcher"},
-    ['453FE22C634EB30F'] = {2, "Gatekeeper"},
-    ['4E97FB073BDC7A4B'] = {1, "Warrior MK2 (Captive)"},
-    ['53D8919D7B8ABD67'] = {2, "Annihilator Tank"},
-    ['54E107DACF6929CB'] = {1, "Berserker MK2"},
-    ['57EED0EAC346CD9D'] = {1, "Incendiary Devastator"},
-    ['58B2B86C11369241'] = {1, "Incendiary MG Devastator"},
-    ['5D142C3A73EBC634'] = {2, "Barrager Tank Ballistic Missile"},
-    ['6021E22338333D88'] = {1, "Nursing Spewer"},
-    ['604A794EC45BB820'] = {1, "Elevated Overseer"},
-    ['63DF3D07B7424588'] = {2, "Barrager Tank"},
-    ['67DC32DCA4F02D33'] = {2, "Fleshmob"},
-    ['6B202392F4AB605E'] = {2, "Spore Charger"},
-    ['6DAB2EADF5D8B692'] = {2, "Hulk Firebomber"},
-    ['728421351D440EBC'] = {1, "Spore Burst Warrior"},
-    ['746A7F3BEDA32699'] = {1, "Male Radical"},
-    ['843D18D4B5512B63'] = {2, "Factory Strider Cannon Turret"},
-    ['905809A4C28D8A45'] = {2, "Crusher"},
-    ['960B48A421A3FAAA'] = {3, "Dragonroach"},
-    ['9647B00CC3A9D36F'] = {1, "Rocket Devastator"},
-    ['965EAE5A51ACDD4A'] = {2, "Harvester"},
-    ['96BA14C9EBB49CE1'] = {2, "Hulk"},
-    ['9D8827FED763650E'] = {1, "Male Agitator"},
-    ['9E2E17F2CCCCAFDD'] = {3, "Bile Titan"},
-    ['A05BD1EC67B3AC4C'] = {2, "Charger Behemoth MK2"},
-    ['A1F37BF2A40FBDE4'] = {1, "Hive Guard"},
-    ['A35207C6F2150806'] = {1, "Rupture Warrior"},
-    ['A381A11C07D3EB94'] = {1, "Rupture Spewer"},
-    ['A6A68D8AF177F3A1'] = {1, "Berserker"},
-    ['ABDB2E2A0479D8CA'] = {2, "Cannon Turret MK2"},
-    ['AC60E78435098C9D'] = {1, "Watcher"},
-    ['AE63E525853D7044'] = {1, "Devastator MK3"},
-    ['B2A6FA1E4284C7E6'] = {1, "Warrior (Spawned)"},
-    ['B5DBC0C240C921AD'] = {1, "Incendiary Berserker"},
-    ['B92435FBF60F0748'] = {1, "Heavy Devastator MK2"},
-    ['BC242702FB46B7E7'] = {2, "Vox Engine"},
-    ['BE39E313A1E46BB9'] = {1, "Warrior MK2"},
-    ['BE743B2FAA3A6E26'] = {1, "Jet Brigade Devastator"},
-    ['C626D2BB495A202D'] = {1, "Devastator"},
-    ['C6449FFD9EA3779C'] = {2, "Shredder Tank"},
-    ['C9BCCCB0A54A82A4'] = {1, "Incendiary Rocket Devastator"},
-    ['CBB1BA3366009C3A'] = {1, "Female Radical"},
-    ['CC188F0C80505C6C'] = {1, "Wretch"},
-    ['CC7022FDD172089B'] = {1, "Nursing Spewer MK2"},
-    ['CCAE5264ACD591B7'] = {1, "Bile Spewer MK2"},
-    ['CD28A27A79BE53D5'] = {1, "Command Bunker HMG"},
-    ['D37E8D120D2836E3'] = {3, "Factory Strider"},
-    ['D522FD4748D443A5'] = {2, "Brood Commander"},
-    ['D5792F6856B06BA4'] = {1, "Jet Brigade Berserker"},
-    ['D63FCBFF0851B7AF'] = {2, "Harvester MK2"},
-    ['DA40BB347C7447F2'] = {1, "Overseer"},
-    ['DCF8E74212FBEE3B'] = {2, "Impaler"},
-    ['E0353177F1329573'] = {1, "Conflagration Devastator"},
-    ['E8F19A0AA958E46D'] = {1, "Crescent Overseer"},
-    ['EACEE39FA017B495'] = {1, "Warrior"},
-    ['EF04CB84D097A497'] = {3, "Spore Burst Bile Titan"},
-    ['EF570293245A17C2'] = {2, "War Strider"},
-    ['F1610AC48CDC5240'] = {1, "Overseer (No Package)"},
-    ['F540CA9D9D4A422E'] = {2, "Stalker"},
-    ['F66D0BAD8693779A'] = {1, "Rocket Devastator MK2"},
-    ['F79CD8BB654397DF'] = {2, "Alpha Commander"},
-    ['F8131632AA867107'] = {2, "Scout Strider"},
-    ['F8B5A81A86D5D4EB'] = {1, "Heavy Devastator"},
 }
 
 -- Current DLL receiver falls back to 330A0E0[kind] for unnamed markers.
@@ -1942,9 +2809,9 @@ local GENERIC_MISSION_NAMES = {[3585962803]=true, [689074879]=true, [4234884333]
 
 local function build_ping_events(env)
     local ffi = require('ffi')
-    local categories = {[1] = 'medium_enemy', [2] = 'large_enemy', [3] = 'giant_enemy'}
     local state = {scene = nil, seen = {}, generation = 0, serial = 0, status = '等待标记数据'}
-    local api = {state = state, supported = {medium_enemy = true, large_enemy = true,
+    local api = {state = state, supported = {small_enemy = true, flying_enemy = true,
+        medium_enemy = true, large_enemy = true,
         giant_enemy = true, building = true, stratagem = true, map = true}}
     local function reset(reason)
         state.scene, state.session, state.seen = nil, nil, {}
@@ -2133,7 +3000,7 @@ local function build_ping_events(env)
             local okay, value = pcall(env.localize, key)
             if okay and type(value) == 'string' and #value > 0 and #value <= 256 then
                 value = value:gsub('[%c<>]', '')
-                if value ~= '' then return value end
+                if value ~= '' and not value:match('^#%d+$') then return value end
             end
         end
         local function objective_name(entity)
@@ -2228,7 +3095,7 @@ local function build_ping_events(env)
             local index = lookup(root+0xf1aeb0, entry.target_id, 2048)
             if not index then return nil, 'retry' end
             local address = root+0xf32f18+index*24
-            local identity = read(address, 24)
+            local identity = guarded(address, 24)
             if u32(identity, 8) ~= entry.target_id then return nil, 'retry' end
             local resource = hex64(identity, 0)
             if EXCLUDED_SUPPLIES[resource] then return nil end
@@ -2237,24 +3104,25 @@ local function build_ping_events(env)
             -- identity is a reviewed task resource. Empty terrain still exits
             -- above, and arbitrary objects/enemies do not become locations.
             if entry.kind == 0 and not mission then return nil end
-            local info = mission or PING_TARGETS[resource]
+            local enemy = ENEMY_TARGETS[resource]
+            local info = mission or enemy or PING_TARGETS[resource]
             if not info and not (native_category and localized) then
                 if native_category and entry.localization_key > 0 then return nil, 'retry' end
                 return nil
             end
             if read(address, 24) ~= identity then return nil, 'retry' end
             local label = localized or info and info[2]
-            -- The flagpole and other real mission sites share the generic
-            -- location/terminal keys. Use the reviewed unit name in that case;
+            -- Mission sites and enemies can share generic marker keys. Resolve
+            -- the catalog's actual Encyclopedia name before its reviewed fallback;
             -- keep specific native marker text when it is available.
-            if mission and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
+            if (mission or enemy) and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
                 label = localized_name(info[3]) or info[2]
             end
             if info and info[2]:match('^TCS') and localized and not localized:find('TCS',1,true)
                 and not GENERIC_MISSION_NAMES[entry.localization_key] then
                 label = info[2] .. ' / ' .. localized
             end
-            return {category = info and (categories[info[1]] or info[1]) or native_category,
+            return {category = info and info[1] or native_category,
                 target = label, target_id = entry.target_id,
                 creator_id = entry.creator_id, resource = resource, kind = entry.kind, slot = entry.slot,
                 localization_key=entry.localization_key, position=entry.position, action=action,
@@ -2357,6 +3225,7 @@ local ping_events = build_ping_events({
     session = session_token,
     localize = function(key) return marker_localization.lookup(key) end,
     emit = function(event, now)
+        enrich_stratagem_event(event,now)
         event.type = 'ping'
         local accepted = automation.push_ping(event, now)
         local notified = REGISTRY and REGISTRY.publish(event) or 0
@@ -2471,6 +3340,13 @@ local function build_stratagem_events(env)
                         -- only 4-aligned; manager pointers above remain 8-aligned.
                         local row=ptr(base+0x37cb600+kind*8,4)
                         local info=guard(row,0x78);local id=word(info,4);local known=catalog[id]
+                        local discovered=env.catalog and env.catalog.lookup(id)
+                        -- Thrown call-ins already have a confirmed HUD producer;
+                        -- observe non-thrown successes here to avoid duplicate warnings.
+                        if not known and discovered and (discovered.call_type==2 or discovered.call_type==3) then
+                            known={discovered.name,discovered.name_key,
+                                (discovered.call_type==2 or (discovered.payload_count or 0)>0) and 'summon' or 'use',discovered.call_type}
+                        end
                         if known and word(info,0)==kind and word(info,0x74)==known[4] then
                             local key=p..':'..id
                             assert(not entries[key],'duplicate task slot')
@@ -2540,8 +3416,10 @@ end
 -- END STRATAGEM EVENTS
 local stratagem_events = build_stratagem_events({
     base = supported_game_base, read = read_at, session = session_token,
+    catalog = stratagem_catalog,
     localize = function(key) return marker_localization.lookup(key) end,
     emit = function(event, now)
+        enrich_stratagem_event(event,now)
         event.type = 'ping'
         local accepted = automation.push_ping(event, now)
         local notified = REGISTRY and REGISTRY.publish(event) or 0
@@ -3284,6 +4162,8 @@ end
 local function edit_text(now)
     local text = PANEL.edit_text
     if text == nil then text = PANEL.edit_field and draft[PANEL.edit_field] or cfg.message or '' end
+    local limit = PANEL.edit_field == 'preset:name' and 96
+        or PANEL.edit_field == 'preset:path' and 1024 or MAX_MESSAGE
 
     if pressed('Enter', VK.ENTER, now) then
         PANEL.edit_text = nil
@@ -3304,14 +4184,14 @@ local function edit_text(now)
         if pressed('SelectAll', 0x41, now) then text = '' end
         if pressed('Paste', 0x56, now) then
             local pasted = clipboard_text()
-            if pasted then text = text .. cut_utf8(pasted, MAX_MESSAGE - #text) end
+            if pasted then text = text .. cut_utf8(pasted, limit - #text) end
         end
         PANEL.edit_text = text
         return text, 'typing'
     end
     local shift = key_down(VK.SHIFT)
     for _, k in ipairs(NAME_KEYS) do
-        if #text < MAX_MESSAGE and pressed('N' .. k[1], k[1], now) then
+        if #text < limit and pressed('N' .. k[1], k[1], now) then
             text = text .. (shift and k[3] or k[2])
         end
     end
@@ -3700,6 +4580,13 @@ local function panel_signature()
         draft.name, draft.mode, draft.time, draft.message,
         PANEL.profile or 'host', automation.state.active_role or '-', opts.output,
         tostring(PANEL.settings_view), opts and tostring(opts.enabled) or '-',
+        tostring(PANEL.rule_view),tostring(PANEL.rule_selected),tostring(PANEL.rule_page),
+        tostring(PANEL.rule_filter),tostring(PANEL.rule_search),tostring(automation.state.rule_revision),
+        tostring(PANEL.preset_view), tostring(PANEL.preset_selected), tostring(PANEL.preset_page),
+        tostring(PANEL.preset_name), tostring(PANEL.preset_path),
+        tostring(preset_library.state.revision), tostring(preset_library.state.error),
+        tostring(stratagem_catalog.state.generation),tostring(stratagem_catalog.state.status),
+        tostring(opts.ping_small_enemy),tostring(opts.ping_flying_enemy),
         opts and tostring(opts.allow_solo) or '-', opts and opts.scope or '-',
         opts and tostring(opts.welcome) or '-', opts and opts.welcome_message or '-',
         opts and opts.cooldown or '-', opts and opts.welcome_delay or '-',
@@ -3722,6 +4609,206 @@ end
 
 -- The plugin selected in the tab strip; nil means the default settings.
 PANEL.active_plugin = PANEL.active_plugin
+
+-- BEGIN ALERT PANEL
+-- Dedicated configuration views using the existing Armory frame/input owner.
+-- No native reads here; catalog rows and safely bound icons come from the host.
+local function draw_alert_panel(canvas,p,a,catalog,chinese,version)
+    local C=canvas.palette
+    local function say(cn,en) return chinese and cn or en end
+    local function text(v,x,y,size,c,w) canvas.text(v,x,y,size or 14,c or C.TEXT,w) end
+    local function button(key,value,x,y,w,on)
+        canvas.rect(x,y,w,32,on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
+        canvas.border(x,y,w,32,on and C.YELLOW or C.LINE2,952)
+        text(value,x+9,y+8,13,on and C.INK or C.TEXT,w-18);canvas.region(key,x,y,w,32)
+    end
+    local role=p.profile or 'host';local opts=a.profile(role)
+    button('profile:host',say('主机预设','HOST PRESET'),614,48,146,role=='host')
+    button('profile:client',say('客机预设','CLIENT PRESET'),768,48,146,role=='client')
+    text(say('输出：','OUTPUT: ')..(opts.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),
+        614,86,12,C.YELLOW,300)
+    button('rules:back',say('返回设置','BACK'),22,166,120,false)
+    local enemy=p.rule_view=='enemy'
+    text(enemy and say('敌人细分提醒','ENEMY ALERT RULES') or say('战备细分提醒','STRATAGEM ALERT RULES'),160,170,22,C.TEXT,750)
+    text(say('自动消息：','AUTO MESSAGES: ')..(opts.enabled and opts.ping and 'ON' or 'OFF')..
+        say('  · 空消息继承默认模板','  · BLANK MESSAGES INHERIT DEFAULTS'),22,210,12,C.MUTED,950)
+    local rows={}
+    if enemy then
+        for _,v in ipairs({{'small_enemy','小型敌人','SMALL'}, {'medium_enemy','中型敌人','MEDIUM'},
+            {'large_enemy','大型敌人','LARGE'}, {'giant_enemy','巨型敌人','MASSIVE'}, {'flying_enemy','飞行敌人','FLYING'}}) do
+            rows[#rows+1]={id=v[1],name=say(v[2],v[3])}
+        end
+        text(say('飞行分类优先，不受原体型开关影响。','FLYING TAKES PRIORITY OVER SIZE.'),22,253,13,C.YELLOW,440)
+        text(say('体型采用游戏内部 Small / Medium / Large / Massive。','SIZES FOLLOW THE GAME UNIT SIZE ENUM.'),22,278,12,C.MUTED,440)
+        text(say('小型默认关闭；普通物资仍不提示。','SMALL IS OFF BY DEFAULT; NO ORDINARY SUPPLIES.'),22,303,12,C.MUTED,440)
+    else
+        local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'}}
+        for i,v in ipairs(groups) do
+            local y=237+(i-1)*38
+            text(say(v[2],v[3]),22,y+9,14,C.TEXT,94)
+            button('rules:bulk:'..v[1]..':on',say('全部开','ALL ON'),130,y,100,false)
+            button('rules:bulk:'..v[1]..':off',say('全部关','ALL OFF'),238,y,100,false)
+        end
+        local x=22
+        for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},{'green','绿','GREEN'},{'other','任务等','OTHER'}}) do
+            button('rules:filter:'..v[1],say(v[2],v[3]),x,366,80,(p.rule_filter or 'all')==v[1]);x=x+86
+        end
+        canvas.rect(22,408,424,32,C.FIELD,951);canvas.border(22,408,424,32,C.LINE2,952)
+        local search=p.edit_field=='rules:search' and p.edit_text or p.rule_search or ''
+        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,416,14,C.MUTED,408)
+        canvas.region('rules:search',22,408,424,32)
+        local query=(p.rule_search or ''):lower()
+        for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
+            if ((p.rule_filter or 'all')=='all' or row.group==p.rule_filter)
+                and (query=='' or row.name:lower():find(query,1,true) or tostring(row.id):find(query,1,true)
+                    or row.debug_name:lower():find(query,1,true)) then rows[#rows+1]=row end
+        end
+        text(catalog.state.status,22,349,12,C.MUTED,424)
+    end
+    local selected
+    for _,row in ipairs(rows) do if tostring(row.id)==tostring(p.rule_selected) then selected=row end end
+    selected=selected or rows[1];p.rule_selected=selected and selected.id or nil
+    local page_size=enemy and 5 or 10
+    local pages=math.max(1,math.ceil(#rows/page_size))
+    p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
+    local top=enemy and 356 or 456
+    for i=(p.rule_page-1)*page_size+1,math.min(#rows,p.rule_page*page_size) do
+        local row=rows[i];local y=top+(i-(p.rule_page-1)*page_size-1)*40
+        local rule=a.rule(enemy and 'enemy' or 'stratagem',row.id,role)
+        local enabled=enemy and opts['ping_'..row.id] or not enemy and rule.enabled~=false
+        local key='rules:select:'..row.id
+        canvas.rect(22,y,424,36,row==selected and C.ROW_HI or C.PANEL,951)
+        canvas.border(22,y,424,36,row==selected and C.YELLOW or C.LINE,952)
+        if not enemy and canvas.icon then canvas.icon(row.icon,27,y+4,28) end
+        text(row.name,enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
+        text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
+        canvas.region(key,22,y,424,36)
+    end
+    if not enemy then
+        button('rules:prev','<',22,872,60,false);text(p.rule_page..' / '..pages..'  ('..#rows..')',98,881,14,C.MUTED,260)
+        button('rules:next','>',386,872,60,false)
+        text(say('新目录条目自动加入；未知分类列在“任务等”。','NEW ROWS AUTO-APPEAR; UNKNOWN GROUPS IN OTHER.'),22,919,12,C.MUTED,424)
+    end
+    canvas.rect(470,245,508,701,C.PANEL,950);canvas.border(470,245,508,701,C.LINE,951)
+    if not selected then
+        text(say('等待游戏战备目录，或没有符合筛选的条目。','WAITING FOR CATALOG / NO MATCHES.'),486,270,14,C.MUTED,470)
+        text(say('进入游戏后读取；不支持的版本会停止读取。','READS IN GAME; UNSUPPORTED BUILDS STOP.'),486,305,12,C.MUTED,470)
+        return
+    end
+    local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
+    text(selected.name,486,262,20,C.TEXT,474)
+    if not enemy then
+        text(say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s',486,296,12,C.MUTED,474)
+        if selected.variant_ids and #selected.variant_ids>1 then
+            text(say('同名 '..#selected.variant_ids..' 个变体共用此规则','SHARED BY '..#selected.variant_ids..' SAME-NAME VARIANTS'),735,343,12,C.MUTED,225)
+        end
+    end
+    local enabled=enemy and opts['ping_'..selected.id] or not enemy and rule.enabled~=false
+    button('rules:enabled',say('此类提醒 ','THIS ALERT ')..(enabled and 'ON' or 'OFF'),486,334,230,enabled)
+    local function field(name,title,y)
+        local key='rule:'..kind..':'..selected.id..':'..name
+        text(title,486,y,13,C.YELLOW,474)
+        local value=p.edit_field==key and p.editing and p.edit_text or rule[name]
+        value=value==nil and '' or tostring(value)
+        local focus=p.edit_field==key and p.editing
+        canvas.rect(486,y+23,474,36,C.FIELD,951);canvas.border(486,y+23,474,36,focus and C.YELLOW or C.LINE2,952)
+        text(value~='' and value..(focus and '_' or '') or say('留空继承默认','BLANK = INHERIT'),494,y+33,14,focus and C.TEXT or C.MUTED,458)
+        canvas.region(key,486,y+23,474,36)
+    end
+    field('mark_message',enemy and say('标记消息','MARK MESSAGE') or say('标记落地物品时的消息','LANDED EQUIPMENT MARK MESSAGE'),392)
+    local y=478
+    if not enemy then field('call_message',say('召唤 / 执行时的消息','CALL / TASK ACTION MESSAGE'),y);y=y+86 end
+    field('cooldown',say('独立冷却（秒）：空 = 全局；0 = 每次新事件','RULE COOLDOWN: BLANK = GLOBAL; 0 = EVERY EVENT'),y)
+    text(say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),486,y+78,12,C.YELLOW,474)
+    text(say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),486,y+103,12,C.MUTED,474)
+    text(say('变量：{玩家名} / {缩写} / {编号}','TOKENS: PLAYER NAME / SHORT / SLOT'),486,755,14,C.TEXT,474)
+    text('{目标} / {类别} / {动作} / {位置}',486,786,14,C.TEXT,474)
+    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,828,12,C.MUTED,474)
+    button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
+    if p.hint then text(p.hint,486,919,12,C.YELLOW,474) end
+end
+-- END ALERT PANEL
+
+-- BEGIN PRESET PANEL
+-- Named automation preset page. The frame and hit testing belong to auto_chat.lua;
+-- this renderer only records ordinary panel regions through UX.
+local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok)
+    local C, W, H = UX.palette, 1000, 990
+    local text, rect, border, region = UX.text, UX.rect, UX.border, UX.region
+    local role = PANEL.profile or 'host'
+    local options = automation.profile(role)
+    local function say(cn, en) return font_ok and cn or en end
+    local function button(key, title, x, y, w, h, active)
+        local hovered = PANEL.hover == key
+        rect(x, y, w, h, active and C.YELLOW or hovered and C.ROW_HI or C.PANEL, 951)
+        border(x, y, w, h, active and C.YELLOW or hovered and C.TEXT or C.LINE2, 952)
+        text(title, x+w/2, y+(h-13)/2, 13, active and C.INK or C.TEXT, w-12, 'center')
+        region(key, x, y, w, h)
+    end
+    local function field(key, title, value, y)
+        text(title, 390, y, 11, C.YELLOW, 568)
+        local focus = PANEL.editing and PANEL.edit_field == key
+        rect(390,y+17,568,31,focus and C.ROW_HI or C.FIELD,951)
+        border(390,y+17,568,31,focus and C.YELLOW or C.LINE2,952)
+        local shown = focus and (PANEL.edit_text or value) or value
+        text(tostring(shown or '')..(focus and '_' or ''),398,y+25,13,focus and C.TEXT or C.MUTED,552)
+        region(key,390,y+17,568,31)
+    end
+    rect(22,158,342,H-210,C.PANEL,950);border(22,158,342,H-210,C.LINE,951)
+    rect(378,158,W-400,H-210,C.PANEL,950);border(378,158,W-400,H-210,C.LINE,951)
+    text(say('命名自动消息预设','NAMED AUTOMATION PRESETS'),40,178,20,C.TEXT,306)
+    local entries=preset_library.list()
+    text(#entries..' / 32',346,184,12,C.MUTED,nil,'right')
+    if preset_library.state.error then
+        text(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,218,12,C.BAD,300)
+        text(preset_library.state.error,40,240,11,C.BAD,300)
+    elseif #entries==0 then text(say('暂无已保存预设','NO SAVED PRESETS'),40,224,14,C.DIM,300) end
+    local pages=math.max(1,math.ceil(#entries/16))
+    PANEL.preset_page=math.max(1,math.min(pages,PANEL.preset_page or 1))
+    local first=(PANEL.preset_page-1)*16+1
+    for i=first,math.min(#entries,first+15) do
+        local entry=entries[i];local y=266+(i-first)*36
+        local chosen=entry.id==PANEL.preset_selected
+        rect(38,y,308,30,chosen and C.ROW_HI or C.ROW,951)
+        border(38,y,308,30,chosen and C.YELLOW or C.LINE2,952)
+        text(entry.name,48,y+8,13,chosen and C.YELLOW or C.TEXT,244)
+        region('preset:select:'..entry.id,38,y,308,30)
+    end
+    button('preset:prev','<',38,H-132,40,26,PANEL.preset_page>1)
+    text(PANEL.preset_page..' / '..pages,94,H-126,12,C.MUTED)
+    button('preset:next','>',142,H-132,40,26,PANEL.preset_page<pages)
+    button('preset:save',say('保存当前配置','SAVE CURRENT'),38,H-94,146,32,false)
+    button('preset:replace',say('替换所选','REPLACE'),194,H-94,152,32,false)
+
+    text(say('编辑目标：','EDITING:')..say(role=='host' and '主机' or '客机',role:upper()),390,178,13,C.YELLOW,270)
+    text(say('当前：','ACTIVE: ')..(automation.state.active_role=='host' and say('主机','HOST') or automation.state.active_role=='client' and say('客机','CLIENT') or say('等待','WAITING')),682,178,12,C.MUTED,130)
+    button('preset:back',say('返回设置','BACK TO SETTINGS'),822,168,136,30,false)
+    text(say('当前配置输出：','CURRENT OUTPUT: ')..(options.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT'))..' / '..(options.scope=='all' and say('主机和客机','HOST + CLIENT') or say('仅主机','HOST ONLY')),390,201,12,C.MUTED,568)
+    field('preset:name',say('预设名称','PRESET NAME'),PANEL.preset_name or '',230)
+    local selected
+    for _,entry in ipairs(entries) do if entry.id==PANEL.preset_selected then selected=entry;break end end
+    text(selected and (say('已选：','SELECTED: ')..selected.name) or say('请选择预设','SELECT A PRESET'),390,348,13,selected and C.TEXT or C.DIM,420)
+    button('preset:rename',say('改名','RENAME'),822,340,136,30,false)
+    local valid,parsed
+    if selected then valid,parsed=automation.validate_profile(selected.payload) end
+    local saved=valid and parsed and parsed.values
+    if saved then
+        text(say('将载入：','WILL LOAD: ')..(saved.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT'))..' / '..(saved.scope=='all' and say('主机和客机','HOST + CLIENT') or say('仅主机','HOST ONLY')),390,376,12,C.YELLOW,568)
+        text(say('自动消息：','AUTO SEND: ')..(saved.enabled and 'ON' or 'OFF')..'    '..say('标记：','PING: ')..(saved.ping and 'ON' or 'OFF'),390,394,12,C.MUTED,568)
+    else text(say('无法预览所选预设内容','SELECTED PRESET CANNOT BE PREVIEWED'),390,376,12,C.BAD,568) end
+    if selected then
+        local count=0;for _ in selected.payload:gmatch('\nrule_[^=]+=[^\n]*') do count=count+1 end
+        text(say('包含自动消息设置、模板和细粒度规则；规则字段：','AUTOMATION OPTIONS, TEMPLATES AND FINE GRAIN RULES; RULE FIELDS: ')..tostring(count),390,412,12,C.MUTED,568)
+    end
+    button('preset:apply',say('加载到所选角色','LOAD TO SELECTED ROLE'),390,432,210,34,false)
+    button('preset:export',say('导出文件','EXPORT FILE'),612,432,160,34,false)
+    button('preset:delete',say('删除','DELETE'),784,432,174,34,false)
+    field('preset:path',say('导入文件路径','IMPORT FILE PATH'),PANEL.preset_path or '',488)
+    button('preset:import',say('导入路径中的文件','IMPORT FILE FROM PATH'),390,556,276,34,false)
+    text(PANEL.hint or say('导入只保存为命名预设；点击加载后才写入所选角色。','Import saves a named preset. Load applies it to the selected role.'),390,606,12,PANEL.hint and C.YELLOW or C.MUTED,568)
+    if PANEL.preset_export_path then text(say('导出位置：','EXPORTED: ')..PANEL.preset_export_path,390,638,11,C.GOOD,568) end
+end
+-- END PRESET PANEL
 
 local function draw_panel()
     if not (sr and sr.Gui and sr.Vector3 and sr.Vector2 and sr.Color) then return end
@@ -3866,6 +4953,16 @@ local function draw_panel()
     UX.colour, UX.palette = color, C
     UX.region = region
     UX.width, UX.panel_h = width, H_PANEL
+    -- StratagemInfo+B0 is a material resource. Native pointers/texture hashes
+    -- are never passed as bitmap materials, and unloaded assets stay blank.
+    UX.icon=function(hash,x,y,size)
+        if type(hash)~='string' or #hash~=16 or not hash:match('^%x+$')
+            or not sr.IdString64 or type(sr.IdString64.from_hex)~='function'
+            or type(Gui.bitmap_uv)~='function' or not resource_loaded('material',hash) then return false end
+        local ok,id=pcall(sr.IdString64.from_hex,hash);if not ok or not id then return false end
+        return pcall(Gui.bitmap_uv,gui,id,Vector2(0,0),Vector2(1,1),
+            Vector3(px(ox+x*s),px(height-oy-(y+size)*s),953),Vector2(px(size*s),px(size*s)),color(255,255,255,255))
+    end
 
     -- ---- frame: Armory's exact structure -------------------------------------
     --   * full-bleed background at z950, a 1px border at z955, and the game's thin
@@ -3902,6 +4999,26 @@ local function draw_panel()
          88, 84, 12, C.MUTED, 420)
     text('X', W - PAD - 14, 48, 18, PANEL.hover == 'close' and C.YELLOW or C.MUTED)
     region('close', W - PAD - 28, 38, 28, 30)
+    rect(470, 48, 130, 30, PANEL.preset_view and C.YELLOW or PANEL.hover == 'presets:open' and C.ROW_HI or C.PANEL, 951)
+    border(470, 48, 130, 30, PANEL.preset_view and C.YELLOW or C.LINE2, 952)
+    text(FONT.ok and '命名预设' or 'PRESETS', 535, 56, 13,
+         PANEL.preset_view and C.INK or C.TEXT, 118, 'center')
+    region('presets:open', 470, 48, 130, 30)
+    if PANEL.preset_view then
+        for _, item in ipairs({{'host', 614}, {'client', 768}}) do
+            local role_key, role_x = item[1], item[2]
+            local chosen = (PANEL.profile or 'host') == role_key
+            local role_label = role_key == 'host' and 'HOST PRESET' or 'CLIENT PRESET'
+            rect(role_x, 48, 146, 30, chosen and C.YELLOW or PANEL.hover == 'profile:' .. role_key and C.ROW_HI or C.PANEL, 951)
+            border(role_x, 48, 146, 30, chosen and C.YELLOW or C.LINE2, 952)
+            text(FONT.ok and (role_key == 'host' and '主机预设' or '客机预设') or role_label,
+                 role_x + 73, 56, 13, chosen and C.INK or C.TEXT, 134, 'center')
+            region('profile:' .. role_key, role_x, 48, 146, 30)
+        end
+        local current_role = automation.sync()
+        text(FONT.ok and ('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'))
+             or ('ACTIVE: ' .. (current_role or 'WAITING'):upper()), 614, 86, 12, C.MUTED, 300)
+    end
 
     -- the game's hatched stripe, as short diagonal steps (copied from Armory)
     local function hatch(x, y, w, c)
@@ -3996,6 +5113,17 @@ local function draw_panel()
     end
 
     -- ---------------------------------------------------------- settings body
+    if PANEL.rule_view then
+        stratagem_catalog.scan(os.time())
+        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,FONT.ok,M.version)
+        PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
+        return
+    end
+    if PANEL.preset_view then
+        draw_preset_panel(UX, PANEL, automation, preset_library, FONT.ok)
+        PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
+        return
+    end
     -- The row helpers below are Armory's own, copied from its draw(): `label` is the
     -- small uppercase yellow eyebrow, `head` pairs it with a big title underneath, and
     -- `button` carries Armory's hover / filled / disabled states. The body is laid out
@@ -4076,8 +5204,7 @@ local function draw_panel()
         local opts = automation.profile(PANEL.profile or 'host')
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
-            {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
-            {'ping_large_enemy','大型敌人','LARGE ENEMIES'}, {'ping_giant_enemy','巨型敌人','GIANT ENEMIES'},
+            {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'},
             {'ping_map','地图任务 / 撤离区','MAP OBJECTIVES / EXTRACTION'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
             {'ping_sender_color','缩写使用队员颜色','PLAYER COLOR PREFIX'}}) do
@@ -4085,6 +5212,8 @@ local function draw_panel()
                    IX, y, IW, 30, true, opts[item[1]])
             y = y + 34
         end
+        button('rules:open:stratagem',caption('战备细分设置 →','STRATAGEM RULES >'),IX,y,IW,30,true,false);y=y+34
+        button('rules:open:enemy',caption('敌人体型 / 飞行提醒 →','ENEMY / FLYING RULES >'),IX,y,IW,30,true,false);y=y+34
         field('option:ping_message', caption('标记提示消息', 'PING MESSAGE'), opts.ping_message, y)
         y = y + 64
         field('option:summon_message', caption('召唤提示消息', 'CALL-IN MESSAGE'), opts.summon_message, y)
@@ -4331,11 +5460,23 @@ local function panel_frame()
     local function finish_edit(commit)
         if commit and PANEL.edit_field then
             local option = PANEL.edit_field:match('^option:(.+)$')
-            if option then
+            local kind,id,rule_field=PANEL.edit_field:match('^rule:([^:]+):([^:]+):([^:]+)$')
+            if kind then
+                local value=PANEL.edit_text or ''
+                if rule_field=='cooldown' and value~='' then value=tonumber(value) or false end
+                local ok,why=automation.set_rule(kind,id,rule_field,value,PANEL.profile or 'host')
+                PANEL.hint=why;if not ok then return false end
+            elseif PANEL.edit_field=='rules:search' then
+                PANEL.rule_search=PANEL.edit_text or '';PANEL.rule_page=1
+            elseif option then
                 local value = PANEL.edit_text
                 if option == 'cooldown' or option == 'welcome_delay' then value = tonumber(value) end
                 local ok, why = automation.set(option, value, PANEL.profile or 'host')
                 if not ok then PANEL.hint = why; return false end
+            elseif PANEL.edit_field == 'preset:name' then
+                PANEL.preset_name = PANEL.edit_text or ''
+            elseif PANEL.edit_field == 'preset:path' then
+                PANEL.preset_path = PANEL.edit_text or ''
             else
                 draft[PANEL.edit_field] = PANEL.edit_text or draft[PANEL.edit_field]
             end
@@ -4349,6 +5490,7 @@ local function panel_frame()
         local field = hovered:match('^task:(name)$') or hovered:match('^task:(time)$')
                       or hovered:match('^task:(message)$')
         local option = hovered:match('^option:(.+)$')
+        local preset_field = hovered == 'preset:name' or hovered == 'preset:path'
         local opt_toggle = hovered:match('^opt:(.+)$')
         local scope = hovered:match('^scope:(.+)$')
         local mode = hovered:match('^mode:(%a+)$')
@@ -4357,6 +5499,98 @@ local function panel_frame()
         local keys = PANEL.tab_keys
         if clicked and hovered ~= 'close' and not finish_edit(true) then
             clicked = false
+        elseif hovered:match('^rule:') then
+            local kind,id,rule_field=hovered:match('^rule:([^:]+):([^:]+):([^:]+)$')
+            local value=automation.rule(kind,id,PANEL.profile or 'host')[rule_field]
+            PANEL.editing,PANEL.edit_field,PANEL.edit_text=true,hovered,value==nil and '' or tostring(value)
+            PANEL.hint='Enter 保存 / Esc 取消 / Ctrl+V 粘贴'
+        elseif hovered=='rules:search' then
+            PANEL.editing,PANEL.edit_field,PANEL.edit_text=true,hovered,PANEL.rule_search or ''
+        elseif hovered:match('^rules:open:') then
+            PANEL.rule_view=hovered:match('^rules:open:(.+)$');PANEL.rule_selected=nil;PANEL.rule_page=1;PANEL.preset_view=nil;PANEL.hint=nil
+        elseif hovered=='rules:back' then PANEL.rule_view=nil;PANEL.hint=nil
+        elseif hovered:match('^rules:select:') then
+            PANEL.rule_selected=hovered:match('^rules:select:(.+)$');PANEL.hint=nil
+        elseif hovered:match('^rules:filter:') then
+            PANEL.rule_filter=hovered:match('^rules:filter:(.+)$');PANEL.rule_page=1;PANEL.rule_selected=nil
+        elseif hovered=='rules:prev' or hovered=='rules:next' then
+            PANEL.rule_page=math.max(1,(PANEL.rule_page or 1)+(hovered=='rules:next' and 1 or -1))
+        elseif hovered:match('^rules:bulk:') then
+            local group,value=hovered:match('^rules:bulk:([^:]+):([^:]+)$');local ids={}
+            for _,row in ipairs(stratagem_catalog.list_rules()) do if row.group==group then ids[#ids+1]=row.id end end
+            if #ids>0 then local _,why=automation.set_rules('stratagem',ids,value=='on',PANEL.profile or 'host');PANEL.hint=why
+            else PANEL.hint='该分类尚无可读取的战备' end
+        elseif hovered=='rules:enabled' and PANEL.rule_selected then
+            local kind=PANEL.rule_view;local id=PANEL.rule_selected;local role=PANEL.profile or 'host'
+            local ok,why
+            if kind=='enemy' then ok,why=automation.set('ping_'..id,not automation.profile(role)['ping_'..id],role)
+            else ok,why=automation.set_rule(kind,id,'enabled',automation.rule(kind,id,role).enabled==false,role) end
+            PANEL.hint=why
+        elseif hovered=='rules:inherit' and PANEL.rule_selected then
+            local ok,why=automation.reset_rule(PANEL.rule_view,PANEL.rule_selected,PANEL.profile or 'host');PANEL.hint=why
+        elseif hovered == 'presets:open' then
+            PANEL.preset_view = true
+            PANEL.rule_view, PANEL.active_plugin, PANEL.hint = nil, nil, nil
+        elseif hovered == 'preset:back' then
+            PANEL.preset_view, PANEL.hint = nil, nil
+            PANEL.settings_view = 'automation'
+        elseif hovered:match('^preset:select:') then
+            PANEL.preset_selected = hovered:match('^preset:select:(.+)$')
+            PANEL.hint = nil
+        elseif hovered == 'preset:prev' or hovered == 'preset:next' then
+            local pages = math.max(1, math.ceil(#preset_library.list()/16))
+            PANEL.preset_page = math.max(1, math.min(pages, (PANEL.preset_page or 1)
+                + (hovered == 'preset:next' and 1 or -1)))
+        elseif preset_field then
+            local key = hovered == 'preset:name' and 'preset_name' or 'preset_path'
+            PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, hovered, PANEL[key] or ''
+            PANEL.hint = 'Enter 确认输入 / Esc 取消'
+        elseif hovered == 'preset:save' then
+            local ok, why, id = preset_library.save(PANEL.preset_name or '', PANEL.profile or 'host')
+            PANEL.hint = ok and '已保存当前自动消息配置' or why
+            if ok then
+                PANEL.preset_selected = id
+                PANEL.preset_page = math.ceil(#preset_library.list()/16)
+            end
+        elseif hovered == 'preset:replace' then
+            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            else
+                local ok, why = preset_library.replace(PANEL.preset_selected, PANEL.profile or 'host')
+                PANEL.hint = ok and '已替换所选预设内容' or why
+            end
+        elseif hovered == 'preset:rename' then
+            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            else
+                local ok, why = preset_library.rename(PANEL.preset_selected, PANEL.preset_name or '')
+                PANEL.hint = ok and '预设名称已更新' or why
+            end
+        elseif hovered == 'preset:apply' then
+            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            else
+                local ok, why = preset_library.apply(PANEL.preset_selected, PANEL.profile or 'host')
+                PANEL.hint = ok and '已加载到所选角色' or why
+            end
+        elseif hovered == 'preset:export' then
+            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            else
+                local ok, why, path = preset_library.export(PANEL.preset_selected)
+                PANEL.hint = ok and '预设已导出' or why
+                PANEL.preset_export_path = ok and path or nil
+            end
+        elseif hovered == 'preset:delete' then
+            if not PANEL.preset_selected then PANEL.hint = '请先选择预设'
+            else
+                local ok, why = preset_library.remove(PANEL.preset_selected)
+                PANEL.hint = ok and '预设已删除' or why
+                if ok then PANEL.preset_selected = nil; PANEL.preset_export_path = nil end
+            end
+        elseif hovered == 'preset:import' then
+            local ok, why, id = preset_library.import(PANEL.preset_path or '')
+            PANEL.hint = ok and '预设已导入，请选择后加载' or why
+            if ok then
+                PANEL.preset_selected = id
+                PANEL.preset_page = math.ceil(#preset_library.list()/16)
+            end
         elseif option then
             PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, hovered, tostring(automation.profile(PANEL.profile or 'host')[option])
             PANEL.hint = 'Enter 保存 / Esc 取消 / Ctrl+V 粘贴'
@@ -4383,6 +5617,7 @@ local function panel_frame()
             PANEL.tab_page = math.max(1, (PANEL.tab_page or 1) + (hovered == 'tabs:next' and 1 or -1))
         elseif hovered == 'view:tasks'  or hovered == 'view:automation' or hovered == 'view:pings' then
             PANEL.settings_view = hovered:match('^view:(.+)$')
+            PANEL.preset_view = nil
             PANEL.hint = nil
         elseif field then
             PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, field, draft[field]
@@ -4417,6 +5652,7 @@ local function panel_frame()
             -- Resolved through the map the tab strip built while drawing, so a click can
             -- only select a tab that was actually drawn.
             PANEL.active_plugin = keys[hovered] or nil
+            PANEL.rule_view,PANEL.preset_view=nil,nil
             PANEL.version = (PANEL.version or 0) + 1
             note('panel: tab -> ' .. tostring(PANEL.active_plugin or 'default'))
         elseif hovered == 'timer' then
@@ -4451,9 +5687,13 @@ local function panel_frame()
         if PANEL.edit_field then
             if what == 'commit' then
                 PANEL.edit_text = value
-                local option = PANEL.edit_field:match('^option:')
+                local option = PANEL.edit_field:match('^option:') or PANEL.edit_field:match('^rule:')
+                local search=PANEL.edit_field=='rules:search'
+                local preset_text=PANEL.edit_field=='preset:name' or PANEL.edit_field=='preset:path'
                 if finish_edit(true) then
-                    PANEL.hint = option and '设置已保存' or '输入已确认，点击“添加定时任务”保存'
+                    PANEL.hint = option and '设置已保存' or search and '搜索已应用'
+                        or preset_text and '输入已确认；点击对应按钮执行操作'
+                        or '输入已确认，点击“添加定时任务”保存'
                 end
             elseif what == 'cancel' then
                 finish_edit(false)
@@ -4765,6 +6005,7 @@ local function tick()
         automation.sync()
         timed_send(elapsed)
         if M.options.enabled and M.options.ping or REGISTRY.has_listeners() then
+            stratagem_catalog.scan(now)
             local _, status = ping_events.poll(now)
             if status ~= M.ping_status then note('ping reader: ' .. tostring(status)) end
             M.ping_status = status
@@ -4891,6 +6132,33 @@ no input lock.
 Before anything is sent, five machine-code signatures are checked against the
 running game.dll. If any does not match, the mod goes dormant and says which one
 changed: an unverified address is an arbitrary address.
+
+Custom alert rules (0.8.0)
+Settings > Ping > Stratagem rules / Enemy rules opens the dedicated editors.
+Each stratagem has an enable switch, separate mark/call templates and cooldown.
+Blank messages inherit defaults; blank cooldown uses the global player timer.
+Explicit rule cooldown is independent per trigger player + rule; 0 bypasses
+global cooldown and prioritizes new events, while master/scope/dedup still apply.
+First upgrade seeds 500kg and Orbital Napalm Barrage with 0s; fully editable.
+Native names/icon materials/stable IDs follow the workspace StratagemCooldown
+reader. Search/filter and red/blue/green bulk enable/disable are available.
+Icons draw only when the game's material is already loaded. Same-name variants
+with the same call type share one GUI rule (resupply/reward and jump packs).
+Actual event variant IDs remain unknown when ambiguous. Unresolved identities
+that cannot select even a shared rule retain the default templates/cooldown.
+Enemy groups: Small / Medium / Large / Massive, plus independent Flying.
+Small defaults off. Flight wins over size. Reviewed current catalog covers 142
+spottable hostile resources (12 flying), not a guarantee for future game builds.
+Native new stratagem rows auto-appear on a supported layout; unknown groups use
+Other. New enemy facts and changed binaries require verification/update.
+中文：设置→标记消息→战备细分设置 / 敌人体型与飞行提醒。
+空消息沿用默认；冷却留空使用全局，独立秒数按触发者+规则计时，0绕过全局。
+500千克炸弹和轨道凝固汽油弹幕首次升级预设0秒；可编辑或恢复默认。
+战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
+图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
+不能确定具体变体时不冒认ID；连同名规则也无法确定时使用默认提醒。
+飞行优先于体型；小型默认关闭；当前142条可标记敌对资源，12条飞行。
+新增战备在兼容布局下自动发现；新敌人及游戏二进制更新仍需校验。
 
 Role presets and private output (0.7.9)
 ---------------------------------------

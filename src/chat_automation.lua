@@ -6,15 +6,16 @@ local function build_chat_automation(env)
         welcome_delay = 2, ping = false, ping_building = true, ping_stratagem = true, ping_map = true,
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
+        ping_small_enemy = false, ping_flying_enemy = true,
         ping_message = '标记了{目标}（{类别}）', summon_message = '{玩家名}召唤了{目标}',
         task_stratagem_message = '{玩家名}正在开始{目标}', output = 'squad'}
     local keys = {'enabled', 'scope', 'allow_solo', 'welcome', 'welcome_message',
         'cooldown', 'welcome_delay', 'ping', 'ping_building', 'ping_stratagem', 'ping_map', 'ping_sender_prefix', 'ping_sender_color', 'ping_medium_enemy',
-        'ping_large_enemy', 'ping_giant_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
+        'ping_large_enemy', 'ping_giant_enemy', 'ping_small_enemy', 'ping_flying_enemy', 'ping_message', 'ping_summon', 'summon_message', 'task_stratagem_message', 'output'}
     local booleans = {enabled=true, allow_solo=true, welcome=true, ping=true,
         ping_building=true, ping_stratagem=true, ping_map=true,
         ping_sender_prefix=true, ping_sender_color=true, ping_medium_enemy=true, ping_large_enemy=true,
-        ping_giant_enemy=true, ping_summon=true}
+        ping_giant_enemy=true, ping_small_enemy=true, ping_flying_enemy=true, ping_summon=true}
     local state = {pending = {}, pings = {}, ping_seen = {}, last_send = nil, last_by_peer = {}, baseline = nil, status = '等待会话'}
     local api = {options = options, state = state}
 
@@ -61,27 +62,90 @@ local function build_chat_automation(env)
             return string.char(tonumber(h, 16))
         end))
     end
+    local function valid_utf8(text)
+        local i,n=1,#text
+        while i<=n do
+            local a=text:byte(i)
+            if a<0x80 then i=i+1
+            elseif a>=0xC2 and a<=0xDF then
+                local b=text:byte(i+1);if not b or b<0x80 or b>0xBF then return false end;i=i+2
+            elseif a>=0xE0 and a<=0xEF then
+                local b,c=text:byte(i+1,i+2)
+                if not b or not c or c<0x80 or c>0xBF or b<0x80 or b>0xBF
+                    or (a==0xE0 and b<0xA0) or (a==0xED and b>0x9F) then return false end
+                i=i+3
+            elseif a>=0xF0 and a<=0xF4 then
+                local b,c,d=text:byte(i+1,i+3)
+                if not b or not c or not d or c<0x80 or c>0xBF or d<0x80 or d>0xBF
+                    or b<0x80 or b>0xBF or (a==0xF0 and b<0x90) or (a==0xF4 and b>0x8F) then return false end
+                i=i+4
+            else return false end
+        end
+        return true
+    end
     local function copy(source)
         local result = {}; for _, key in ipairs(keys) do result[key] = source[key] end
+        result.rules = {}
+        for id,rule in pairs(source.rules or {}) do
+            result.rules[id] = {};for key,value in pairs(rule) do result.rules[id][key]=value end
+        end
         return result
+    end
+    local enemy_rules = {small_enemy=true,medium_enemy=true,large_enemy=true,giant_enemy=true,flying_enemy=true}
+    local rule_fields = {enabled=true,mark_message=true,call_message=true,cooldown=true}
+    local function rule_key(kind,id)
+        if kind=='enemy' and enemy_rules[id] then return 'enemy_'..id end
+        id=tonumber(id)
+        if kind=='stratagem' and id and id%1==0 and id>0 and id<4294967296 then
+            return 'stratagem_'..string.format('%.0f',id)
+        end
+    end
+    local function rule_value(field,value)
+        if not rule_fields[field] then return false end
+        if value==nil or value=='' then return true,nil end
+        if field=='enabled' then return type(value)=='boolean',value end
+        if field=='cooldown' then
+            return type(value)=='number' and value==value and value%1==0 and value>=0 and value<=3600,value
+        end
+        return type(value)=='string' and #value<=512 and not value:find('%z') and value:find('%S')~=nil,value
     end
     local profiles
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v3'}
+        local lines = {'# AutoChat automation settings v4'}
         for _, role in ipairs({'host','client'}) do
             for _, key in ipairs(keys) do
                 lines[#lines + 1] = role .. '.' .. key .. '=' .. escape(tostring(candidate[role][key]))
+            end
+            local ids={};for id in pairs(candidate[role].rules or {}) do ids[#ids+1]=id end;table.sort(ids)
+            for _,id in ipairs(ids) do
+                for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
+                    local value=candidate[role].rules[id][field]
+                    if value~=nil then lines[#lines+1]=role..'.rule_'..id..'.'..field..'='..escape(tostring(value)) end
+                end
             end
         end
         return table.concat(lines, '\n') .. '\n'
     end
     local saved_keys, legacy = {}, {}
     local role_values = {host={},client={}}
+    local saved_rules = {host={},client={}}
     local saved = attempt(env.read_file)
     if type(saved) == 'string' then
         for line in saved:gmatch('[^\r\n]+') do
             local key, raw = line:match('^([%w_%.]+)=(.*)$')
             if key then
+                local rr,rk,ri,rf=key:match('^(%a+)%.rule_(%a+)_([%w_]+)%.([%w_]+)$')
+                if saved_rules[rr] and rule_key(rk,ri) then
+                    local value=unescape(raw)
+                    if rf=='enabled' then
+                        if value=='true' then value=true elseif value=='false' then value=false else value=nil end
+                    elseif rf=='cooldown' then value=tonumber(value) end
+                    local valid,converted=rule_value(rf,value)
+                    if valid and converted~=nil then
+                        local id=rule_key(rk,ri);saved_rules[rr][id]=saved_rules[rr][id] or {}
+                        saved_rules[rr][id][rf]=converted
+                    end
+                end
                 local role, name = key:match('^(%a+)%.([%w_]+)$')
                 if role then key = name end
                 local value = unescape(raw)
@@ -114,10 +178,105 @@ local function build_chat_automation(env)
     profiles.client.welcome, profiles.client.output, profiles.client.scope = false, 'local', 'all'
     for _, role in ipairs({'host','client'}) do
         for key,value in pairs(role_values[role]) do profiles[role][key] = value end
+        profiles[role].rules=saved_rules[role]
+        if (saved_version or 1)<4 then
+            -- First upgrade seeds the requested high-TK-risk alerts only. Once
+            -- v4 is saved, clearing these fields really restores global timing.
+            for _,id in ipairs({4119049995,2902516083}) do
+                local key=rule_key('stratagem',id)
+                profiles[role].rules[key]=profiles[role].rules[key] or {cooldown=0}
+            end
+        end
     end
     for _,key in ipairs(keys) do options[key] = profiles.host[key] end
     state.active_role = 'host'
     function api.profile(role) return profiles[role or state.active_role] end
+
+    -- Portable named-profile format is deliberately data-only and parsed strictly.
+    function api.export_profile(role)
+        local source=profiles[role]
+        if not source then return nil,'未知预设' end
+        local lines={'# AutoChat profile v1'}
+        for _,key in ipairs(keys) do lines[#lines+1]=key..'='..escape(tostring(source[key])) end
+        local ids={};for id in pairs(source.rules or {}) do ids[#ids+1]=id end;table.sort(ids)
+        for _,id in ipairs(ids) do
+            for _,field in ipairs({'enabled','mark_message','call_message','cooldown'}) do
+                local value=source.rules[id][field]
+                if value~=nil then lines[#lines+1]='rule_'..id..'.'..field..'='..escape(tostring(value)) end
+            end
+        end
+        local payload=table.concat(lines,'\n')..'\n'
+        if #payload>1048576 then return nil,'预设超过 1 MiB' end
+        return payload
+    end
+    function api.validate_profile(payload)
+        if type(payload)~='string' or #payload>1048576 then return false,'预设格式无效或超过 1 MiB' end
+        if payload:sub(-1)~='\n' or payload:find('\r',1,true) then return false,'预设须以换行结束且使用 LF' end
+        local lines={};for line in payload:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
+        if lines[1]~='# AutoChat profile v1' then return false,'预设版本无效' end
+        local values,rules,seen={}, {}, {}
+        local scalar_set={};for _,key in ipairs(keys) do scalar_set[key]=true end
+        for i=2,#lines do
+            local key,raw=lines[i]:match('^([%w_%.]+)=(.*)$')
+            if not key or key=='' or seen[key] then return false,'预设包含空白、重复或无效行' end
+            seen[key]=true
+            local value=unescape(raw)
+            if value==nil or escape(value)~=raw then return false,'预设转义无效' end
+            if not valid_utf8(value) then return false,'预设包含无效 UTF-8' end
+            if scalar_set[key] then
+                if booleans[key] then
+                    if value=='true' then value=true elseif value=='false' then value=false else return false,'开关值无效' end
+                elseif key=='cooldown' or key=='welcome_delay' then
+                    if not value:match('^%d+$') then return false,'冷却值无效' end
+                    value=tonumber(value)
+                end
+                local ok=validate(key,value);if not ok then return false,'设置值无效：'..key end
+                values[key]=value
+            else
+                local kind,field=key:match('^rule_(.+)%.([%a_]+)$')
+                if not kind then return false,'预设包含未知字段' end
+                local rk,ri=kind:match('^(stratagem)_(%d+)$')
+                if not rk then
+                    for enemy in pairs(enemy_rules) do
+                        if kind=='enemy_'..enemy then rk,ri='enemy',enemy;break end
+                    end
+                end
+                local stable=rule_key(rk,ri)
+                if not stable or stable~=kind or not rule_fields[field] or value=='' then return false,'规则无效' end
+                if field=='enabled' then
+                    if value=='true' then value=true elseif value=='false' then value=false else return false,'规则开关无效' end
+                elseif field=='cooldown' then
+                    if not value:match('^%d+$') then return false,'规则冷却无效' end
+                    value=tonumber(value)
+                end
+                local ok,converted=rule_value(field,value)
+                if not ok or converted==nil then return false,'规则值无效' end
+                rules[stable]=rules[stable] or {};rules[stable][field]=converted
+            end
+        end
+        for _,key in ipairs(keys) do if values[key]==nil then return false,'缺少设置：'..key end end
+        local count=0;for _ in pairs(rules) do count=count+1 end
+        if count>512 then return false,'规则数量超过 512' end
+        return true,{values=values,rules=rules}
+    end
+    function api.import_profile(payload,role)
+        if role~='host' and role~='client' then return false,'未知预设' end
+        local valid,parsed=api.validate_profile(payload)
+        if not valid then return false,parsed end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        for _,key in ipairs(keys) do candidate[role][key]=parsed.values[key] end
+        candidate[role].rules=parsed.rules
+        if attempt(env.write_file,serialize(candidate))~=true then return false,'设置保存失败，已保留原设置' end
+        profiles[role]=candidate[role]
+        state.rule_revision=(state.rule_revision or 0)+1
+        if role==state.active_role then
+            for _,key in ipairs(keys) do options[key]=profiles[role][key] end
+            state.pending,state.pings,state.ping_seen,state.last_by_peer,state.last_by_rule={},{},{},{},{}
+            state.baseline,state.last_send=nil,nil
+        end
+        state.status='设置已保存'
+        return true,state.status
+    end
 
     local function peer_key(value)
         local kind = type(value)
@@ -172,7 +331,7 @@ local function build_chat_automation(env)
         if role ~= state.active_role then
             state.active_role = role
             for _, key in ipairs(keys) do options[key] = profiles[role][key] end
-            state.pending, state.pings, state.ping_seen, state.last_by_peer = {}, {}, {}, {}
+            state.pending, state.pings, state.ping_seen, state.last_by_peer, state.last_by_rule = {}, {}, {}, {}, {}
             state.baseline, state.last_send = nil, nil
             state.status = role == 'host' and '已切换主机预设' or '已切换客机预设'
         end
@@ -191,7 +350,7 @@ local function build_chat_automation(env)
     end
 
     local categories = {building='任务建筑', stratagem='战备提示', map='地图标记',
-        medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
+        small_enemy='小型敌人', flying_enemy='飞行敌人', medium_enemy='中型敌人', large_enemy='大型敌人', giant_enemy='巨型敌人'}
     local function clipped(value, limit)
         if #value <= limit then return value end
         local at = limit + 1
@@ -286,7 +445,7 @@ local function build_chat_automation(env)
         local token = snapshot and table.concat({tostring(snapshot.session),tostring(snapshot.context),
             tostring(snapshot.mine),tostring(snapshot.host)},'|') or '@unavailable'
         if state.limit_session ~= token then
-            state.limit_session, state.last_by_peer, state.last_send = token, {}, nil
+            state.limit_session, state.last_by_peer, state.last_send, state.last_by_rule = token, {}, nil, {}
         end
         if snapshot then
             local present = {}
@@ -294,9 +453,12 @@ local function build_chat_automation(env)
             for key in pairs(state.last_by_peer) do
                 if not present[key] then state.last_by_peer[key]=nil end
             end
+            for key in pairs(state.last_by_rule or {}) do
+                if not present[key] then state.last_by_rule[key]=nil end
+            end
         end
     end
-    local function policy(now, others, snapshot, peer)
+    local function policy(now, others, snapshot, peer, rule_id, cooldown)
         limits(snapshot)
         if not options.enabled then return false, '自动发送已关闭' end
         if options.scope == 'host' then
@@ -309,8 +471,11 @@ local function build_chat_automation(env)
         if type(now) ~= 'number' or now ~= now or now == math.huge or now == -math.huge then
             return false, '等待：计时尚未就绪'
         end
-        local last = state.last_by_peer[bucket(peer,snapshot)]
-        if last and now - last < options.cooldown then
+        local key=bucket(peer,snapshot)
+        local independent=rule_id and cooldown~=nil
+        local last=independent and (state.last_by_rule[key] or {})[rule_id] or nil
+        if not independent then last=state.last_by_peer[key] end
+        if last and now - last < (independent and cooldown or options.cooldown) then
             return false, '等待：该玩家的自动消息间隔中'
         end
         return true, '可以自动发送'
@@ -349,6 +514,52 @@ local function build_chat_automation(env)
         if key == 'output' then reset() end
         state.status = '设置已保存'
         return true, state.status
+    end
+    function api.rule(kind,id,role)
+        local key=rule_key(kind,id);local profile=profiles[role or state.active_role]
+        local result={};for field,value in pairs(profile and key and profile.rules[key] or {}) do result[field]=value end
+        return result
+    end
+    local function save_rules(candidate,role)
+        if attempt(env.write_file,serialize(candidate))~=true then return false,'设置保存失败，已保留原设置' end
+        profiles[role].rules=candidate[role].rules
+        state.rule_revision=(state.rule_revision or 0)+1
+        if role==state.active_role then state.pings={} end -- Do not send an old template after editing.
+        return true,'设置已保存'
+    end
+    function api.set_rule(kind,id,field,value,role)
+        api.sync();role=role or state.active_role
+        local key=rule_key(kind,id);local valid,converted=rule_value(field,value)
+        if not profiles[role] or not key or not valid then return false,'无效规则；冷却须为 0–3600 秒，消息最多 512 字节' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        candidate[role].rules[key]=candidate[role].rules[key] or {}
+        candidate[role].rules[key][field]=converted
+        if not next(candidate[role].rules[key]) then candidate[role].rules[key]=nil end
+        return save_rules(candidate,role)
+    end
+    function api.set_rules(kind,ids,enabled,role)
+        api.sync();role=role or state.active_role
+        if not profiles[role] or type(ids)~='table' or type(enabled)~='boolean' then return false,'无效批量设置' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        for _,id in ipairs(ids) do
+            local key=rule_key(kind,id);if not key then return false,'无效战备 ID' end
+            candidate[role].rules[key]=candidate[role].rules[key] or {};candidate[role].rules[key].enabled=enabled
+        end
+        return save_rules(candidate,role)
+    end
+    function api.reset_rule(kind,id,role)
+        api.sync();role=role or state.active_role
+        local key=rule_key(kind,id)
+        if not profiles[role] or not key then return false,'无效规则' end
+        local candidate={host=copy(profiles.host),client=copy(profiles.client)}
+        local old=candidate[role].rules[key]
+        candidate[role].rules[key]=old and {enabled=old.enabled} or nil
+        return save_rules(candidate,role)
+    end
+    local function event_rule(event)
+        local key=event.rule_id or (event.category=='stratagem' and rule_key('stratagem',event.stratagem_rule_id or event.stratagem_id)
+            or rule_key('enemy',event.category))
+        return key,key and profiles[state.active_role].rules[key] or {}
     end
     local function same_session(a, b)
         return a and b and a.session == b.session and a.context == b.context
@@ -417,11 +628,20 @@ local function build_chat_automation(env)
             or #event.key > 128 or type(now) ~= 'number' or now ~= now
             or now == math.huge or now == -math.huge then return false end
         if not options.enabled or not options.ping or not ping_enabled(event.category,event.action) then return false end
+        local rule_id,rule=event_rule(event)
+        if rule.enabled==false then return false end
         for key, expires in pairs(state.ping_seen) do if now > expires then state.ping_seen[key] = nil end end
-        if state.ping_seen[event.key] or #state.pings >= 16 then return false end
+        if state.ping_seen[event.key] then return false end
         local snapshot = api.snapshot()
         if options.scope == 'host' and (not snapshot or snapshot.is_host ~= true) then return false end
         if not creator_present(event.creator_id, snapshot) then return false end
+        if #state.pings>=16 then
+            if rule.cooldown~=0 then return false end
+            local evict
+            for i,pending in ipairs(state.pings) do if pending.cooldown~=0 then evict=i;break end end
+            if not evict then return false end
+            table.remove(state.pings,evict)
+        end
         local label = categories[event.category]
         local target = type(event.target) == 'string' and plain(event.target,200) or label
         local identity = identity_for(event.creator_id)
@@ -437,6 +657,7 @@ local function build_chat_automation(env)
             ['{任务类型}']=objective_types[event.objective_kind] or label,
             ['{位置}']=position_text(event)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
+        template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
         local text = api.format(template,event.creator_id,replacements,event.anonymous==true)
         local prefix = ''
         if options.ping_sender_prefix and not event.anonymous and type(event.creator_id) == 'string' then
@@ -448,13 +669,13 @@ local function build_chat_automation(env)
             prefix = prefix .. ' '
         end
         text = prefix .. clipped(text, math.max(0, 512 - #prefix))
-        state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, text=text, expires=now+15, retry=now,
+        state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, rule_id=rule_id, cooldown=rule.cooldown, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
         state.ping_seen[event.key] = now + 30
         return true
     end
-    local function poll_ping(now)
+    local function poll_ping(now, urgent_only)
         if not options.enabled or not options.ping then state.pings = {}; return false end
         if type(now) ~= 'number' or now ~= now then return false end
         local snapshot = api.snapshot()
@@ -470,8 +691,8 @@ local function build_chat_automation(env)
         end
         local pending, index
         for i,p in ipairs(state.pings) do
-            if now>=p.retry then
-                local allowed,why=policy(now,snapshot and #snapshot.remote or nil,snapshot,p.creator_id)
+            if now>=p.retry and (not urgent_only or p.cooldown==0) then
+                local allowed,why=policy(now,snapshot and #snapshot.remote or nil,snapshot,p.creator_id,p.rule_id,p.cooldown)
                 if allowed then pending,index=p,i;break end
                 state.status=why
             end
@@ -479,7 +700,11 @@ local function build_chat_automation(env)
         if not pending then return false end
         local sent = api.send(pending.text, pending.role)
         if sent == true then
-            table.remove(state.pings,index); api.record(now,pending.creator_id)
+            table.remove(state.pings,index)
+            if pending.rule_id and pending.cooldown~=nil then
+                limits(snapshot);local key=bucket(pending.creator_id,snapshot)
+                state.last_by_rule[key]=state.last_by_rule[key] or {};state.last_by_rule[key][pending.rule_id]=now
+            else api.record(now,pending.creator_id) end
             state.status='已发送玩家标记提示'; return true, state.status
         end
         pending.retry=now+5
@@ -488,6 +713,8 @@ local function build_chat_automation(env)
     end
     function api.poll(now)
         api.sync()
+        local urgent,urgent_why=poll_ping(now,true)
+        if urgent then return urgent,urgent_why end
         local sent, why = poll_welcome(now)
         if sent then return sent, why end
         local ping_sent, ping_why = poll_ping(now)
