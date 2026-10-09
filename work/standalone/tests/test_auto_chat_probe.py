@@ -238,6 +238,7 @@ function harness.install()
                     arg3_text = type(a3) == 'table' and a3.text or tostring(a3),
                 }
                 harness.invocations[#harness.invocations + 1] = record
+                if address == harness.native_address then return harness.native_result end
                 return 0
             end
         end
@@ -273,6 +274,7 @@ function harness.install()
     function kernel.GetModuleHandleA(name)
         harness.ghm_calls = (harness.ghm_calls or 0) + 1
         if name == 'game.dll' then return harness.code_base end
+        if name == 'helldivers2.exe' then return harness.exe_base end
         return nil
     end
     -- A per-address byte cache. The naive version rebuilt a Lua table on every

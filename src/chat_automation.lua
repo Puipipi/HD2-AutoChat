@@ -59,7 +59,7 @@ local function build_chat_automation(env)
         end))
     end
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v1'}
+        local lines = {'# AutoChat automation settings v2'}
         for _, key in ipairs(keys) do lines[#lines + 1] = key .. '=' .. escape(tostring(candidate[key])) end
         return table.concat(lines, '\n') .. '\n'
     end
@@ -86,6 +86,12 @@ local function build_chat_automation(env)
 
     if not saved_keys.ping_building and legacy.ping_mission ~= nil then options.ping_building = legacy.ping_mission end
     if not saved_keys.ping_stratagem and legacy.ping_small_items ~= nil then options.ping_stratagem = legacy.ping_small_items end
+    -- Upgrade only our old stock template, which hid every resolved target name.
+    -- Deliberately custom category-only templates remain exactly as entered.
+    local saved_version = type(saved)=='string' and tonumber(saved:match('^# AutoChat automation settings v(%d+)[\r\n]')) or 1
+    if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
+        options.ping_message = '标记了{目标}（{类别}）'
+    end
 
     local function peer_key(value)
         local kind = type(value)

@@ -4,6 +4,30 @@ from test_auto_chat_probe import fresh_image, SOURCE
 
 
 class PanelInteractionTest(unittest.TestCase):
+    def test_panel_text_keeps_readable_pixels_when_labels_are_long(self):
+        for rw,rh,minimum in ((1920,1080,14),(2560,1600,21)):
+            lua,h=fresh_image(font_ids=True)
+            h.res_w,h.res_h=rw,rh
+            mod=h.load(SOURCE);mod.debug_set_open(True)
+            lua.execute('''drawn={}
+                stingray.Gui.text=function(gui,value,font,size,material,pos,colour)
+                    drawn[#drawn+1]={value=value,size=size}
+                end
+                stingray.Gui.text_extents=function(gui,value,font,size)
+                    local width=0
+                    for ch in tostring(value):gmatch('[%z\\1-\\127\\194-\\244][\\128-\\191]*') do
+                        width=width+(#ch>1 and size or size*.6)
+                    end
+                    return {x=0},{x=width}
+                end''')
+            lua.execute('for i=1,601 do update() end')
+            for view in ('tasks','automation','pings'):
+                mod.debug_panel()['settings_view']=view
+                lua.execute('drawn={}; for i=1,3 do update() end')
+                drawn=lua.globals().drawn
+                self.assertGreater(len(drawn),0)
+                self.assertGreaterEqual(min(drawn[i]['size'] for i in range(1,len(drawn)+1)),minimum,view)
+
     def fresh(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)

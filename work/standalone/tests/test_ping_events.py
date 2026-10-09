@@ -145,6 +145,46 @@ class PingEventsTests(unittest.TestCase):
         self.map_pin(slot=0); self.poll(4)
         self.assertEqual(len(self.events), 3, 'cancel then re-mark is a new event')
 
+    def test_live_ground_ping_is_sent_as_a_location_without_target_identity(self):
+        self.poll(0)
+        self.mark(kind=0,target=0,creator=1001,position=(159.2373,-5.3057,1.14987),localization_key=3585962803)
+        self.header(0,1);self.poll(1)
+        self.assertEqual(len(self.events),1)
+        event=self.events[0][0]
+        self.assertEqual(event['category'],'map')
+        self.assertEqual(event['target'],'地点标记')
+        self.assertEqual(event['creator_id'],'0110000100000011')
+        self.poll(2);self.assertEqual(len(self.events),1)
+
+    def test_live_extraction_pin_has_a_specific_name(self):
+        self.actors();self.poll(0)
+        self.map_pin(kind=6,network=221,position=(-10.2998686,5.5268564,0));self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'撤离区')
+
+    def test_captured_warrior_and_supply_names_override_fallback_catalogue(self):
+        for resource,kind,key,name in [('BE39E313A1E46BB9',1,1723671216,'武斗虫'),
+                ('5052EC6A928CCF1A',10,1263463686,'重新补给'),
+                ('9B2140378640432E',13,3947494337,'补给型快速侦察载具'),
+                ('16F397CA5F51F271',20,1263463686,'重新补给'),
+                ('16F397CA5F51F271',20,3947494337,'补给型快速侦察载具')]:
+            with self.subTest(resource=resource,key=key):
+                self.setUp();self.target(resource);self.localized[key]=name;self.poll(0)
+                self.mark(creator=1001,kind=kind,localization_key=key);self.header(0,1);self.poll(1)
+                self.assertEqual(self.events[0][0]['target'],name)
+                self.assertEqual(self.events[0][0]['category'],'medium_enemy' if kind==1 else 'stratagem')
+
+    def test_captured_broadcast_location_uses_native_label_without_guessing_a_building(self):
+        self.localized[3585962803]='特殊地点';self.poll(0)
+        self.mark(creator=1001,kind=18,target=0,localization_key=3585962803,
+                  position=(153.36035,6.0918,1.00098));self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'特殊地点')
+        self.assertEqual(self.events[0][0]['category'],'building')
+
+    def test_ground_renewal_at_a_different_position_is_a_new_mark(self):
+        self.poll(0);self.mark(kind=0,target=0,position=(1,2,3));self.header(0,1);self.poll(1)
+        self.mark(kind=0,target=0,position=(10,20,30),age=1);self.poll(2)
+        self.assertEqual(len(self.events),2)
+
     def test_real_map_state_works_when_hud_ring_is_inactive(self):
         self.actors(); self.header(0, 0, active=0); self.poll(0)
         self.map_pin(); self.poll(1)
@@ -300,8 +340,8 @@ class PingEventsTests(unittest.TestCase):
         self.mark(age=0.05); self.poll(2)
         self.assertEqual(len(self.events), 1, 'new marks in the new lobby still emit')
 
-    def test_unattributed_ground_quickchat_unknown_and_expired_are_ignored(self):
-        for kwargs in [dict(creator=9999), dict(kind=0),
+    def test_unattributed_quickchat_unknown_and_expired_are_ignored(self):
+        for kwargs in [dict(creator=9999),
                        dict(kind=24), dict(age=8), dict(age=-1), dict(target=0xffffffff)]:
             with self.subTest(kwargs=kwargs):
                 self.setUp(); self.poll(0); self.mark(**kwargs); self.header(0, 1); self.poll(1)

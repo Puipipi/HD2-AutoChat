@@ -47,6 +47,18 @@ class AutomationTests(unittest.TestCase):
     def run_lua(self, code):
         return self.lua.execute("local h = ...; local a = h.a; " + code, self.h)
 
+    def test_legacy_stock_template_shows_target_but_custom_templates_are_preserved(self):
+        self.run_lua('''
+            local b=h.new('ping=true\\nping_sender_prefix=false\\nping_message=队友标记了{类别}，请注意！\\n')
+            assert(b.push_ping({key='supply',category='stratagem',target='M-103 补给车'},1000))
+            assert(b.poll(1000)); assert(h.sent[1]:find('M-103 补给车',1,true),h.sent[1])
+            local c=h.new('ping_message=我的消息：{类别}\\n')
+            assert(c.options.ping_message=='我的消息：{类别}')
+            assert(b.set('ping_message','队友标记了{类别}，请注意！'))
+            local d=h.new(h.writes[#h.writes])
+            assert(d.options.ping_message=='队友标记了{类别}，请注意！','explicitly saved v2 template must round trip')
+        ''')
+
     def test_defaults_and_unknown_host_policy(self):
         self.run_lua("""
             assert(a.options.enabled and a.options.allow_solo and not a.options.welcome)

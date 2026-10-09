@@ -5,6 +5,55 @@ from test_marker_localization import SIGNATURE
 
 
 class PingIntegrationTest(unittest.TestCase):
+    def native_lookup(self):
+        lua,h=fresh_image();mod=h.load(SOURCE)
+        h.exe_base=0x150000000
+        h.region(h.exe_base,0x400000,0x1000,0x20)
+        h.bytes(h.exe_base,b'MZ'+bytes(58)+b'\x00\x01\x00\x00')
+        h.bytes(h.exe_base+0x100,b'PE\x00\x00'+bytes(4)+bytes.fromhex('e482b36a')+bytes(4))
+        target=h.exe_base+0x321da0
+        h.bytes(target,bytes.fromhex('33d2e999feffffcccccccccccccccccc'))
+        h.bytes(h.code_base+0x17802e0,SIGNATURE)
+        h.u64(h.code_base+0x3326308,h.ctx_base)
+        h.u64(h.ctx_base+0x10,h.ctx_base+0x1000)
+        h.u64(h.ctx_base+0x1000+0x3e8,target)
+        h.native_address=target;h.native_result=h.ctx_base+0x2000
+        lua.execute('''local base=...;local kernel=require('ffi').load('kernel32')
+            local query=kernel.VirtualQuery
+            kernel.VirtualQuery=function(address,info,size)
+                local result=query(address,info,size)
+                address=type(address)=='table' and address.value or address
+                if type(address)=='number' and address>=base and address<base+0x400000 then
+                    local function put(at,n)
+                        for i=0,3 do info[at+i]=n%256;n=math.floor(n/256) end
+                    end
+                    put(8,base%4294967296);put(12,math.floor(base/4294967296));put(0x28,0x1000000)
+                end
+                return result
+            end''',h.exe_base)
+        return lua,h,mod,target
+
+    def test_captured_chinese_names_are_read_through_the_actual_guard_and_native_bridge(self):
+        for key,name in ((1263463686,'重新补给'),(3947494337,'补给型快速侦察载具'),
+                         (1722699279,'关停非法广播'),(1723671216,'武斗虫')):
+            with self.subTest(key=key):
+                lua,h,mod,target=self.native_lookup()
+                h.bytes(h.native_result,name.encode()+bytes(64))
+                self.assertEqual(mod.debug_localization().lookup(key),name)
+                self.assertEqual(h.call_count(),1)
+                self.assertEqual(h.last_call().address,target)
+
+    def test_main_executable_stamp_signature_and_exact_lookup_address_are_required(self):
+        for mutation in ('stamp','signature','redirect','missing'):
+            with self.subTest(mutation=mutation):
+                lua,h,mod,target=self.native_lookup()
+                if mutation=='stamp':h.u32(h.exe_base+0x108,0)
+                elif mutation=='signature':h.bytes(target,b'\x90')
+                elif mutation=='redirect':h.u64(h.ctx_base+0x1000+0x3e8,target+16)
+                else:h.exe_base=None
+                self.assertIsNone(mod.debug_localization().lookup(1723671216))
+                self.assertEqual(h.call_count(),0)
+
     def test_native_reader_has_the_tested_category_support(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)
@@ -68,18 +117,22 @@ class PingIntegrationTest(unittest.TestCase):
         self.assertIsNone(mod.debug_localization().lookup(123))
         self.assertEqual(h.call_count(), before)
 
-    def test_localization_calls_only_a_verified_executable_page_in_the_game_image(self):
+    def test_localization_calls_only_the_verified_main_executable_lookup(self):
         for protect, kind, own_image, permitted in ((0x20,0x1000000,True,True),
                 (0x04,0x1000000,True,False), (0x120,0x1000000,True,False),
                 (0x20,0x20000,True,False), (0x20,0x1000000,False,False)):
             with self.subTest(protect=protect, kind=kind, own_image=own_image):
                 lua, h = fresh_image(); mod = h.load(SOURCE)
+                h.exe_base = 0x150000000
+                h.bytes(h.exe_base, b'MZ' + bytes(58) + b'\x00\x01\x00\x00')
+                h.bytes(h.exe_base + 0x100, b'PE\x00\x00' + bytes(4) + bytes.fromhex('e482b36a') + bytes(4))
+                h.bytes(h.exe_base + 0x321da0, bytes.fromhex('33d2e999feffffcccccccccccccccccc'))
                 h.bytes(h.code_base + 0x17802e0, SIGNATURE)
                 h.u64(h.code_base + 0x3326308, h.ctx_base)
                 h.u64(h.ctx_base + 0x10, h.ctx_base + 0x1000)
-                target = h.code_base + 0x100000
+                target = h.exe_base + 0x321da0
                 h.u64(h.ctx_base + 0x1000 + 0x3e8, target)
-                allocation = h.code_base if own_image else h.ctx_base
+                allocation = h.exe_base if own_image else h.code_base
                 lua.execute('''local protect,kind,allocation=...
                     require('ffi').load('kernel32').VirtualQuery=function(address,info,size)
                         local function put(at,n)

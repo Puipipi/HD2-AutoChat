@@ -365,7 +365,7 @@ local function build_ping_events(env)
         assert(header:byte(1) == 1 or map_scene, 'ping UI inactive')
         local function token(bytes)
             return bytes:sub(1,4)..bytes:sub(17,20)..bytes:sub(25,28)..bytes:sub(33,36)
-                .. (u32(bytes,0)==21 and bytes:sub(5,16) or '')
+                .. ((u32(bytes,0)==21 or u32(bytes,0)==0) and bytes:sub(5,16) or '')
         end
         for step = 0, (header:byte(1) == 1 and (tail-head)%128 or 0)-1 do
             local slot = (head+step)%128
@@ -429,7 +429,15 @@ local function build_ping_events(env)
                 objective_importance=importance, objective_name=name}
         end
         local function target(entry)
-            if entry.kind == 0 or entry.kind == 24 or not entry.creator_id then return nil end
+            if entry.kind == 24 or not entry.creator_id then return nil end
+            if entry.kind == 0 then
+                for _, value in pairs(entry.position) do
+                    if value ~= value or math.abs(value)>1000000 then return nil end
+                end
+                return {category='map',target='地点标记',position=entry.position,
+                    creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
+                    source='ground_ping',localization_key=entry.localization_key}
+            end
             if entry.kind == 21 then
                 for _, value in pairs(entry.position) do
                     if value ~= value or math.abs(value)>1000000 then return nil end
@@ -437,6 +445,8 @@ local function build_ping_events(env)
                 local event = {category='map',target=localized_name(entry.localization_key) or '地图标记',position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
                     source='tactical_map',localization_key=entry.localization_key}
+                -- Captured replicated MapMarkerType 6 is the extraction pin.
+                if entry.map_type == 6 then event.target = '撤离区' end
                 if entry.map_type == 1 then
                     if entry.target_network >= 0x7fff then return nil,'retry' end
                     local index = lookup(root+0xf22ec8,entry.target_network,2048)

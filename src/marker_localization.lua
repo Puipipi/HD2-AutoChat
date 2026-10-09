@@ -8,7 +8,8 @@
 -- Never call the wrapper: its missing-name fallback writes a shared scratch buffer.
 -- env.base() supplies only an already fingerprint-verified game base.
 -- env.read(address,n) performs guarded RPM; executable(address) must accept only
--- executable pages belonging to this supported image. env.call invokes the proven
+-- the verified helldivers2.exe lookup thunk dispatched to by this DLL wrapper.
+-- env.call invokes the proven
 -- lookup ABI and returns a numeric string pointer. This fragment performs no writes.
 local function build_marker_localization(env)
  local signature_hex='40534883ec20488b051b60ba018bd9488b4810488b81e80300008bcbffd04885c074058038007555488b1549c0b9014c8d0526050502488d0d93040502448bcb488d420e493bc04c8d05c26cb800480f42caba0e00000048890d1ac0b901e8ddd5d6fe'

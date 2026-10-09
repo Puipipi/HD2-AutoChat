@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.7.3', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.7.4', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -779,7 +779,7 @@ local function build_chat_automation(env)
         end))
     end
     local function serialize(candidate)
-        local lines = {'# AutoChat automation settings v1'}
+        local lines = {'# AutoChat automation settings v2'}
         for _, key in ipairs(keys) do lines[#lines + 1] = key .. '=' .. escape(tostring(candidate[key])) end
         return table.concat(lines, '\n') .. '\n'
     end
@@ -806,6 +806,12 @@ local function build_chat_automation(env)
 
     if not saved_keys.ping_building and legacy.ping_mission ~= nil then options.ping_building = legacy.ping_mission end
     if not saved_keys.ping_stratagem and legacy.ping_small_items ~= nil then options.ping_stratagem = legacy.ping_small_items end
+    -- Upgrade only our old stock template, which hid every resolved target name.
+    -- Deliberately custom category-only templates remain exactly as entered.
+    local saved_version = type(saved)=='string' and tonumber(saved:match('^# AutoChat automation settings v(%d+)[\r\n]')) or 1
+    if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
+        options.ping_message = '标记了{目标}（{类别}）'
+    end
 
     local function peer_key(value)
         local kind = type(value)
@@ -1299,7 +1305,8 @@ function M.debug_identity() return peer_identity end
 -- Never call the wrapper: its missing-name fallback writes a shared scratch buffer.
 -- env.base() supplies only an already fingerprint-verified game base.
 -- env.read(address,n) performs guarded RPM; executable(address) must accept only
--- executable pages belonging to this supported image. env.call invokes the proven
+-- the verified helldivers2.exe lookup thunk dispatched to by this DLL wrapper.
+-- env.call invokes the proven
 -- lookup ABI and returns a numeric string pointer. This fragment performs no writes.
 local function build_marker_localization(env)
  local signature_hex='40534883ec20488b051b60ba018bd9488b4810488b81e80300008bcbffd04885c074058038007555488b1549c0b9014c8d0526050502488d0d93040502448bcb488d420e493bc04c8d05c26cb800480f42caba0e00000048890d1ac0b901e8ddd5d6fe'
@@ -1386,8 +1393,18 @@ local marker_localization = build_marker_localization({
     base = supported_game_base,
     read = read_at,
     executable = function(address)
-        local base = supported_game_base()
-        local page = base and page_state(address)
+        -- The verified DLL wrapper dispatches to this main-executable thunk,
+        -- not to a function in game.dll. Pin both images and the exact entry.
+        if not supported_game_base() then return false end
+        local base = module_base('helldivers2.exe')
+        if not base or address ~= base + 0x321da0 then return false end
+        local dos = read_at(base, 64)
+        local pe = dos and u32_off(dos, 60)
+        if not dos or dos:sub(1,2) ~= 'MZ' or not pe or pe < 64 or pe > 0x4000 then return false end
+        local head = read_at(base + pe, 16)
+        if not head or head:sub(1,4) ~= 'PE\0\0' or u32_off(head,8) ~= 0x6ab382e4 then return false end
+        if read_at(address,16) ~= '\x33\xd2\xe9\x99\xfe\xff\xff\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc' then return false end
+        local page = page_state(address)
         if not page or page.allocation ~= base or page.state ~= MEM_COMMIT
             or page.kind ~= 0x1000000 then return false end
         return page.protect == 0x10 or page.protect == 0x20
@@ -1769,7 +1786,7 @@ local function build_ping_events(env)
         assert(header:byte(1) == 1 or map_scene, 'ping UI inactive')
         local function token(bytes)
             return bytes:sub(1,4)..bytes:sub(17,20)..bytes:sub(25,28)..bytes:sub(33,36)
-                .. (u32(bytes,0)==21 and bytes:sub(5,16) or '')
+                .. ((u32(bytes,0)==21 or u32(bytes,0)==0) and bytes:sub(5,16) or '')
         end
         for step = 0, (header:byte(1) == 1 and (tail-head)%128 or 0)-1 do
             local slot = (head+step)%128
@@ -1833,7 +1850,15 @@ local function build_ping_events(env)
                 objective_importance=importance, objective_name=name}
         end
         local function target(entry)
-            if entry.kind == 0 or entry.kind == 24 or not entry.creator_id then return nil end
+            if entry.kind == 24 or not entry.creator_id then return nil end
+            if entry.kind == 0 then
+                for _, value in pairs(entry.position) do
+                    if value ~= value or math.abs(value)>1000000 then return nil end
+                end
+                return {category='map',target='地点标记',position=entry.position,
+                    creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
+                    source='ground_ping',localization_key=entry.localization_key}
+            end
             if entry.kind == 21 then
                 for _, value in pairs(entry.position) do
                     if value ~= value or math.abs(value)>1000000 then return nil end
@@ -1841,6 +1866,8 @@ local function build_ping_events(env)
                 local event = {category='map',target=localized_name(entry.localization_key) or '地图标记',position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
                     source='tactical_map',localization_key=entry.localization_key}
+                -- Captured replicated MapMarkerType 6 is the extraction pin.
+                if entry.map_type == 6 then event.target = '撤离区' end
                 if entry.map_type == 1 then
                     if entry.target_network >= 0x7fff then return nil,'retry' end
                     local index = lookup(root+0xf22ec8,entry.target_network,2048)
@@ -3171,7 +3198,7 @@ local function draw_panel()
         BG = color(11, 12, 13, 246), PANEL = color(18, 19, 21),
         ROW = color(26, 28, 31), ROW_HI = color(34, 36, 40),
         FIELD = color(10, 11, 12), LINE = color(44, 46, 50), LINE2 = color(62, 65, 70),
-        TEXT = color(233, 230, 220), MUTED = color(143, 146, 150), DIM = color(93, 97, 102),
+        TEXT = color(241, 239, 232), MUTED = color(190, 193, 197), DIM = color(158, 163, 169),
         YELLOW = color(255, 231, 16), INK = color(18, 17, 4),
         SOFT = color(255, 231, 16, 26), GOOD = color(92, 201, 170), BAD = color(255, 107, 91),
     }
@@ -3184,7 +3211,8 @@ local function draw_panel()
         pcall(Gui.rect, gui, Vector3(x0, height - y1, z or 951),
               Vector2(x1 - x0, y1 - y0), c)
     end
-    local function font_px(size) return math.max(7, px(size * s)) end
+    local min_font = math.max(9, px(14 * height / 1080))
+    local function font_px(size) return math.max(min_font, px(size * s)) end
 
     -- Engine measurement when available, else the same per-character estimate Armory
     -- uses (deliberately on the wide side).
@@ -3217,15 +3245,23 @@ local function draw_panel()
         return measure_px(tostring(value), font_px(size)) / s
     end
 
-    -- Real text, shrunk in whole pixels to fit `limit`, with right/center alignment.
-    -- Returns its width in panel units. `nil` limit means no shrinking.
+    -- Keep a readable physical size. Long labels are ellipsized rather than
+    -- compressed into the former 6-pixel text. Trim whole UTF-8 characters.
     local function text(value, x, y, size, c, limit, align)
         if value == nil or value == '' then return 0 end
         value = tostring(value)
         local sz = font_px(size)
         local w = measure_px(value, sz) / s
-        while limit and w > limit and sz > 6 do
-            sz = math.max(6, math.min(sz - 1, math.floor(sz * limit / w)))
+        while limit and w > limit and sz > min_font do
+            sz = math.max(min_font, math.min(sz - 1, math.floor(sz * limit / w)))
+            w = measure_px(value, sz) / s
+        end
+        if limit and w > limit then
+            repeat
+                local shorter = value:gsub('[\194-\244][\128-\191]*$', '')
+                value = #shorter < #value and shorter or value:sub(1,-2)
+            until value == '' or measure_px(value .. '..', sz) / s <= limit
+            value = value .. '..'
             w = measure_px(value, sz) / s
         end
         local tx = x
@@ -3488,7 +3524,7 @@ local function draw_panel()
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备提示','STRATAGEM EQUIPMENT'}, {'ping_medium_enemy','中型敌人','MEDIUM ENEMIES'},
             {'ping_large_enemy','大型敌人','LARGE ENEMIES'}, {'ping_giant_enemy','巨型敌人','GIANT ENEMIES'},
-            {'ping_map','地图标记','TACTICAL MAP PINS'},
+            {'ping_map','地图 / 地点标记','MAP / GROUND PINS'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
             {'ping_sender_color','缩写使用队员颜色','PLAYER COLOR PREFIX'}}) do
             button('opt:' .. item[1], caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]'),
@@ -3497,7 +3533,7 @@ local function draw_panel()
         end
         field('option:ping_message', caption('标记提示消息', 'PING MESSAGE'), opts.ping_message, y)
         y = y + 64
-        text(caption('本人和队友均可触发 · 地图标记单独开关', 'SELF + TEAMMATE PINGS; SEPARATE MAP SWITCH'), IX, y, 12, C.YELLOW, IW)
+        text(caption('本人和队友均可触发', 'SELF + TEAMMATE PINGS'), IX, y, 12, C.YELLOW, IW)
         text(caption(M.ping_status or '等待标记数据', 'NATIVE READER: ' .. (opts.ping and 'ACTIVE' or 'OFF')), IX, y + 22, 12, C.MUTED, IW)
         text(caption('变量：{类别} / {目标} / {位置}', 'TOKENS: CATEGORY / TARGET / POSITION'), IX, y + 48, 12, C.MUTED, IW)
         text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 70, 12, C.MUTED, IW)
@@ -4254,7 +4290,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.7.3  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.7.4  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -4274,7 +4310,8 @@ changed: an unverified address is an arbitrary address.
 The panel (hotkey K)
 --------------------
   - Armory Forge's 1000x990 frame, shield, title strip, tabs and two-column layout
-  - uses verified loaded game fonts; debug font and bitmap fallbacks
+  - uses verified loaded game fonts; readable sizes and higher text contrast
+  - long labels are truncated instead of shrinking text to 6 pixels
   - while it is open the mouse is released so you can click; on close the cursor
     and the clip rectangle are restored exactly as they were
   - game keyboard/mouse input is blocked while open (including ESC and O);
@@ -4301,11 +4338,16 @@ welcomed when enabling the feature or entering another lobby.
 PING has independent task-building, stratagem, medium/large/giant-enemy and tactical
 map switches. Ordinary ammo, grenades, stims and samples are excluded. 130 static
 resources include TCS structures, LAS-98 and Bastion; native special-marker names
-are resolved through a fingerprint-verified game lookup. Replicated actor map pins
+are resolved through the verified main-EXE lookup dispatched to by game.dll.
+Replicated actor map pins
 provide world XYZ coordinates; objective pins resolve their actual map name and
 current-mission importance. Unknown targets without a verified name are skipped.
 New self and teammate marks are observed; first observations establish a baseline.
 Resupply pods/boxes and the M-103 Supply FRV are included as stratagem equipment.
+Ground/location pings use the map switch; extraction pins are named explicitly.
+The exact old stock category-only template is upgraded to include {目标}.
+Custom templates remain unchanged. A generic native location label does not
+identify a specific building; objective map pins provide the actual task name.
 Templates: {类别}, {目标}, {触发者}, {位置}; objective pins add {任务名} and
 {任务类型} (primary, prerequisite, optional, tactical). Optional player short-label/colour
 prefixes identify the triggerer; the actual network sender remains the local player.
@@ -4339,7 +4381,7 @@ Files / 文件位置
 
 面板（快捷键 K）
   - 沿用 Armory Forge 的 1000×990 框架、盾形标识、双栏、标签与控件
-  - 字体先校验游戏资源已加载，再回退调试字体或点阵
+  - 字体先校验游戏资源已加载；提高字号与对比度，长文字省略，不再缩成6像素
   - 打开时解除鼠标锁定以便点击；关闭时把光标与裁剪矩形**原样**归还
   - 打开面板时屏蔽游戏键鼠，包括 Esc、O；关闭、失焦、异常和退出时归还输入
   - 拖动顶部条移动窗口；Ctrl +/- 缩放，Ctrl+0 复位；按钮松开时激活
@@ -4359,9 +4401,10 @@ Files / 文件位置
 非法广播等不在目录内的目标要求游戏提供特殊类型与可读名称，名称未加载会在标记有效期内重试。
 地图图钉读取实际同步状态；任务图钉使用游戏地图名称，支持“获取发射代码”等主线前置目标。
 {目标}/{任务名}显示名称，{任务类型}读取当局主线、前置、支线或战术属性，不按名字猜；{位置}为世界XYZ。
-普通地面点标记和无名称的未知目标跳过。
+普通地面点标记使用“地图 / 地点标记”开关，撤离区图钉显示“撤离区”。
+游戏只返回“特殊地点”且无目标ID时使用原标签；地图任务图钉使用具体任务名。
 默认标记功能关闭，开启后响应本人和队友的新标记；消息支持 {类别}/{目标}/{触发者}/{位置}。
-地图任务另支持 {任务名}/{任务类型}，变量提示在“标记消息”面板显示。已有自定义模板保留，显示名称请包含 {目标}。
+地图任务另支持 {任务名}/{任务类型}，变量提示在“标记消息”面板显示。旧默认模板自动加入 {目标}；其他自定义模板保留。
 可开启真实队友缩写和队色前缀；实际聊天发件人仍为运行本模组的玩家，不冒用其他玩家身份。
 自动消息最短间隔按触发玩家分别计算：同一人的欢迎和标记共用，A不占用B/C的间隔；默认5秒，0为不限制。
 同时加入的新人各有独立欢迎队列，逐条发送；定时任务与不指定触发者的扩展发送使用本机玩家间隔。
