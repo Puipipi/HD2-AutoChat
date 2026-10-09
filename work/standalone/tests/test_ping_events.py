@@ -1,5 +1,6 @@
 """Native ping reader tests using sparse memory with real observed layouts."""
 from pathlib import Path
+import json
 import struct
 import unittest
 
@@ -210,6 +211,73 @@ class PingEventsTests(unittest.TestCase):
         self.assertEqual(self.events[0][0]['category'],'building')
         self.assertEqual(self.events[0][0]['target'],'超级地球旗杆')
         self.assertEqual(self.events[0][0]['action'],'mark')
+
+    def test_common_mission_sites_use_resource_names_instead_of_generic_location(self):
+        cases=[('57DB57121F3E7ED2','非法广播塔'),('542A14BA4D755F4E','雷达站终端'),
+               ('9BFC8FCD68B09F28','SEAF 火炮'),('A1BDB3A13E3633DD','SEAF 防空导弹阵地'),
+               ('23C85E970FB46685','战备干扰器'),('2670E0047B2EB409','探测塔'),
+               ('E48C901A7175F638','科研站数据上传设施'),('F08AE61266335A40','非法科研站'),
+               ('6838D8C197CC9C78','轨道炮'),('E2E6E77DCC99A1CB','生物处理器'),
+               ('AA28CAF964D05500','孢子喷涌体'),('095686275A113614','尖啸虫巢穴'),
+               ('A8AE6952B375EF6C','武装运输舰制造厂'),('D0444F56A7D86E2B','发电机')]
+        for resource,name in cases:
+            with self.subTest(resource=resource):
+                self.setUp();self.target(resource);self.localized[3585962803]='特殊地点';self.poll(0)
+                self.mark(kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+                self.assertEqual(len(self.events),1)
+                self.assertEqual(self.events[0][0]['category'],'building')
+                self.assertEqual(self.events[0][0]['target'],name)
+
+    def test_spore_lung_and_bot_emplacements_are_named_task_sites(self):
+        cases=[('DC901B71A3A73B9A','孢肺'),('FF5CC825B9571052','机器人迫击炮阵地'),
+               ('AEAEF7A1851E6C9D','机器人防空炮阵地')]
+        for resource,name in cases:
+            with self.subTest(resource=resource):
+                self.setUp();self.target(resource);self.localized[689074879]='敌方单位';self.poll(0)
+                self.mark(kind=1,localization_key=689074879);self.header(0,1);self.poll(1)
+                self.assertEqual(len(self.events),1)
+                self.assertEqual(self.events[0][0]['category'],'building')
+                self.assertEqual(self.events[0][0]['target'],name)
+
+    def test_ground_style_marker_requires_a_verified_mission_target(self):
+        for resource,expected in [('57DB57121F3E7ED2','非法广播塔'),('DEADBEEFDEADBEEF',None),
+                                  ('1A7FCDFF98C664B0',None)]:
+            with self.subTest(resource=resource):
+                self.setUp();self.target(resource);self.poll(0)
+                self.mark(kind=0);self.header(0,1);self.poll(1)
+                self.assertEqual(len(self.events),1 if expected else 0)
+                if expected:self.assertEqual(self.events[0][0]['target'],expected)
+
+    def test_specific_mission_marker_label_wins_over_resource_fallback(self):
+        self.target('57DB57121F3E7ED2');self.localized[987]='正在关停非法广播';self.poll(0)
+        self.mark(kind=18,localization_key=987);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'正在关停非法广播')
+
+    def test_reviewed_mission_catalog_is_recognized_without_a_specific_native_marker_name(self):
+        catalog=json.loads((SOURCE.parents[1]/'docs/mission-targets.json').read_text(encoding='utf-8'))
+        for row in catalog['targets']:
+            with self.subTest(resource=row['resource'],path=row['path']):
+                self.setUp();self.target(row['resource'])
+                self.localized[3585962803]='特殊地点';self.localized[4234884333]='终端';self.poll(0)
+                self.mark(kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+                self.assertEqual(len(self.events),1)
+                self.assertEqual(self.events[0][0]['category'],'building')
+                self.assertEqual(self.events[0][0]['target'],row['label'])
+
+    def test_mission_terminal_generic_name_is_replaced_but_specific_unit_name_is_localized(self):
+        self.target('542A14BA4D755F4E');self.localized[4234884333]='终端';self.poll(0)
+        self.mark(kind=18,localization_key=4234884333);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'雷达站终端')
+        self.setUp();self.target('A1BDB3A13E3633DD')
+        self.localized[3585962803]='特殊地点';self.localized[1563965062]='地对空导弹发射器';self.poll(0)
+        self.mark(kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['target'],'地对空导弹发射器')
+
+    def test_enemy_style_mission_structure_uses_its_name_instead_of_generic_enemy_unit(self):
+        self.target('AA28CAF964D05500');self.localized[689074879]='敌方单位';self.poll(0)
+        self.mark(kind=1,localization_key=689074879);self.header(0,1);self.poll(1)
+        self.assertEqual(self.events[0][0]['category'],'building')
+        self.assertEqual(self.events[0][0]['target'],'孢子喷涌体')
 
     def test_captured_broadcast_location_uses_native_label_without_guessing_a_building(self):
         self.localized[3585962803]='特殊地点';self.poll(0)
@@ -500,6 +568,10 @@ class PingEventsTests(unittest.TestCase):
         for resource, kind, label in [('D54B9505C0F72873', 20, 'LAS-98 激光大炮'),
                                      ('5052EC6A928CCF1A', 10, '重新补给'),
                                      ('9B2140378640432E', 13, 'M-103 补给车'),
+                                     ('57DB57121F3E7ED2', 18, '非法广播塔'),
+                                     ('542A14BA4D755F4E', 18, '雷达站终端'),
+                                     ('AA28CAF964D05500', 1, '孢子喷涌体'),
+                                     ('57DB57121F3E7ED2', 0, '非法广播塔'),
                                      ('D54B9505C0F72873', 21, '撤离区'),
                                      ('D54B9505C0F72873', 21, '获取发射代码')]:
             with self.subTest(label=label):

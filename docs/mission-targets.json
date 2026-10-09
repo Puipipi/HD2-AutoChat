@@ -1,0 +1,2543 @@
+{
+  "game_version": "1.007.100",
+  "patch_date": "2026-09-22",
+  "sources": {
+    "component_map": "https://raw.githubusercontent.com/Darctor/Helldivers2_RawData/main/Data/settings/EntityComponentMap.json",
+    "encyclopedia": "https://raw.githubusercontent.com/Darctor/Helldivers2_RawData/main/Data/entities/EncyclopediaEntryComponentData.json",
+    "paths": "https://raw.githubusercontent.com/xypwn/filediver/master/hashes/hashes.txt"
+  },
+  "source_sha256": {
+    "component-map.json": "09f6c4334d115773b2e88ed3b4850511fdd1798f7cefc46c8aa70703dfe11d3f",
+    "encyclopedia-current.json": "2efc74a40620751157cab420f37540ad721505b914ef43e593272294f05a2a17",
+    "hashes.txt": "52a296ee5d9e2b926a0e618f825bcf698ee86a96c7440093cde30f8f019c9551"
+  },
+  "notes": [
+    "Paths hashed with MurmurHash64A seed 0; every entry has current Spottable membership.",
+    "Fallback labels describe verified units, not main/side mission importance.",
+    "Some terminal paths remain unknown: generic task labels are explicitly marked specific=false.",
+    "Native specific marker text takes priority; generic location/terminal keys use resource-specific name or fallback."
+  ],
+  "targets": [
+    {
+      "resource": "019F988FA225DD1C",
+      "path": "content/objectives/obj_common/escape_pod/escape_pod",
+      "label": "逃生舱",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "01A88312C8889D5F",
+      "path": "content/objectives/obj_cyborgs/cyborg_hack_turrets/cy_obj_asset_hack_turrets_terminal",
+      "label": "炮塔控制终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "051DA4B57216A005",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "06D3C4720E642FC1",
+      "path": "content/objectives/obj_bugs/eggsack/embryo_01",
+      "label": "虫卵群",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "0722B3A72ADE6CB1",
+      "path": "content/objectives/obj_bugs/tcs/tcs_main_tower",
+      "label": "TCS 主塔",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "073270650F859DD0",
+      "path": null,
+      "label": "装有化学武器的背包",
+      "name_key": 3054644200,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "0801B6B3C5D12EBC",
+      "path": null,
+      "label": "地面全地形采集钻机",
+      "name_key": 3023900891,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "095686275A113614",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_shrieker",
+      "label": "尖啸虫巢穴",
+      "name_key": 3496786382,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "0DC9084E50C051F3",
+      "path": null,
+      "label": "铂金条",
+      "name_key": 2492072473,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "0DF874E208040D2F",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_base",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "0E88F182E83A4275",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "0F1A0189B327C5CB",
+      "path": null,
+      "label": "超级固态硬盘",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "10E44156F08786EF",
+      "path": null,
+      "label": "生物处理器",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "1262CD07B196AAC3",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "1312B769F47256D9",
+      "path": "content/objectives/obj_common/sam_site/idle_sam_site",
+      "label": "SEAF 防空导弹阵地",
+      "name_key": 1563965062,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "142637570A721CB9",
+      "path": "content/objectives/obj_cyborgs/cyborg_orbital_cannon/cy_orbital_cannon_ammo_dispenser",
+      "label": "轨道炮弹药供给装置",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "15031543894C3F3C",
+      "path": "content/env_bugs/assets/gameplay/bug_fog_generator_tcs",
+      "label": "TCS 孢子喷涌体",
+      "name_key": 3139947901,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "1556FE9780D5D52D",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "15E2A2B11BA78C5A",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "162256BD224F6265",
+      "path": "content/objectives/obj_cyborgs/cyborg_filling_station/objective_filling_station_terminal",
+      "label": "加注站终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "16D7BA33ED511664",
+      "path": "content/objectives/obj_cyborgs/cyborg_airbase_control_tower/objective_control_tower_terminal",
+      "label": "控制塔终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "1A3B52A4D3F166F7",
+      "path": "content/objectives/obj_illuminate/il_mothership/il_city_cannon_terminal",
+      "label": "光能者城市巨炮终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "1B633762874A709A",
+      "path": "content/objectives/obj_common/capital_defense/capital_defense_pillar",
+      "label": "首都防御设施",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "1C2360811101BCCE",
+      "path": "content/objectives/obj_cyborgs/cyborg_cooling_structure/cy_obj_asset_cooling_pipe",
+      "label": "冷却管道",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "1D72EBD1A6916E67",
+      "path": "content/objectives/obj_cyborgs/cyborg_organic_assembly_site/assembly_site_crank",
+      "label": "装配设施曲柄",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "22CC0ED4CEB9CB68",
+      "path": "content/env_cyborg/gameplay/spawner_factory/cyborg_spawner_factory_conscript_assault",
+      "label": "机器人制造厂",
+      "name_key": 3794527478,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "23C85E970FB46685",
+      "path": "content/objectives/obj_cyborgs/cyborg_strategem_blocker/cy_stratagem_blocker",
+      "label": "战备干扰器",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "245F7D8792CD23E5",
+      "path": "content/objectives/obj_common/military_uplink/military_uplink_drop_off",
+      "label": "军事通信交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "24ACA2B4D15D2E2F",
+      "path": "content/objectives/obj_common/power_station/power_generator",
+      "label": "发电机组",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "25C5B9818EF934E3",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "2670E0047B2EB409",
+      "path": "content/objectives/obj_cyborgs/cyborg_detector_tower/cy_detector_tower",
+      "label": "探测塔",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "2778F620A6E414AF",
+      "path": "content/objectives/obj_illuminate/il_destroy_weather_device/il_obj_asset_weather_device_core",
+      "label": "光能者气象装置核心",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "2862C5AFC2E837BA",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "29D0A1DFB5FD811F",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData",
+        "ObjectiveShuttleControllerComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "2B581BBB45DA1225",
+      "path": "content/objectives/obj_common/oil_pickup/objective_oil_pickup_terminal",
+      "label": "燃料提取终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "2B5D3186EE3A4A84",
+      "path": "content/env_bugs/assets/samples/bug_egg_super_sample_01",
+      "label": "变异虫卵",
+      "name_key": 555942570,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "2D3BC1683A54298D",
+      "path": null,
+      "label": "情报包裹",
+      "name_key": 3717706265,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "ObjectiveWidgetPriorityComponentData",
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "317B2C0E4D10E293",
+      "path": "content/objectives/obj_cyborgs/cyborg_hack_turrets/cy_obj_asset_hack_turrets_dropoff",
+      "label": "炮塔控制数据交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "319388D1D8ACB8F3",
+      "path": "content/objectives/obj_bugs/entities/bug_tcs_01/bug_tcs_01_terminal",
+      "label": "TCS 任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "3231BD912357A9E1",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "33F2BCDAE3A12592",
+      "path": "content/objectives/obj_common/carry_data/carry_data_stratagem",
+      "label": "超级固态硬盘",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "346C42FD9C915904",
+      "path": "content/objectives/obj_cyborgs/cyborg_orbital_cannon/objective_orbital_cannon_terminal",
+      "label": "轨道炮终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "36C5E772F8A3B9D3",
+      "path": null,
+      "label": "超级固态硬盘",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "36CC8EAD2BB18D78",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_hiveguard",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "372481E910C05A76",
+      "path": "content/objectives/obj_common/shoulder_mounted_camera/shoulder_mounted_camera",
+      "label": "战术摄像机",
+      "name_key": 2071327434,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "37EB67CB7ACE7410",
+      "path": "content/objectives/obj_cyborgs/cyborg_steal_energy_cores/cy_energy_core_station",
+      "label": "能量核心站",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "3A28A51BAA029E1A",
+      "path": "content/objectives/obj_common/oil_pump/oil_pump_active",
+      "label": "抽油任务钻机",
+      "name_key": 3477736393,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "3A2CEF12ED32A088",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_bile_titan",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "3CE56937E0BD28BD",
+      "path": "content/objectives/obj_cyborgs/entities/cy_factory_world_gate_icon/cy_factory_world_gate_icon",
+      "label": "工厂区域大门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "3DE2415EA33B6897",
+      "path": "content/objectives/obj_common/black_box/black_box_01",
+      "label": "黑匣子",
+      "name_key": 4046999266,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "3E099DDF97ACF85F",
+      "path": null,
+      "label": "样本箱",
+      "name_key": 1332022394,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "ObjectiveWidgetPriorityComponentData",
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "3E993C23A25E6B88",
+      "path": "content/objectives/obj_cyborgs/cyborg_airbase_control_tower/cyborg_carry_data",
+      "label": "机器人任务数据",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "3F2C34C69CFC94B2",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "4012166966A9E6E9",
+      "path": "content/objectives/obj_common/seaf_artillery/seaf_shell",
+      "label": "SEAF 火炮弹药",
+      "name_key": 3660636186,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "4232EE48E2CFD24E",
+      "path": "content/env_cyborg/gameplay/colony_cyborg_spawner/cyborg_colony_spawner_base",
+      "label": "机器人制造厂",
+      "name_key": 644365486,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "423FF97D57AB04F5",
+      "path": "content/fac_helldivers/vehicles/oilrig/oil_rig",
+      "label": "地面全地形采集钻机",
+      "name_key": 3023900891,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "424036E9F7DE9A1E",
+      "path": "content/objectives/obj_cyborgs/cyborg_cooling_structure/cy_obj_asset_cooling_valve",
+      "label": "冷却阀门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "42786DC1DD1EACAD",
+      "path": "content/objectives/obj_common/icbm_silo/icbm_rocket",
+      "label": "核导弹",
+      "name_key": 4280970126,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "43EC60F66E7E046B",
+      "path": "content/objectives/obj_cyborgs/cyborg_chemicals_backpack/cy_chemicals_backpack",
+      "label": "装有化学武器的背包",
+      "name_key": 3054644200,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "44748FFC63F78A72",
+      "path": null,
+      "label": "“虫窝破裂者”钻机",
+      "name_key": 1998289914,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "459DD5EB8C68C63F",
+      "path": "content/objectives/obj_cyborgs/entities/cy_factory_world_access_point_icon/cy_factory_world_access_point_icon",
+      "label": "工厂区域入口",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "460576BBDCF770D0",
+      "path": "content/objectives/obj_common/armory_generator",
+      "label": "军械库发电机",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "46918A7483D70F3E",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 2851008997,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "4747668D063EEC06",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "4776A1CF3F19A13B",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_stalker",
+      "label": "潜行虫巢穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "480445A33039CE5E",
+      "path": "content/objectives/obj_bugs/eggsack/embryo_01_cluster_x6",
+      "label": "虫卵群",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "4A3E722B5A865E38",
+      "path": null,
+      "label": "黑匣子",
+      "name_key": 3346432464,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "ObjectiveWidgetPriorityComponentData",
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "4C182656063F121A",
+      "path": "content/objectives/obj_cyborgs/cyborg_airbase_control_tower/control_tower_delivery_drop_off",
+      "label": "控制塔数据交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "4FB8EB356AC8553E",
+      "path": "content/env_cyborg/gameplay/spawner_factory/cyborg_spawner_factory_conscript_standard",
+      "label": "机器人制造厂",
+      "name_key": 3794527478,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "5158E582FBEB26BD",
+      "path": "content/env_cyborg/gameplay/spawner_factory/cyborg_spawner_factory_conscript_airborne",
+      "label": "机器人制造厂",
+      "name_key": 3794527478,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "516E4FA1D2AE46AE",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "52D52230745B66A0",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "534000F7801EA508",
+      "path": "content/objectives/obj_common/collect_data/collect_data_drop_off",
+      "label": "数据收集交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "542A14BA4D755F4E",
+      "path": "content/objectives/obj_common/radar_station/objective_radar_station_terminal",
+      "label": "雷达站终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "54B66A0D35FDF785",
+      "path": "content/objectives/obj_common/oil_pickup/cy_extract_organic_soup_terminal",
+      "label": "有机物提取终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "5684D928C9AB00D1",
+      "path": null,
+      "label": "发射代码",
+      "name_key": 767789391,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "5726276FED2241B3",
+      "path": "content/objectives/obj_cyborgs/cyborg_orbital_cannon/cy_orbital_cannon_ammo_carry",
+      "label": "轨道炮弹药",
+      "name_key": 2928771667,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "57DB57121F3E7ED2",
+      "path": "content/objectives/obj_common/truth_transmitter/truth_transmitter_tower_screen_03",
+      "label": "非法广播塔",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "5852B7D2F865966C",
+      "path": "content/objectives/obj_common/oil_pump/non_objective_oil_pump_animated",
+      "label": "采油机",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "5A14BF4098BF4259",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "60544E51EE260967",
+      "path": "content/objectives/obj_illuminate/il_mothership/il_city_cannon",
+      "label": "光能者城市巨炮",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "62D2C45A8B9703CC",
+      "path": "content/objectives/obj_common/colony_relay/colony_relay_01/objective_colony_relay",
+      "label": "中继塔",
+      "name_key": 1549126177,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "646F5AEBDFF603CB",
+      "path": "content/objectives/obj_common/entities/il_collect_black_box/il_delivery_dropoff_blackbox",
+      "label": "黑匣子交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "68053EAE33FFA084",
+      "path": "content/objectives/obj_illuminate/entities/il_hijack_tech_hub/il_obj_asset_hijack_tech_hub_nexus_machine",
+      "label": "光能者科技枢纽中枢",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "682871578A4E98EB",
+      "path": "content/objectives/obj_cyborgs/cyborg_airbase_control_tower/cy_control_tower",
+      "label": "空军基地控制塔",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "6838D8C197CC9C78",
+      "path": "content/objectives/obj_cyborgs/cyborg_orbital_cannon/cy_orbital_cannon",
+      "label": "轨道炮",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "6845B56D77E61B9F",
+      "path": "content/objectives/obj_common/military_uplink/objective_military_uplink_terminal",
+      "label": "军事通信终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "68BFAC3C8A03BB83",
+      "path": "content/objectives/obj_cyborgs/cyborg_strategem_blocker/objective_stratagem_blocker_terminal",
+      "label": "战备干扰器终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "6B7EE87FB2EC6455",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "6C62E2E25E084083",
+      "path": "content/objectives/obj_common/seaf_gun/seaf_gun_ammo",
+      "label": "SEAF 火炮弹药",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "6DB870D59730EE07",
+      "path": "content/objectives/obj_cyborgs/cyborg_cooling_structure/cy_obj_asset_cooling_pipe_medium",
+      "label": "中型冷却管道",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "6DC9F65AF69783BD",
+      "path": "content/objectives/obj_common/oil_pump/objective_oil_pump_valve",
+      "label": "采油阀门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "6E499C5C95B019FC",
+      "path": "content/objectives/obj_cyborgs/cyborg_command_bunker/cyborg_command_bunker",
+      "label": "指挥碉堡",
+      "name_key": 245997106,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "6FDCD0D7F8EAF267",
+      "path": "content/objectives/obj_bugs/tcs/tcs_support_pillar",
+      "label": "TCS 支柱",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "705B0136A9A9D73A",
+      "path": "content/objectives/obj_common/carry_warhead/warhead_01",
+      "label": "任务弹头",
+      "name_key": 3660636186,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "766E7B3BDF79452F",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "7BDAA1BB44C3EE1C",
+      "path": "content/objectives/obj_bugs/bug_stratagem_blocker/bug_stratagem_blocker",
+      "label": "虫族战备干扰器",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "7C81DE10F0023D08",
+      "path": null,
+      "label": "旗帜",
+      "name_key": 2728206271,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveSecureAreaComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "7CA1B74B22C2EB9C",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 3660636186,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "7E4876D0DBF9C981",
+      "path": "content/objectives/obj_common/colony_relay/colony_relay_01/objective_colony_relay_terminal",
+      "label": "中继塔终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "7E4C6B45BCC45C3F",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_warrior_captive",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "867FFD3B4EA22E05",
+      "path": "content/objectives/obj_cyborgs/cyborg_cooling_structure/cy_obj_asset_cooling_pipe_assembly_site",
+      "label": "装配设施冷却管道",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "888536AE851DCA05",
+      "path": "content/objectives/obj_common/upload_data_interact_common",
+      "label": "数据上传交互装置",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "8901F188DB366B4B",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_scavenger",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "8A50B60B22186B9B",
+      "path": "content/objectives/obj_common/oil_pump/objective_hive_world_oil_pump_valve",
+      "label": "巢穴世界采油阀门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "8AD7A3118BD48D1C",
+      "path": null,
+      "label": "黑匣子",
+      "name_key": 4046999266,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "8C31B749759CBD61",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_warrior",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "8F7D4D9C196018C8",
+      "path": null,
+      "label": "旗帜",
+      "name_key": 2728206271,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveSecureAreaComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "90001FEAC563D6A1",
+      "path": "content/objectives/obj_common/briefcase/briefcase",
+      "label": "公文包",
+      "name_key": 4194145910,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "91209E5AF7A9660B",
+      "path": "content/objectives/obj_common/oil_pickup/organic_soup_hose_connection",
+      "label": "有机物提取软管接口",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveShuttleControllerComponentData"
+      ]
+    },
+    {
+      "resource": "913B7D337E61EE4C",
+      "path": "content/objectives/obj_cyborgs/cyborg_shutdown_grinder/objective_grinder_terminal",
+      "label": "生物处理器终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "925158186B8FD952",
+      "path": "content/objectives/obj_common/colony_relay/relay_alignment_switch",
+      "label": "中继塔对准开关",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "95D717E4AA9ED443",
+      "path": "content/objectives/obj_illuminate/il_mothership/il_cannon_crank_vertical",
+      "label": "光能者城市巨炮曲柄",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "973A2984F0CA6A30",
+      "path": "content/objectives/obj_cyborgs/cyborg_destroy_communication/objective_destroy_communication_terminal",
+      "label": "机器人通信终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "97DD3178E9F0AB70",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_prowler",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "9A0D640BF4ABB03B",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "9A1F728716DA05B5",
+      "path": "content/objectives/obj_common/raise_flag/hellpod_flag",
+      "label": "超级地球旗杆",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveSecureAreaComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "9A6A60CF4BAD9FA5",
+      "path": "content/objectives/obj_common/horde_mode_defend/defend_horde_terminal",
+      "label": "防御任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "9B58C95349D051F9",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_spitter",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "9B75A86003C2A1F4",
+      "path": "content/objectives/obj_common/oil_pump/objective_oil_pump_terminal",
+      "label": "采油任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "9BFC8FCD68B09F28",
+      "path": "content/objectives/obj_common/seaf_gun/seaf_gun",
+      "label": "SEAF 火炮",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "9D3A7E11095E3355",
+      "path": "content/objectives/obj_common/raise_flag/carry_flag",
+      "label": "任务旗帜",
+      "name_key": 2728206271,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveSecureAreaComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "9D8632A79C2D9789",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_warrior_tutorial",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "9E0E5E86A44C62A1",
+      "path": "content/objectives/obj_cyborgs/cyborg_carry_data/cy_carry_data",
+      "label": "机器人任务数据",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "9EA89CEEA6F8E766",
+      "path": "content/objectives/obj_bugs/retrieve_larva/bug_larva_container_backpack",
+      "label": "幼虫储存器",
+      "name_key": 1492050893,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "A09A19371FECD6A3",
+      "path": "content/objectives/obj_bugs/entities/bug_tcs_02/bug_tcs_02_terminal",
+      "label": "TCS 任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "A0EA22BD370D4D72",
+      "path": "content/objectives/obj_common/extract_civilians/civilian_spawner",
+      "label": "平民撤离门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "A1A7B76B29088843",
+      "path": "content/env_cyborg/gameplay/spawner_factory/cyborg_spawner_factory_conscript_phalanx",
+      "label": "机器人制造厂",
+      "name_key": 3794527478,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "A1BDB3A13E3633DD",
+      "path": "content/objectives/obj_common/sam_site/sam_site",
+      "label": "SEAF 防空导弹阵地",
+      "name_key": 1563965062,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "A1E90D748B3D8AAA",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "A21F08920052C27E",
+      "path": "content/objectives/obj_common/power_station/power_station",
+      "label": "发电站",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "A3D5F183F8A2B768",
+      "path": "content/objectives/obj_common/seaf_artillery/seaf_drop_off",
+      "label": "SEAF 火炮装填架",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellRackComponentData"
+      ]
+    },
+    {
+      "resource": "A531053415EB57DA",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "A7381B87F3A3B455",
+      "path": null,
+      "label": "超级固态硬盘",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "ObjectiveWidgetPriorityComponentData",
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "A8AE6952B375EF6C",
+      "path": "content/objectives/obj_cyborgs/cyborg_gunship_spawner/cyborg_gunship_spawner",
+      "label": "武装运输舰制造厂",
+      "name_key": 3794527478,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "A8B999A49716BF41",
+      "path": "content/env_illuminate/gameplay/il_spawner_guy_staff",
+      "label": "光能者传送门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "AA28CAF964D05500",
+      "path": "content/env_bugs/assets/gameplay/bug_fog_generator",
+      "label": "孢子喷涌体",
+      "name_key": 3139947901,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "AC6E5FA7DB7FE621",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "AEAEF7A1851E6C9D",
+      "path": "content/fac_cyborgs/turrets/cyborg_tank_turret_autocannons/cyborg_turret_autocannons",
+      "label": "机器人防空炮阵地",
+      "name_key": 4042981686,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "AFC719AF96F10DC3",
+      "path": null,
+      "label": "受感染高塔",
+      "name_key": 3896690221,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "B127552416CE512E",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "B19C942FFD41C4A5",
+      "path": "content/objectives/obj_common/horde_mode_defend/defend_horde_silo",
+      "label": "防御任务发射井",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "B1D938C07E30C5DB",
+      "path": "content/objectives/obj_common/icbm_silo/icbm_silo",
+      "label": "洲际导弹发射井",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "B27FE88BC708A680",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "B31073E494A0643A",
+      "path": null,
+      "label": "含水层钻机",
+      "name_key": 1436471677,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "B44F8D33E16202FB",
+      "path": "content/objectives/obj_cyborgs/cyborg_refinery/refinery_terminal",
+      "label": "精炼厂终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "B50DBC63A02C0D3B",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "B663751EB459D242",
+      "path": "content/objectives/obj_illuminate/il_artifact_01/il_artifact_01",
+      "label": "光能者古物",
+      "name_key": 3335887011,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "B6A181ADCF547AEB",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_warrior_ceiling",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "B6FE4BD12C248286",
+      "path": "content/objectives/obj_cyborgs/cyborg_organic_assembly_site/assembly_site_clamp",
+      "label": "装配设施夹具",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "B7C9C0D0C39AA349",
+      "path": "content/objectives/obj_common/entities/il_collect_black_box/il_collect_black_box_terminal",
+      "label": "黑匣子回收终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "B8A49F22D83D52CF",
+      "path": "content/objectives/obj_common/icbm_silo/icbm_lock",
+      "label": "洲际导弹发射井锁",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "BA80E8D1331D8489",
+      "path": "content/objectives/obj_common/restore_power/restore_power_terminal",
+      "label": "电力恢复终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "BADBA9174CAEE9FF",
+      "path": "content/objectives/obj_common/icbm_silo/icbm_terminal",
+      "label": "洲际导弹发射终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "BAF9DBD86B22270A",
+      "path": "content/objectives/obj_illuminate/il_mothership/il_mothership",
+      "label": "统御舰",
+      "name_key": 4134104203,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "BB2570AFA4C767D8",
+      "path": "content/objectives/obj_common/upload_data/delivery_drop_off_upload",
+      "label": "数据上传交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "BB2984B9B83EBFD1",
+      "path": "content/objectives/obj_illuminate/il_harvester/il_harvester",
+      "label": "光能者收割设施",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "BC2AF8548C6D5E06",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_hunter",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "BD20741E0225BD33",
+      "path": "content/objectives/obj_cyborgs/cyborg_organic_assembly_site/cy_assembly_site_terminal",
+      "label": "有机装配设施终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "BF908A82B8E787AC",
+      "path": "content/objectives/obj_bugs/tcs/tcs_support_damageable",
+      "label": "TCS 支撑建筑",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "C02C2623B6359BB3",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "C066DCFAA61E740C",
+      "path": "content/objectives/obj_common/collect_data/objective_collect_data_terminal",
+      "label": "数据收集终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "ObjectiveWidgetPriorityComponentData",
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "C2F0CC038E724374",
+      "path": "content/objectives/obj_common/seaf_gun/seaf_gun_terminal",
+      "label": "SEAF 火炮终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "C3D9B291BD97B935",
+      "path": "content/objectives/obj_bugs/tcs/tcs_support_damageable_02",
+      "label": "TCS 支撑建筑",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "C71C0C7B2E688B9B",
+      "path": "content/env_cyborg/samples/automaton_super_sample_01",
+      "label": "机密数据",
+      "name_key": 3839214628,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "C8F9A2233048B836",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 354671336,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "CB036409F28330E7",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "D0444F56A7D86E2B",
+      "path": "content/objectives/obj_common/generator/generator",
+      "label": "发电机",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "D3CEB59066593FBD",
+      "path": "content/objectives/obj_cyborgs/cyborgs_destroy_factories/cy_objective_destroy_factory_terminal",
+      "label": "工厂任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "D4A349DAAE850283",
+      "path": "content/objectives/obj_illuminate/il_mothership/city_cannon_lock",
+      "label": "光能者城市巨炮锁",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "D564F4E9E3A98599",
+      "path": "content/objectives/obj_common/refueling_station/objective_refueling_terminal",
+      "label": "燃料补给终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "D666AA61D804D311",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_scavenger_captive",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "D6A1019CF530FA1D",
+      "path": "content/objectives/obj_common/colony_relay/colony_relay_01/objective_colony_relay_tower_terminal",
+      "label": "中继塔控制终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "D84FFC32A6E640A8",
+      "path": "content/objectives/obj_cyborgs/cyborg_landed_dropship/cyborg_landed_dropship",
+      "label": "机器人运输舰",
+      "name_key": 1485224906,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "D86B3F92DD4AAEDC",
+      "path": "content/objectives/obj_common/refueling_station/objective_evacuate_civilians_main_terminal",
+      "label": "平民撤离主终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "D88547FF02B212E8",
+      "path": "content/objectives/obj_cyborgs/cyborgs_destroy_factories/cy_destroy_factories",
+      "label": "机器人工厂",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "D888E2EC286A4B0D",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "D8A28BFB827392BE",
+      "path": null,
+      "label": "聚变电池",
+      "name_key": 280534572,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveDynamicLinkComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "DB59777F0ABAF6AF",
+      "path": "content/objectives/obj_common/cargo_container/cargo_container",
+      "label": "任务货运集装箱",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData",
+        "ObjectiveShuttleControllerComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "DC19126D15692D04",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "DC901B71A3A73B9A",
+      "path": "content/env_bugs/assets/gameplay/spore_lung",
+      "label": "孢肺",
+      "name_key": 989829386,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "DEF983C174B8E083",
+      "path": "content/objectives/obj_common/oil_pickup/objective_extract_oil_hive_world_terminal",
+      "label": "巢穴世界燃料提取终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "DF3C4F91E298BFA4",
+      "path": "content/objectives/obj_bugs/central_core/central_core_drill_01",
+      "label": "任务钻机",
+      "name_key": 1998289914,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "DF657367D712CD8E",
+      "path": "content/objectives/obj_common/icbm_silo/icbm_silo_wide",
+      "label": "洲际导弹发射井",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "DFA99372CEFBF84D",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData",
+        "ObjectiveDynamicLinkComponentData"
+      ]
+    },
+    {
+      "resource": "E02E6BD34B606A85",
+      "path": "content/env_bugs/assets/gameplay/bug_fog_generator_large",
+      "label": "孢子喷涌体",
+      "name_key": 3139947901,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "E05784031312C43F",
+      "path": "content/objectives/obj_common/oil_pump/objective_extract_oil_hive_world_valve",
+      "label": "巢穴世界燃料提取阀门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "E09FCB5A280ACB1D",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "E2E6E77DCC99A1CB",
+      "path": "content/objectives/obj_cyborgs/cyborg_shutdown_grinder/grinder",
+      "label": "生物处理器",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "E41334ADBEAF0D12",
+      "path": "content/objectives/obj_common/gen_radar_terminal",
+      "label": "雷达任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "E48C901A7175F638",
+      "path": "content/objectives/obj_common/research_station/research_station_upload",
+      "label": "科研站数据上传设施",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "E4BE3FDF0C857B7F",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "E73F6B5A100B7230",
+      "path": "content/objectives/obj_common/radar_wagon",
+      "label": "移动雷达",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "E98D623E013A113B",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "unresolved_path",
+      "specific": false,
+      "components": [
+        "ObjectiveCarryDeliveryComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "E9929CB8800E1C8F",
+      "path": "content/objectives/obj_common/oil_pump/objective_unclog_pipe_hive_world_valve",
+      "label": "巢穴世界管道疏通阀门",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "EAE962D85C0C2D4A",
+      "path": "content/objectives/obj_common/oil_pump/oil_pump",
+      "label": "抽油任务钻机",
+      "name_key": 3477736393,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "EECB5C13AE48637B",
+      "path": "content/objectives/obj_common/upload_data/objective_upload_data_main_terminal",
+      "label": "数据上传主终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "F08AE61266335A40",
+      "path": "content/objectives/obj_common/research_station/research_station_destroy",
+      "label": "非法科研站",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "F0B98FB953B13960",
+      "path": "content/env_cyborg/gameplay/spawner_factory/cyborg_spawner_factory_conscript_base",
+      "label": "机器人制造厂",
+      "name_key": 3794527478,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "F1ADE19F87015997",
+      "path": null,
+      "label": "任务终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": false,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "F1C4856CC0EAF603",
+      "path": "content/objectives/obj_common/sam_site/sam_site_launcher_terminal",
+      "label": "防空导弹发射终端",
+      "name_key": 0,
+      "group": "terminal",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "InteractableObjectiveTerminalComponentData"
+      ]
+    },
+    {
+      "resource": "F41432892465C5FD",
+      "path": "content/objectives/obj_common/carry_data/carry_data",
+      "label": "超级固态硬盘",
+      "name_key": 714952129,
+      "group": "mission_item",
+      "specific": true,
+      "components": [
+        "ObjectiveWidgetPriorityComponentData",
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "F45D1A033E848901",
+      "path": "content/objectives/obj_cyborgs/cyborg_cooling_structure/cy_obj_asset_cooling_pipe_large",
+      "label": "大型冷却管道",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "F598598C47617605",
+      "path": null,
+      "label": "任务交互物",
+      "name_key": 0,
+      "group": "mission_item",
+      "specific": false,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData",
+        "ObjectiveShellComponentData",
+        "ObjectiveCarryComponentData"
+      ]
+    },
+    {
+      "resource": "F78BF0FF5C62140D",
+      "path": "content/env_bugs/assets/gameplay/bug_spawner_boomer",
+      "label": "虫穴",
+      "name_key": 3277626454,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "F8E53685C00D926A",
+      "path": "content/objectives/obj_common/gen_delivery_drop_off",
+      "label": "任务交付点",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "FB0AF9C18AAEFEF2",
+      "path": "content/objectives/obj_illuminate/il_crashed_harvester/il_crashed_harvester",
+      "label": "坠毁的收割者",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "FBD932EAC8E28E0B",
+      "path": "content/objectives/obj_common/power_station/power_station_prime",
+      "label": "主发电站",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "FF5CC825B9571052",
+      "path": "content/fac_cyborgs/turrets/cyborg_tank_turret_mortar/cyborg_turret_mortar",
+      "label": "机器人迫击炮阵地",
+      "name_key": 2649067399,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "WieldableComponentData",
+        "SpottableComponentData"
+      ]
+    },
+    {
+      "resource": "FF660C3FD24531A0",
+      "path": "content/objectives/obj_common/oil_pickup/oil_pickup_hose_connection",
+      "label": "燃料提取软管接口",
+      "name_key": 0,
+      "group": "site",
+      "specific": true,
+      "components": [
+        "SpottableComponentData",
+        "ObjectiveShuttleControllerComponentData"
+      ]
+    }
+  ]
+}
