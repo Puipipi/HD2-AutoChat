@@ -85,6 +85,7 @@ for fragment, marker in [('peer_identity', 'PEER IDENTITY'), ('plugin_registry',
     if ('-- BEGIN ' + marker + '\n' + content + '\n-- END ' + marker) not in src:
         raise SystemExit('FAIL embedded ' + fragment + ' differs from independently tested source fragment')
 ver = re.search(r"version\s*=\s*['\"]([\d.]+)['\"]", src).group(1)
+PACKAGE_LABEL = DISPLAY_NAME + " " + ver
 
 # --- gate 1: compiles under LuaJIT (65535 instructions per function) ---------
 try:
@@ -134,7 +135,7 @@ sys.path.insert(0, VENDOR)
 import build_addon as official                                  # noqa: E402
 
 target = os.path.join(OUT, "%s-%s.zip" % (DISPLAY_NAME.replace(" ", "-"), ver))
-official.build_addon(RESOURCE, src.encode("utf-8"), GUID, target, DISPLAY_NAME)
+official.build_addon(RESOURCE, src.encode("utf-8"), GUID, target, PACKAGE_LABEL)
 
 tmp = target + ".tmp"
 with zipfile.ZipFile(target) as zin:

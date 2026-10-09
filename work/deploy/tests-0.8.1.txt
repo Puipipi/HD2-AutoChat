@@ -1,0 +1,15 @@
+Pre-fix regression (red):
+python -m unittest work.standalone.tests.test_stratagem_catalog.StratagemCatalogTests.test_startup_catalog_scan_does_not_call_native_localization
+AssertionError: Lists differ: [2994328991] != []
+Ran 1 test
+FAILED (failures=1)
+
+Post-fix targeted catalog suite:
+python -m unittest work.standalone.tests.test_stratagem_catalog
+Ran 22 tests in 0.088s
+OK
+
+Post-fix full offline suite:
+python -m unittest discover -s work/standalone/tests
+Ran 382 tests in 86.600s
+OK

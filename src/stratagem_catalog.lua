@@ -62,9 +62,6 @@ local function build_stratagem_catalog(env)
         assert(exponent<255,'nonfinite catalog float')
         return sign*(exponent==0 and fraction*2^-149 or (1+fraction/8388608)*2^(exponent-127))
     end
-    local function label(value)
-        return type(value)=='string' and value~='' and #value<=200 and not value:find('[%c<>]')
-    end
     local function group(name)
         -- Same family decisions as StratagemCooldown's classify/in_scope;
         -- beacon_color is red/blue/yellow and cannot identify green equipment.
@@ -121,13 +118,14 @@ local function build_stratagem_catalog(env)
                     assert(#debug_name>=2 and not debug_name:find('[^ -~]'),'invalid catalog name')
                     local id=word(raw,4);assert(not ids[id],'duplicate stable stratagem id')
                     local name_key,upper_key=word(raw,0x2c),word(raw,0x28)
-                    local localized,name=pcall(function() return env.localize and env.localize(name_key) end)
-                    if not localized or not label(name) then name=debug_name end
                     local color,family=group(debug_name:upper())
                     local icon=hex(raw,0xb0)
                     local cd=f32(raw,0x68);assert(cd>=0 and cd<=86400,'invalid catalog cooldown')
                     local payload_count=word(raw,0xa0);assert(payload_count<=64,'invalid catalog payload count')
-                    local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=name,
+                    -- Use the already validated native debug string. Resolving every
+                    -- localization key here calls into a game function during the
+                    -- first update; discovery and rule identity do not need it.
+                    local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
                         cooldown=cd,payload_count=payload_count,resource_aliases={}}

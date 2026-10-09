@@ -32,8 +32,7 @@ def main():
         elif fragment == 'stratagem_catalog':
             anchor = '-- BEGIN NATIVE PING EVENTS'
             setup = '''
-local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,
-    localize=function(key)return marker_localization.lookup(key)end})
+local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at})
 function M.debug_stratagem_catalog()return stratagem_catalog end
 local function enrich_stratagem_event(event,now)
     if event.category~='stratagem' then return end

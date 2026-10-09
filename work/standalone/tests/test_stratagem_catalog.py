@@ -14,7 +14,7 @@ PINS = [(0x66d54c, '4b8b84fd00b67c03'), (0x179d962, '8b752c'),
 class StratagemCatalogTests(unittest.TestCase):
     def setUp(self):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
-        self.mem, self.localized, self.reads = {}, {2994328991: '500千克炸弹'}, []
+        self.mem, self.localized, self.reads, self.localize_calls = {}, {2994328991: '500千克炸弹'}, [], []
         self.base = BASE
         self.raw(BASE + 0x37cb600, bytes(256 * 8))
         for offset, data in PINS:
@@ -22,9 +22,13 @@ class StratagemCatalogTests(unittest.TestCase):
         self.row(3, 4119049995, 'EAGLE. 500KG BOMB', 2994328991, 1057738842,
                  icon=0xF96A659EBFFDFBE4)
         factory = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_stratagem_catalog')
+        def localize(key):
+            self.localize_calls.append(int(key))
+            return self.localized.get(int(key))
+
         self.reader = factory(self.lua.table_from({
             'base': lambda: self.base, 'read': self.read,
-            'localize': lambda key: self.localized.get(int(key)),
+            'localize': localize,
             'resource_aliases': self.lua.table_from({'00000000abcdef01': 4119049995}),
         }))
 
@@ -62,11 +66,17 @@ class StratagemCatalogTests(unittest.TestCase):
         self.assertEqual(count, 1)
         row = self.reader.lookup('4119049995')
         self.assertEqual((row['type'], row['id'], row['name'], row['group'], row['call_type']),
-                         (3, 4119049995, '500千克炸弹', 'red', 0))
+                         (3, 4119049995, 'EAGLE. 500KG BOMB', 'red', 0))
         self.assertEqual(row['icon'], 'F96A659EBFFDFBE4')
         self.assertEqual(self.reader.resolve_name_key(1057738842)['id'], row['id'])
         self.assertEqual(self.reader.resolve_name_key(2994328991)['id'], row['id'])
         self.assertEqual(self.mem, original)
+
+    def test_startup_catalog_scan_does_not_call_native_localization(self):
+        count, _ = self.reader.scan(0)
+        self.assertEqual(count, 1)
+        self.assertEqual(self.localize_calls, [])
+        self.assertEqual(self.reader.lookup(4119049995)['name'], 'EAGLE. 500KG BOMB')
 
     def test_new_rows_discover_and_type_reordering_keeps_stable_identity(self):
         self.reader.scan(0)
@@ -213,8 +223,7 @@ class StratagemCatalogTests(unittest.TestCase):
                   re.findall(r"\['([0-9A-F]{16})'\]=\{([0-9,]+)\}", text)}
         self.assertEqual(actual, {r['resource']: r['ids'] for r in facts['ambiguous']})
 
-    def test_zero_icon_remains_absent_and_bad_localization_uses_native_debug_name(self):
-        self.localized[2994328991] = '<bad>'
+    def test_zero_icon_remains_absent_and_catalog_name_uses_validated_debug_name(self):
         self.row(5, 55, 'SENTRYS. NEW DEFENSE', 77, 88)
         self.reader.scan(0)
         self.assertEqual(self.reader.lookup(4119049995)['name'], 'EAGLE. 500KG BOMB')

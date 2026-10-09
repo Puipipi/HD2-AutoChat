@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '0.8.0', status = 'starting', frames = 0, reads = 0,
+local M = {version = '0.8.1', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -2119,9 +2119,6 @@ local function build_stratagem_catalog(env)
         assert(exponent<255,'nonfinite catalog float')
         return sign*(exponent==0 and fraction*2^-149 or (1+fraction/8388608)*2^(exponent-127))
     end
-    local function label(value)
-        return type(value)=='string' and value~='' and #value<=200 and not value:find('[%c<>]')
-    end
     local function group(name)
         -- Same family decisions as StratagemCooldown's classify/in_scope;
         -- beacon_color is red/blue/yellow and cannot identify green equipment.
@@ -2178,13 +2175,14 @@ local function build_stratagem_catalog(env)
                     assert(#debug_name>=2 and not debug_name:find('[^ -~]'),'invalid catalog name')
                     local id=word(raw,4);assert(not ids[id],'duplicate stable stratagem id')
                     local name_key,upper_key=word(raw,0x2c),word(raw,0x28)
-                    local localized,name=pcall(function() return env.localize and env.localize(name_key) end)
-                    if not localized or not label(name) then name=debug_name end
                     local color,family=group(debug_name:upper())
                     local icon=hex(raw,0xb0)
                     local cd=f32(raw,0x68);assert(cd>=0 and cd<=86400,'invalid catalog cooldown')
                     local payload_count=word(raw,0xa0);assert(payload_count<=64,'invalid catalog payload count')
-                    local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=name,
+                    -- Use the already validated native debug string. Resolving every
+                    -- localization key here calls into a game function during the
+                    -- first update; discovery and rule identity do not need it.
+                    local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
                         cooldown=cd,payload_count=payload_count,resource_aliases={}}
@@ -2298,8 +2296,8 @@ local function build_stratagem_catalog(env)
 end
 -- END STRATAGEM CATALOG
 
-local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,
-    localize=function(key)return marker_localization.lookup(key)end})
+local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at})
+local catalog_scan_phase = 0
 function M.debug_stratagem_catalog()return stratagem_catalog end
 local function enrich_stratagem_event(event,now)
     if event.category~='stratagem' then return end
@@ -6005,7 +6003,15 @@ local function tick()
         automation.sync()
         timed_send(elapsed)
         if M.options.enabled and M.options.ping or REGISTRY.has_listeners() then
-            stratagem_catalog.scan(now)
+            if catalog_scan_phase == 0 then
+                catalog_scan_phase = 1
+                note('stratagem catalog scan begin')
+            end
+            local _, catalog_status = stratagem_catalog.scan(now)
+            if catalog_scan_phase == 1 then
+                catalog_scan_phase = 2
+                note('stratagem catalog scan complete: ' .. tostring(catalog_status))
+            end
             local _, status = ping_events.poll(now)
             if status ~= M.ping_status then note('ping reader: ' .. tostring(status)) end
             M.ping_status = status
@@ -6116,7 +6122,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v0.7.8  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v0.8.1 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -6133,7 +6139,7 @@ Before anything is sent, five machine-code signatures are checked against the
 running game.dll. If any does not match, the mod goes dormant and says which one
 changed: an unverified address is an arbitrary address.
 
-Custom alert rules (0.8.0)
+Custom alert rules (0.8.0; startup scan safeguard in 0.8.1)
 Settings > Ping > Stratagem rules / Enemy rules opens the dedicated editors.
 Each stratagem has an enable switch, separate mark/call templates and cooldown.
 Blank messages inherit defaults; blank cooldown uses the global player timer.
@@ -6151,11 +6157,16 @@ Small defaults off. Flight wins over size. Reviewed current catalog covers 142
 spottable hostile resources (12 flying), not a guarantee for future game builds.
 Native new stratagem rows auto-appear on a supported layout; unknown groups use
 Other. New enemy facts and changed binaries require verification/update.
+The catalog editor displays validated internal English debug names to avoid bulk
+native localization calls during its first scan. Event messages still try live
+localization first and use the debug name if that lookup is unavailable. Game
+startup remains unverified for this candidate.
 中文：设置→标记消息→战备细分设置 / 敌人体型与飞行提醒。
 空消息沿用默认；冷却留空使用全局，独立秒数按触发者+规则计时，0绕过全局。
 500千克炸弹和轨道凝固汽油弹幕首次升级预设0秒；可编辑或恢复默认。
 战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
 图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
+0.8.1 候选版的战备目录编辑器显示内部英文调试名；事件消息先尝试实时本地化，失败时用调试名。实际游戏启动仍待验收。
 不能确定具体变体时不冒认ID；连同名规则也无法确定时使用默认提醒。
 飞行优先于体型；小型默认关闭；当前142条可标记敌对资源，12条飞行。
 新增战备在兼容布局下自动发现；新敌人及游戏二进制更新仍需校验。
