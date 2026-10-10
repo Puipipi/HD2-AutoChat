@@ -28,12 +28,13 @@ class AlertRuleTests(unittest.TestCase):
             assert(a.set_rule('stratagem',4119049995,'cooldown',0))
             assert(a.set_rule('stratagem',4119049995,'call_message','危险：{目标}'))
             a.record(1000)
-            assert(a.push_ping({key='blocked',category='map',target='任务'},1001))
+            local blocked, disposition=a.push_ping({key='blocked',category='map',target='任务'},1001)
+            assert(not blocked and disposition==nil, 'an event during cooldown is consumed, not queued')
             local event={key='bomb1',category='stratagem',stratagem_id=4119049995,action='summon',target='500kg'}
             assert(a.push_ping(event,1001));assert(a.poll(1001));assert(h.sent[1]=='危险：500kg')
             assert(not a.push_ping(event,1001))
             event.key='bomb2';assert(a.push_ping(event,1001));assert(a.poll(1001))
-            assert(#h.sent==2 and #a.state.pings==1)
+            assert(#h.sent==2 and #a.state.pings==0)
             assert(not a.check(1001,1)) -- urgent sends did not remove global timer
         ''')
 
@@ -47,9 +48,10 @@ class AlertRuleTests(unittest.TestCase):
             a.record(1000,h.mine)
             local e={key='m1',category='medium_enemy',target='武斗虫',creator_id=h.mine}
             assert(a.push_ping(e,1001));assert(a.poll(1001));assert(h.sent[1]:find('中型敌人:武斗虫',1,true))
-            e.key='m2';assert(a.push_ping(e,1002));assert(not a.poll(1002))
+            e.key='m2';local cooled,disposition=a.push_ping(e,1002)
+            assert(not cooled and disposition==nil, 'same actor+rule event is consumed during its cooldown')
             e.key='m3';e.creator_id=h.peers[2];assert(a.push_ping(e,1002));assert(a.poll(1002))
-            assert(a.poll(1011));assert(#h.sent==3)
+            e.key='m4';e.creator_id=h.mine;assert(a.push_ping(e,1011));assert(a.poll(1011));assert(#h.sent==3)
         ''')
 
     def test_disable_bulk_and_blank_inheritance_keep_default_template(self):
@@ -94,16 +96,17 @@ class AlertRuleTests(unittest.TestCase):
             assert(c.rule('stratagem',2902516083,'client').cooldown==0)
         ''')
 
-    def test_urgent_alert_survives_full_blocked_queue_and_welcome(self):
+    def test_urgent_alert_survives_full_ping_queue_and_welcome(self):
         self.run_lua('''
             assert(a.set('message_language','zh'))
             assert(a.set('summon_message','{玩家名}召唤了{目标}'))
             assert(a.set('welcome_message','欢迎加入小队！'))
             assert(a.set('ping',true));assert(a.set('welcome',true));assert(a.set('welcome_delay',0))
-            assert(a.set('cooldown',3600));a.poll(1000);a.record(1000)
+            assert(a.set('cooldown',3600));a.poll(1000)
             assert(a.set_rule('stratagem',4119049995,'cooldown',0))
-            for i=1,16 do assert(a.push_ping({key='blocked'..i,category='map'},1001)) end
-            h.peers={h.mine,'76561198000000002'}
+            h.peers={h.mine};for i=1,17 do h.peers[#h.peers+1]='peer'..i end
+            for i=1,16 do assert(a.push_ping({key='blocked'..i,category='map',creator_id='peer'..i},1001)) end
+            h.peers[#h.peers+1]='76561198000000002'
             assert(a.push_ping({key='bomb',category='stratagem',stratagem_id=4119049995,action='summon',target='500kg'},1001))
             assert(a.poll(1001));assert(h.sent[1]=='队友召唤了500kg')
             assert(a.poll(1001));assert(h.sent[2]=='欢迎加入小队！')

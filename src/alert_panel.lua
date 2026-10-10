@@ -6,7 +6,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local function text(v,x,y,size,c,w) canvas.text(v,x,y,size or 14,c or C.TEXT,w) end
     local function row_name(row)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
-        return row.debug_name or row.name or row.display_name or tostring(row.id)
+        return row.display_name_en or row.name_en or row.debug_name or row.name or row.display_name or tostring(row.id)
     end
     local function button(key,value,x,y,w,on,disabled)
         canvas.rect(x,y,w,32,disabled and C.FIELD or on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)

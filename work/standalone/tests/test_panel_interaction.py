@@ -4,6 +4,158 @@ from test_auto_chat_probe import fresh_image, SOURCE
 
 
 class PanelInteractionTest(unittest.TestCase):
+    @staticmethod
+    def _region(panel, key):
+        return next((panel['regions'][i] for i in range(1, len(panel['regions']) + 1)
+                     if panel['regions'][i]['key'] == key), None)
+
+    def test_panel_input_wheel_reader_consumes_captured_counter_once(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        panel_input = mod.debug_panel_input()
+        panel_input.debug_set_wheel_counter(0, True)
+        self.assertEqual(0, panel_input.filter_wheel())
+        panel_input.debug_set_wheel_counter(-240, True)
+        self.assertEqual(-2, panel_input.filter_wheel(), 'two native 120-unit notches are preserved')
+        self.assertEqual(0, panel_input.filter_wheel(), 'the cumulative counter is consumed once')
+
+    def test_pings_view_has_bounded_scroll_viewport_and_hides_offscreen_controls(self):
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        mod.debug_panel()['settings_view'] = 'pings'
+        lua.execute('for i=1,601 do update() end')
+        panel = mod.debug_panel()
+        self.assertIsNotNone(self._region(panel, 'scroll:pings:thumb'),
+                             'overflowing pings controls need an interactive scrollbar')
+        self.assertIsNotNone(self._region(panel, 'scroll:pings:track'))
+        visible = [panel['regions'][i] for i in range(1, len(panel['regions']) + 1)
+                   if panel['regions'][i]['key'].startswith('opt:')]
+        self.assertTrue(visible)
+        viewport = panel['viewports']['pings']
+        for region in visible:
+            self.assertGreaterEqual(region['x'], viewport['screen_x'])
+            self.assertLessEqual(region['x'] + region['w'], viewport['screen_x'] + viewport['screen_w'])
+            self.assertGreaterEqual(region['y'], viewport['screen_y'])
+            self.assertLessEqual(region['y'] + region['h'], viewport['screen_y'] + viewport['screen_h'])
+        lua.execute('''
+            test_hint_texts={}
+            local original=stingray.Gui.text
+            stingray.Gui.text=function(gui,value,font,size,material,pos,color)
+                test_hint_texts[#test_hint_texts+1]={text=tostring(value),x=pos.x,y=pos.y}
+                return original(gui,value,font,size,material,pos,color)
+            end
+            HD2AutoChat.debug_panel().scroll_offsets.pings=34
+            for i=1,1 do update() end
+        ''')
+        for i in range(1, len(lua.globals().test_hint_texts) + 1):
+            row = lua.globals().test_hint_texts[i]
+            text = str(row['text'])
+            if '{' not in text:
+                continue
+            x, y = float(row['x']), float(row['y'])
+            self.assertGreaterEqual(x, viewport['screen_x'])
+            self.assertLessEqual(x + len(text) * 12 * 0.6, viewport['screen_x'] + viewport['screen_w'])
+            self.assertGreaterEqual(y - 12 * 0.2, viewport['screen_y'])
+            self.assertLessEqual(y + 12 * 0.8, viewport['screen_y'] + viewport['screen_h'])
+
+    def test_task_list_100_items_scrolls_to_last_item_and_wheel_is_hover_scoped(self):
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        lua.execute('''for i=1,105 do
+            assert(HD2AutoChat.add_task('Task '..i,'repeat','30','message '..i,nil,'host'))
+        end''')
+        mod.debug_set_open(True)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_panel()['settings_view'] = 'pings'
+        lua.execute('''test_range_drawn=nil
+            local original=stingray.Gui.text
+            stingray.Gui.text=function(gui,value,font,size,material,pos,color)
+                if tostring(value):find('105 TASKS',1,true) then
+                    test_range_drawn={text=tostring(value),x=pos.x,y=pos.y,size=size}
+                end
+                return original(gui,value,font,size,material,pos,color)
+            end''')
+        lua.eval('update()')
+        panel = mod.debug_panel()
+        self.assertIsNotNone(self._region(panel, 'scroll:tasks:thumb'),
+                             '100+ task rows need continuous scrolling as well as paging')
+        tasks = panel['viewports']['tasks']
+        pings = panel['viewports']['pings']
+        range_label = lua.globals().test_range_drawn
+        next_button = self._region(panel, 'page:next')
+        self.assertIsNotNone(range_label)
+        self.assertIsNotNone(next_button)
+        range_right = float(range_label['x']) + len(str(range_label['text'])) * float(range_label['size']) * 0.55
+        self.assertLessEqual(range_right, next_button['x'], 'range/count footer must not overlap the next button')
+        lua.execute('''test_axis_calls=0
+            stingray.Mouse={axis_id=function(name) return name=='wheel' and 1 or nil end,
+                axis=function(id) test_axis_calls=test_axis_calls+1; return {0,0,0} end}
+            HD2AutoChat.debug_panel_input().debug_set_wheel_counter(0,true)''')
+        h.mouse_x = tasks['screen_x'] + tasks['screen_w'] / 2
+        h.mouse_y = 1080 - tasks['screen_y'] - tasks['screen_h'] / 2
+        lua.execute('HD2AutoChat.debug_panel_input().debug_set_wheel_counter(-120,true); update()')
+        task_offset = float(mod.debug_panel()['scroll_offsets']['tasks'])
+        self.assertGreater(task_offset, 0, 'the native captured-wheel counter must scroll the hovered task list')
+        self.assertEqual(0, lua.globals().test_axis_calls,
+                         'the active native hook counter takes priority over sr.Mouse.axis')
+        h.mouse_x = pings['screen_x'] + pings['screen_w'] / 2
+        h.mouse_y = 1080 - pings['screen_y'] - pings['screen_h'] / 2
+        lua.execute('HD2AutoChat.debug_panel_input().debug_set_wheel_counter(-360,true); update()')
+        panel = mod.debug_panel()
+        self.assertEqual(task_offset, float(panel['scroll_offsets']['tasks']),
+                         'wheel over pings must leave the task viewport unchanged')
+        self.assertGreater(float(panel['scroll_offsets']['pings']), 0,
+                           'wheel over pings must scroll the pings viewport')
+        pings_offset = float(panel['scroll_offsets']['pings'])
+        self.assertEqual(0, lua.globals().test_axis_calls)
+        h.mouse_x, h.mouse_y = 20, 20
+        lua.execute('HD2AutoChat.debug_panel_input().debug_set_wheel_counter(-480,true); update()')
+        self.assertEqual(task_offset, float(mod.debug_panel()['scroll_offsets']['tasks']))
+        self.assertEqual(pings_offset, float(mod.debug_panel()['scroll_offsets']['pings']))
+        self.assertEqual(0, lua.globals().test_axis_calls)
+        # Active hook deltas are consumed even with the pointer outside both
+        # viewports; entering a viewport later must not replay that old delta.
+        h.mouse_x, h.mouse_y = 20, 20
+        lua.execute('HD2AutoChat.debug_panel_input().debug_set_wheel_counter(-720,true); update()')
+        h.mouse_x = pings['screen_x'] + pings['screen_w'] / 2
+        h.mouse_y = 1080 - pings['screen_y'] - pings['screen_h'] / 2
+        lua.eval('update()')
+        self.assertEqual(task_offset, float(mod.debug_panel()['scroll_offsets']['tasks']))
+        self.assertEqual(pings_offset, float(mod.debug_panel()['scroll_offsets']['pings']))
+
+    def test_task_viewport_thumb_drag_reaches_last_item_and_delete_clamps(self):
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        lua.execute("for i=1,105 do assert(HD2AutoChat.add_task('Task '..i,'repeat','30','msg',nil,'host')) end")
+        mod.debug_set_open(True)
+        lua.execute('for i=1,601 do update() end')
+        panel = mod.debug_panel()
+        thumb = self._region(panel, 'scroll:tasks:thumb')
+        self.assertIsNotNone(thumb)
+        h.mouse_x = thumb['x'] + thumb['w'] / 2
+        h.mouse_y = 1080 - thumb['y'] - thumb['h'] / 2
+        h.user32.set_key(1, True); lua.eval('update()')
+        h.mouse_y += 500
+        lua.eval('update()')
+        h.user32.set_key(1, False); lua.eval('update()')
+        self.assertGreater(mod.debug_panel()['scroll_offsets']['tasks'], 0)
+        last = self._region(mod.debug_panel(), 'toggle:105')
+        self.assertIsNotNone(last, 'the last task must have a visible and clickable row')
+        h.mouse_x = last['x'] + last['w'] / 2
+        h.mouse_y = 1080 - last['y'] - last['h'] / 2
+        h.user32.set_key(1, True); lua.eval('update()')
+        h.user32.set_key(1, False); lua.eval('update()')
+        self.assertTrue(mod.tasks[105]['enabled'] is False)
+        delete = self._region(mod.debug_panel(), 'delete:105')
+        self.assertIsNotNone(delete)
+        h.mouse_x = delete['x'] + delete['w'] / 2
+        h.mouse_y = 1080 - delete['y'] - delete['h'] / 2
+        h.user32.set_key(1, True); lua.eval('update()')
+        h.user32.set_key(1, False); lua.eval('update()')
+        lua.eval('update()')
+        self.assertLessEqual(mod.debug_panel()['scroll_offsets']['tasks'], 103 * 76)
+
     def test_background_k_cannot_open_or_capture_cursor(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)
@@ -696,21 +848,31 @@ class PanelInteractionTest(unittest.TestCase):
                     self.assertLessEqual(a['x']+a['w'], geo['x']+geo['w']+1)
                 for i,a in enumerate(boxes):
                     for b in boxes[i+1:]:
+                        if a['key'].startswith('scroll:') and b['key'].startswith('scroll:'):
+                            a_id, a_kind = a['key'].split(':')[1:]
+                            b_id, b_kind = b['key'].split(':')[1:]
+                            if a_id == b_id and {a_kind, b_kind} == {'track', 'thumb'}:
+                                # The thumb is intentionally drawn inside its track.
+                                continue
                         dx = min(a['x']+a['w'],b['x']+b['w'])-max(a['x'],b['x'])
                         dy = min(a['y']+a['h'],b['y']+b['h'])-max(a['y'],b['y'])
                         self.assertFalse(dx>1 and dy>1, (view,a['key'],b['key']))
 
 
 class ScheduledAvailabilityTest(unittest.TestCase):
-    def test_short_repeat_cannot_starve_a_countdown_during_global_cooldown(self):
+    def test_repeat_and_countdown_ignore_event_cooldown(self):
         _, h = fresh_image()
         mod = h.load(SOURCE)
+        automation = mod.debug_automation()
+        automation.record(1004)
         mod.add_task('Repeat', 'repeat', '5', 'repeat', 1000)
         once = mod.add_task('Once', 'once', '5', 'once', 1000)
         for now in (1005, 1010, 1015):
             mod.debug_run_tasks(now)
-        self.assertTrue(once['done'], 'oldest overdue task must get the next slot')
-        self.assertEqual(3, h.call_count())
+        self.assertTrue(once['done'])
+        self.assertEqual(4, h.call_count(), 'repeat and one-shot task both send when due')
+        self.assertFalse(automation.check(1008, 1)[0], 'task sends do not overwrite the event cooldown')
+        self.assertTrue(automation.check(1009, 1)[0], 'event cooldown expires from its original timestamp')
 
     def test_peer_guard_uses_slots_even_when_raw_count_is_zero(self):
         _, h = fresh_image(others=2)

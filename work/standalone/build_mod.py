@@ -24,6 +24,7 @@ Usage:
 Requires: python3 + lupa  (`python -m pip install lupa`)
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -50,9 +51,33 @@ USER32 = {"GetCursorPos", "GetClientRect", "ScreenToClient", "GetForegroundWindo
           "GetAsyncKeyState", "GetWindowThreadProcessId", "GetCurrentProcessId"}
 # ------------------------------------------------------------------------------
 
+PREVIEW_MARKER = "-- UI_PREVIEW_LOCALE: build-time preview override; default UI follows game language."
+
+
+def apply_preview_locale(source, locale):
+    """Change only the build-time panel locale marker in a packaged copy."""
+    if locale is None:
+        return source
+    if locale != "en":
+        raise ValueError("unsupported preview locale: %s" % locale)
+    marker_count = source.count(PREVIEW_MARKER)
+    expected = "M.ui_preview_language = nil " + PREVIEW_MARKER
+    if marker_count != 1 or source.count(expected) != 1:
+        raise ValueError("expected exactly one nil UI_PREVIEW_LOCALE marker")
+    return source.replace(expected, "M.ui_preview_language = 'en' " + PREVIEW_MARKER, 1)
+
+
+def package_filename(display_name, version, locale=None):
+    name = "%s-%s" % (display_name.replace(" ", "-"), version)
+    if locale == "en":
+        name += "-EnglishUI"
+    return name + ".zip"
+
 default_out = Path(OUTPUT_DIR) if OUTPUT_DIR else Path(W).resolve().parents[1] / "dist"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output-dir", type=Path, default=default_out)
+parser.add_argument("--preview-locale", choices=("en",),
+                    help="build a temporary package with English panel UI")
 parser.add_argument("--validate-only", action="store_true",
                     help="run the gates without packaging")
 args = parser.parse_args()
@@ -96,8 +121,14 @@ for fragment, marker in [('peer_identity', 'PEER IDENTITY'), ('plugin_registry',
         content = re.sub(r'\nreturn build_plugin_ui$', '', content)
     if ('-- BEGIN ' + marker + '\n' + content + '\n-- END ' + marker) not in src:
         raise SystemExit('FAIL embedded ' + fragment + ' differs from independently tested source fragment')
+try:
+    src = apply_preview_locale(src, args.preview_locale)
+except ValueError as exc:
+    raise SystemExit("FAIL %s" % exc)
 ver = re.search(r"version\s*=\s*['\"]([\d.]+)['\"]", src).group(1)
 PACKAGE_LABEL = DISPLAY_NAME + " " + ver
+if args.preview_locale == "en":
+    PACKAGE_LABEL += " English UI Preview"
 
 # --- gate 1: compiles under LuaJIT (65535 instructions per function) ---------
 try:
@@ -146,7 +177,7 @@ have_icon = bool(ICON) and os.path.exists(ICON)
 sys.path.insert(0, VENDOR)
 import build_addon as official                                  # noqa: E402
 
-target = os.path.join(OUT, "%s-%s.zip" % (DISPLAY_NAME.replace(" ", "-"), ver))
+target = os.path.join(OUT, package_filename(DISPLAY_NAME, ver, args.preview_locale))
 official.build_addon(RESOURCE, src.encode("utf-8"), GUID, target, PACKAGE_LABEL)
 
 tmp = target + ".tmp"
@@ -179,3 +210,8 @@ with zipfile.ZipFile(target) as zin:
 os.replace(tmp, target)
 print("built %s: %d bytes" % (os.path.basename(target), os.path.getsize(target)))
 print("version: %s" % ver)
+if args.preview_locale == "en":
+    sidecar = target + ".sha256"
+    digest = hashlib.sha256(Path(target).read_bytes()).hexdigest()
+    Path(sidecar).write_text("%s  %s\n" % (digest, os.path.basename(target)), encoding="ascii")
+    print("sha256 %s: %s" % (os.path.basename(sidecar), digest))

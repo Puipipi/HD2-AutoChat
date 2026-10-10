@@ -35,6 +35,18 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertEqual(1,len([mod.tasks[i] for i in range(1,len(mod.tasks)+1)
                                 if mod.tasks[i].profile=='client']))
 
+    def test_due_task_ignores_event_cooldown_without_extending_it(self):
+        _, h, mod = self.fresh()
+        automation = mod.debug_automation()
+        automation.record(1003)
+        self.assertIsNotNone(mod.add_task('Timer', 'once', '5', 'timer message', 1000, 'host'))
+
+        mod.debug_run_tasks(1005)
+
+        self.assertEqual(1, h.call_count(), 'a due task sends despite the trigger-player event cooldown')
+        self.assertFalse(automation.check(1005, 1)[0], 'task delivery must not rewrite event cooldown')
+        self.assertTrue(automation.check(1008, 1)[0], 'the original event cooldown expires on schedule')
+
     def test_validation_rejects_bad_time_and_blank_message(self):
         _, _, mod = self.fresh()
         for mode, value, message in (("repeat", "0", "hi"), ("once", "abc", "hi"),
@@ -533,6 +545,11 @@ class ScheduledTasksTest(unittest.TestCase):
                     self.assertLessEqual(r["x"] + r["w"], geo["x"] + geo["w"] + 1)
                 for i, a in enumerate(boxes):
                     for b in boxes[i + 1:]:
+                        if a["key"].startswith("scroll:") and b["key"].startswith("scroll:"):
+                            a_id, a_kind = a["key"].split(":")[1:]
+                            b_id, b_kind = b["key"].split(":")[1:]
+                            if a_id == b_id and {a_kind, b_kind} == {"track", "thumb"}:
+                                continue
                         dx = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
                         dy = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
                         self.assertFalse(dx > 1 and dy > 1, (rw, rh, a["key"], b["key"]))

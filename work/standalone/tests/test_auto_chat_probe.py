@@ -911,13 +911,13 @@ class AutoChatProbeTest(unittest.TestCase):
     def test_build_identity_is_distinct_from_product_version_and_logged(self):
         _, h, mod = self.fresh()
         self.assertEqual("1.0.0", mod.version)
-        self.assertEqual("v1.0.0-build.6", mod.build_id)
-        self.assertIn("AutoChat v1.0.0 starting (build v1.0.0-build.6; send + panel)",
+        self.assertEqual("v1.0.0-build.7", mod.build_id)
+        self.assertIn("AutoChat v1.0.0 starting (build v1.0.0-build.7; send + panel)",
                       h.log_text())
         written = h.written()
         status = "".join(written[i]["text"] for i in range(1, len(written) + 1)
                          if written[i]["path"].endswith("AutoChat-STATUS.txt"))
-        self.assertIn("build       : v1.0.0-build.6", status)
+        self.assertIn("build       : v1.0.0-build.7", status)
 
     def test_observation_reports_the_synthetic_values(self):
         lua, h, mod = self.fresh()
@@ -1833,8 +1833,8 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertNotEqual(false_signature, mod.debug_panel_signature())
         self.assertGreater(frame["epoch"], false_epoch, "nil and false transitions must invalidate the cache")
 
-    def test_cached_signature_matches_all_74_fields_of_the_previous_implementation(self):
-        """The optimization must preserve the complete prior signature contract."""
+    def test_cached_signature_matches_legacy_fields_and_tracks_new_panel_state(self):
+        """Preserve the old signature fields except retired task paging, plus new state."""
         fixture = Path(__file__).with_name("fixtures") / "panel_signature_v083.lua"
         legacy_function = fixture.read_text(encoding="utf-8").rstrip()
         current_source = Path(SOURCE).read_text(encoding="utf-8")
@@ -1851,23 +1851,69 @@ class AutoChatProbeTest(unittest.TestCase):
             legacy_mod = legacy_h.load(legacy_path)
             current_mod = current_h.load(SOURCE)
             self.assertEqual(74, len(legacy_mod.debug_panel_signature().split("|")),
-                             "the comparison must exercise all original signature fields")
+                             "the reference must exercise all original signature fields")
+            self.assertEqual(77, len(current_mod.debug_panel_signature().split("|")),
+                             "the current signature includes three panel-state fields")
 
-            def assert_equivalent():
-                self.assertEqual(legacy_mod.debug_panel_signature(), current_mod.debug_panel_signature())
+            def signature_parts(mod):
+                return mod.debug_panel_signature().split("|")
 
-            assert_equivalent()
+            def assert_legacy_fields_equivalent():
+                legacy_parts = signature_parts(legacy_mod)
+                current_parts = signature_parts(current_mod)
+                self.assertEqual(74, len(legacy_parts))
+                self.assertEqual(77, len(current_parts))
+                # Slot 62 used to be task_page. It is deliberately constant now;
+                # normalize only that known schema change before comparing all
+                # remaining legacy fields.
+                legacy_parts[61] = current_parts[61]
+                self.assertEqual(legacy_parts, current_parts[:74])
+
+            legacy_panel = legacy_mod.debug_panel()
+            current_panel = current_mod.debug_panel()
+            legacy_panel["task_page"] = 9
+            current_panel["task_page"] = 9
+            self.assertEqual("9", signature_parts(legacy_mod)[61],
+                             "legacy slot 62 must demonstrate the old variable task page")
+            self.assertEqual("1", signature_parts(current_mod)[61],
+                             "current slot 62 deliberately remains constant")
+            assert_legacy_fields_equivalent()
             for legacy_panel, current_panel in ((legacy_mod.debug_panel(), current_mod.debug_panel()),):
                 legacy_panel["hint"], current_panel["hint"] = False, False
-                assert_equivalent()
+                assert_legacy_fields_equivalent()
                 legacy_panel["hint"], current_panel["hint"] = None, None
                 legacy_panel["ui_s"], current_panel["ui_s"] = 1.0001, 1.0001
-                assert_equivalent()
+                assert_legacy_fields_equivalent()
                 legacy_cfg, current_cfg = legacy_mod.debug_cfg(), current_mod.debug_cfg()
                 legacy_cfg["elapsed"], current_cfg["elapsed"] = 0.1, 0.1
-                assert_equivalent()
+                assert_legacy_fields_equivalent()
                 legacy_cfg["message"], current_cfg["message"] = "contract-change", "contract-change"
-                assert_equivalent()
+                assert_legacy_fields_equivalent()
+
+            current_mod.debug_language().update('zh', 1)
+            before_new_state = signature_parts(current_mod)
+            current_panel["scroll_offsets"] = lua_table = current_lua.table()
+            lua_table["pings"] = 13
+            after_pings_scroll = signature_parts(current_mod)
+            self.assertNotEqual(before_new_state, after_pings_scroll)
+            self.assertEqual("13", after_pings_scroll[74], "slot 75 records pings scroll offset")
+            lua_table["pings"] = 0
+            before_tasks_scroll = signature_parts(current_mod)
+            lua_table["tasks"] = 27
+            after_tasks_scroll = signature_parts(current_mod)
+            self.assertNotEqual(before_tasks_scroll, after_tasks_scroll)
+            self.assertEqual("27", after_tasks_scroll[75], "slot 76 records tasks scroll offset")
+            lua_table["tasks"] = 0
+            before_preview = signature_parts(current_mod)
+            current_mod.ui_preview_language = 'en'
+            after_preview = signature_parts(current_mod)
+            self.assertNotEqual(before_preview, after_preview)
+            self.assertEqual("en", after_preview[76], "slot 77 records the selected panel locale")
+            self.assertEqual("zh", current_mod.debug_language().current(),
+                             "panel preview must not change the game locale")
+            current_mod.ui_preview_language = None
+            self.assertEqual("zh", signature_parts(current_mod)[76],
+                             "clearing preview follows the game locale")
         finally:
             Path(legacy_path).unlink(missing_ok=True)
 

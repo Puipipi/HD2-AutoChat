@@ -162,7 +162,10 @@ local function build_language(env)
     }
 
     function M.current() return state.locale end
-    function M.is_chinese() return state.locale=='zh' end
+    function M.is_chinese(locale)
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        return selected=='zh'
+    end
     function M.set_dirty(callback) env.dirty=callback end
     function M.update(option,frame)
         if option~='zh' and option~='en' and option~='auto' then option='auto' end
@@ -187,8 +190,9 @@ local function build_language(env)
         end
         return state.locale
     end
-    function M.text(chinese,english)
-        if state.locale=='zh' then return tostring(chinese or english or '') end
+    function M.text(chinese,english,locale)
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        if selected=='zh' then return tostring(chinese or english or '') end
         return tostring(english or chinese or '')
     end
     function M.phrase(key, locale)
@@ -196,8 +200,9 @@ local function build_language(env)
         local selected=(locale=='zh' or locale=='en') and locale or state.locale
         return row and row[selected] or tostring(key or '')
     end
-    function M.status(value)
-        if type(value)~='string' or state.locale=='zh' then return value end
+    function M.status(value,locale)
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        if type(value)~='string' or selected=='zh' then return value end
         local translated=statuses[value]
         if translated then return translated end
         if value:match('^战备目录读取就绪（%d+）$') then

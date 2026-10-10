@@ -712,7 +712,7 @@ local function build_chat_automation(env)
             end
         end
     end
-    local function policy(now, others, snapshot, peer, rule_id, cooldown)
+    local function policy(now, others, snapshot, peer, rule_id, cooldown, ignore_cooldown)
         limits(snapshot)
         if not options.enabled then return false, '自动发送已关闭' end
         if not options.allow_solo and (type(others) ~= 'number' or others < 1) then
@@ -721,18 +721,44 @@ local function build_chat_automation(env)
         if type(now) ~= 'number' or now ~= now or now == math.huge or now == -math.huge then
             return false, '等待：计时尚未就绪'
         end
-        local key=bucket(peer,snapshot)
-        local independent=rule_id and cooldown~=nil
-        local last=independent and (state.last_by_rule[key] or {})[rule_id] or nil
-        if not independent then last=state.last_by_peer[key] end
-        if last and now - last < (independent and cooldown or options.cooldown) then
-            return false, '等待：该玩家的自动消息间隔中'
+        if not ignore_cooldown then
+            local key=bucket(peer,snapshot)
+            local independent=rule_id and cooldown~=nil
+            local last=independent and (state.last_by_rule[key] or {})[rule_id] or nil
+            if not independent then last=state.last_by_peer[key] end
+            if last and now - last < (independent and cooldown or options.cooldown) then
+                return false, '等待：该玩家的自动消息间隔中', 'cooldown-active'
+            end
         end
         return true, '可以自动发送'
     end
-    function api.check(now, others, peer)
+    local function pending_ping_reserves(now, snapshot, peer, rule_id, cooldown)
+        if type(snapshot) ~= 'table' then return false end
+        local actor = bucket(peer, snapshot)
+        local independent = rule_id ~= nil and cooldown ~= nil
+        local effective = independent and cooldown or options.cooldown
+        if type(effective) ~= 'number' or effective <= 0 then return false end
+        local context = attempt(env.context)
+        for _, pending in ipairs(state.pings) do
+            local other_independent = pending.rule_id ~= nil and pending.cooldown ~= nil
+            local other_effective = other_independent and pending.cooldown or options.cooldown
+            if type(other_effective) == 'number' and other_effective > 0
+                and type(pending.expires) == 'number' and pending.expires >= now
+                and pending.role == state.active_role and pending.context == context
+                and pending.session == snapshot.session and pending.mine == snapshot.mine
+                and pending.host == snapshot.host
+                and creator_present(pending.creator_id,snapshot)
+                and bucket(pending.creator_id, snapshot) == actor
+                and independent == other_independent
+                and (not independent or rule_id == pending.rule_id) then
+                return true
+            end
+        end
+        return false
+    end
+    function api.check(now, others, peer, bypass_cooldown)
         api.sync()
-        return policy(now, others, api.snapshot(), peer)
+        return policy(now, others, api.snapshot(), peer, nil, nil, bypass_cooldown == true)
     end
     function api.record(now, peer)
         if type(now) == 'number' and now == now and now ~= math.huge and now ~= -math.huge then
@@ -886,19 +912,19 @@ local function build_chat_automation(env)
         local candidate, entry, blocked
         for key, pending in pairs(state.pending) do
             if now >= pending.due and now >= pending.retry then
-                local allowed, reason = policy(now,#snapshot.remote,snapshot,key)
+                local allowed, reason = policy(now,#snapshot.remote,snapshot,key,nil,nil,true)
                 if allowed and (not entry or pending.joined < entry.joined
                     or pending.joined == entry.joined and key < candidate) then candidate, entry = key, pending
                 elseif not allowed then blocked=reason end
             end
         end
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
-        local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
+        local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate,nil,nil,true)
         if not allowed then state.status = reason; return false, reason end
         local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message, options.message_language),candidate,nil,nil,
             options.ping_sender_color==true,options.message_language), state.active_role)
         if sent == true then
-            state.pending[candidate] = nil; api.record(now,candidate)
+            state.pending[candidate] = nil
             state.status = '已发送新人欢迎'; return true, state.status
         end
         -- Chat can be temporarily disabled. Keep this welcome while the player
@@ -925,6 +951,17 @@ local function build_chat_automation(env)
         if state.ping_seen[event.key] then event_diagnostic(event,rule_id,'duplicate-event');return false end
         local snapshot = api.snapshot()
         if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false,'retry' end
+        -- Cooldown-active notifications are consumed here rather than retained
+        -- until their bucket reopens. Reserve the bucket while an accepted ping
+        -- is pending so a burst cannot stack behind its first event.
+        local allowed, _, code = policy(now,snapshot and #snapshot.remote or nil,
+            snapshot,event.creator_id,rule_id,rule.cooldown)
+        if (not allowed and code == 'cooldown-active')
+            or (allowed and pending_ping_reserves(now,snapshot,event.creator_id,rule_id,rule.cooldown)) then
+            state.ping_seen[event.key] = now + 30
+            event_diagnostic(event,rule_id,'cooldown-active')
+            return false
+        end
         -- Keep the historical 16 normal slots and reserve 16 additional slots
         -- for urgent zero-cooldown events. Never evict a message already accepted.
         if #state.pings>=32 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
@@ -1010,6 +1047,11 @@ local function build_chat_automation(env)
             elseif not ping_enabled(p.category,p.action) then reason='category-disabled'
             elseif p.context ~= context or p.session ~= (snapshot and snapshot.session)
                 or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then reason='session-changed' end
+            if not reason then
+                local allowed, _, code = policy(now,snapshot and #snapshot.remote or nil,
+                    snapshot,p.creator_id,p.rule_id,p.cooldown)
+                if not allowed and code == 'cooldown-active' then reason='cooldown-active' end
+            end
             if reason then
                 event_diagnostic(p,p.rule_id,reason)
                 table.remove(state.pings,i)

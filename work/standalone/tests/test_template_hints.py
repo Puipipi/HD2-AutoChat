@@ -122,7 +122,19 @@ class TemplateHintRenderingTests(unittest.TestCase):
                     self.assert_drawn_lines_fit(rows)
                     self.assert_pairs_visible(rendered, PLAYER_PAIRS)
                     if view in ('rules', 'pings'):
+                        if view == 'pings':
+                            # The hint list is intentionally inside a scroll viewport;
+                            # collect its top and bottom renderings to prove every
+                            # token remains reachable without escaping the card.
+                            self.mod.debug_panel()['scroll_offsets']['pings'] = 10000
+                            tail = self.draw_page(view, locale)
+                            self.assert_drawn_lines_fit(tail)
+                            rendered += '\n' + self.text_of(tail)
                         self.assert_pairs_visible(rendered, EVENT_PAIRS)
+                    if view == 'timer':
+                        self.assertIn('5 秒至 24 小时' if locale == 'zh' else '5 S TO 24 H', rendered)
+                        self.assertIn('Enter' if locale == 'zh' else 'ENTER', rendered)
+                        self.assertIn('Esc' if locale == 'zh' else 'ESC', rendered)
 
 
 if __name__ == '__main__':

@@ -126,6 +126,20 @@ FF92D80000004C8B54244049C782A00000000000000049C782980000000000000041C78294000000
     -- the window filter (tools/window_filter.py): one per install, never removed (another
     -- mod may have chained its own procedure after it); all share the flag
     local filters = {}
+    local debug_wheel = nil
+    local function consume_wheel(f)
+        local current = tonumber(f.u[1]) or 0
+        local previous = f.wheel_seen
+        if previous == nil then previous = current end
+        local delta = (current - previous) % 4294967296
+        if delta >= 2147483648 then delta = delta - 4294967296 end
+        f.wheel_seen = current
+        local remainder = (f.wheel_rest or 0) + delta
+        local notches = remainder >= 0 and math.floor(remainder / 120)
+            or math.ceil(remainder / 120)
+        f.wheel_rest = remainder - notches * 120
+        return notches
+    end
     local function null_pointer(value)
         if value == nil then return true end
         local ok, address = pcall(function() return ffi.cast('uintptr_t', value) end)
@@ -204,7 +218,52 @@ FF92D80000004C8B54244049C782A00000000000000049C782980000000000000041C78294000000
         return f
     end
     function input.filter_set(on)
-        for _, f in ipairs(filters) do f.u[0] = on and 1 or 0 end
+        for _, f in ipairs(filters) do
+            if not f.debug then
+                if on and f.u[0] == 0 then
+                    f.wheel_seen = tonumber(f.u[1]) or 0
+                    f.wheel_rest = 0
+                end
+                f.u[0] = on and 1 or 0
+            end
+        end
+    end
+    -- The native window hook consumes WM_MOUSEWHEEL while filtering is active,
+    -- so the engine axis is not a reliable source in that state. Read its signed
+    -- counter, handle uint32 wrap, and retain sub-notch deltas like Armory does.
+    function input.filter_wheel()
+        local filtered, total = false, 0
+        for _, f in ipairs(filters) do
+            if f.u[0] ~= 0 then
+                filtered = true
+                total = total + consume_wheel(f)
+            end
+        end
+        if debug_wheel and debug_wheel.active then
+            filtered = true
+            total = total + consume_wheel(debug_wheel)
+        end
+        if filtered then return total end
+        return nil
+    end
+    -- Tests cannot install a real HWND thunk; this seeds the same uint32_t
+    -- counter reader without changing the production native bridge.
+    function input.debug_set_wheel_counter(value, active)
+        value = tonumber(value) or 0
+        if not debug_wheel or (active and not debug_wheel.active) then
+            debug_wheel = {u={[0]=active and 1 or 0, [1]=value},
+                wheel_seen=value, wheel_rest=0, active=not not active}
+        else
+            if debug_wheel.active ~= not not active then
+                debug_wheel.wheel_seen, debug_wheel.wheel_rest = value, 0
+            end
+            debug_wheel.u[0], debug_wheel.u[1] = active and 1 or 0, value
+            debug_wheel.active = not not active
+        end
+    end
+    function self.filter_wheel() return input.filter_wheel() end
+    function self.debug_set_wheel_counter(value, active)
+        return input.debug_set_wheel_counter(value, active)
     end
     -- Returning false means Windows has not accepted any restoration attempt.
     local function register(devices)

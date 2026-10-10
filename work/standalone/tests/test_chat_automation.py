@@ -282,6 +282,7 @@ class AutomationTests(unittest.TestCase):
             assert(a.set('message_language','zh'))
             assert(a.set('summon_message','{玩家名}召唤了{目标}'))
             assert(a.set('ping_message','标记了{目标}（{类别}）'))
+            assert(a.set('cooldown',0))
             assert(a.set('ping',true));assert(a.set('ping_stratagem',false))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给'},1000))
             assert(a.push_ping({key='mark',category='stratagem',action='mark',target='重新补给'},1000)==false)
@@ -296,7 +297,7 @@ class AutomationTests(unittest.TestCase):
             assert(a.set('message_language','zh'))
             assert(a.set('summon_message','{玩家名}召唤了{目标}'))
             assert(a.set('ping_message','标记了{目标}（{类别}）'))
-            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false));assert(a.set('cooldown',0))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给'},1000))
             assert(a.push_ping({key='mark',category='stratagem',target='激光大炮'},1000))
             assert(a.set('ping_summon',false));assert(a.poll(1000))
@@ -332,10 +333,11 @@ class AutomationTests(unittest.TestCase):
             assert(missing == false and missing_disposition == 'retry', 'temporarily absent creator must be retryable')
             a.set_rule('stratagem',4119049994,'cooldown',5)
             a.set_rule('stratagem',4119049995,'cooldown',0)
+            h.peers={h.mine};for i=1,17 do h.peers[#h.peers+1]='peer'..i end
             for i=1,16 do assert(a.push_ping({key='normal-'..i,category='stratagem',
-                stratagem_id=4119049994},200+i)) end
+                creator_id='peer'..i,stratagem_id=4119049994},200+i)) end
             local full_normal, normal_disposition = a.push_ping({key='normal-retry',category='stratagem',
-                stratagem_id=4119049994},220)
+                creator_id='peer17',stratagem_id=4119049994},220)
             assert(full_normal == false and normal_disposition == 'retry', 'full normal quota must be retryable')
         """)
 
@@ -344,8 +346,9 @@ class AutomationTests(unittest.TestCase):
             a.set('ping',true)
             a.set_rule('stratagem',4119049994,'cooldown',5)
             a.set_rule('stratagem',4119049995,'cooldown',0)
+            h.peers={h.mine};for i=1,16 do h.peers[#h.peers+1]='peer'..i end
             for i=1,16 do assert(a.push_ping({key='normal-'..i,category='stratagem',
-                stratagem_id=4119049994},200+i)) end
+                creator_id='peer'..i,stratagem_id=4119049994},200+i)) end
             assert(a.push_ping({key='urgent-1',category='stratagem',stratagem_id=4119049995,
                 target='urgent'},221), 'urgent reserve must accept zero-cooldown event')
             for i=2,16 do assert(a.push_ping({key='urgent-'..i,category='stratagem',
@@ -363,8 +366,9 @@ class AutomationTests(unittest.TestCase):
             a.set('ping',true)
             a.set_rule('stratagem',4119049994,'cooldown',5)
             a.set_rule('stratagem',4119049995,'cooldown',0)
+            h.peers={h.mine};for i=1,16 do h.peers[#h.peers+1]='peer'..i end
             for i=1,16 do assert(a.push_ping({key='normal-'..i,category='stratagem',
-                stratagem_id=4119049994},200+i)) end
+                creator_id='peer'..i,stratagem_id=4119049994},200+i)) end
             for i=1,16 do assert(a.push_ping({key='urgent-'..i,category='stratagem',
                 stratagem_id=4119049995},220+i)) end
             local full, full_disposition = a.push_ping({key='full-retry',category='stratagem',
@@ -411,13 +415,14 @@ class AutomationTests(unittest.TestCase):
             local c=h.new('ping_mission=false\\nping_building=true\\n')
             assert(c.options.ping_building == true)
             assert(a.set('ping',true))
+            assert(a.set('cooldown',0))
             assert(a.push_ping({key='ammo',category='small_items'},1000)==false)
             for _,category in ipairs({'building','stratagem','map'}) do
                 assert(a.push_ping({key=category,category=category},1000))
             end
         ''')
 
-    def test_own_ping_sends_without_profile_and_shares_local_timer_cooldown(self):
+    def test_own_ping_uses_event_cooldown_independent_of_local_timer(self):
         self.run_lua('''
             h.mine='76561197960265745'; h.host=h.mine; h.peers={h.mine}
             assert(a.set('ping',true))
@@ -426,9 +431,11 @@ class AutomationTests(unittest.TestCase):
                 target='LAS-98 激光大炮'},1000))
             assert(a.poll(1000)); assert(h.sent[1]=='LAS-98 激光大炮')
             assert(a.check(1001,0)==false, 'own ping must consume the local timer bucket')
+            assert(not a.push_ping({key='own2-cooling',category='map',creator_id='0110000100000011',
+                target='地图标记'},1001), 'own event cooldown consumes an immediate repeat')
             assert(a.push_ping({key='own2',category='map',creator_id='0110000100000011',
-                target='地图标记'},1001))
-            assert(a.poll(1001)==false); assert(a.poll(1005)); assert(h.sent[2]=='地图标记')
+                target='地图标记'},1005))
+            assert(a.poll(1005)); assert(h.sent[2]=='地图标记')
             assert(a.set('allow_solo',false))
             assert(a.push_ping({key='own3',category='map',creator_id='0110000100000011'},1010))
             assert(a.poll(1010)==false and #h.sent==2)
@@ -570,9 +577,12 @@ class AutomationTests(unittest.TestCase):
             assert(a.push_ping({key='1',category='large_enemy',target='重型目标'},1000) == false)
             assert(a.set('ping_medium_enemy',false))
             assert(a.push_ping({key='2',category='medium_enemy'},1001) == false)
-            assert(a.push_ping({key='3',category='giant_enemy'},1001))
+            assert(not a.push_ping({key='3',category='giant_enemy'},1001),
+                'cooldown-active notifications are consumed at event arrival')
             assert(a.poll(1001) == false and #h.sent == 1)
-            assert(a.poll(1005) and #h.sent == 2)
+            assert(a.poll(1005)==false and #h.sent==1, 'cooldown events are dropped instead of replayed')
+            assert(a.push_ping({key='3-fresh',category='giant_enemy'},1005))
+            assert(a.poll(1005) and #h.sent==2)
             assert(h.sent[2] == '巨型敌人：巨型敌人')
             assert(a.push_ping({key='4',category='unknown'},1006) == false)
         ''')
@@ -586,6 +596,7 @@ class AutomationTests(unittest.TestCase):
             h.send_ok=true
             assert(a.poll(1001) == false)
             assert(a.poll(1005))
+            assert(a.set('cooldown',0))
             assert(a.push_ping({key='2',category='large_enemy'},1006))
             assert(a.set('ping_large_enemy',false))
             assert(a.poll(1010) == false and #h.sent == 2)
@@ -745,7 +756,8 @@ class AutomationTests(unittest.TestCase):
             a.poll(3); assert(#h.sent == 1)
             h.send_ok = true; a.poll(7.99); assert(#h.sent == 1)
             a.poll(8); assert(#h.sent == 2)
-            assert(a.check(12.99, 1, 'friend') == false and a.check(13, 1, 'friend'))
+            assert(a.check(12.99, 1, 'friend') and a.check(13, 1, 'friend'),
+                'welcome success and native retries do not consume event cooldown')
         """)
 
     def test_cooling_player_does_not_block_another_players_ping_behind_it(self):
@@ -755,21 +767,86 @@ class AutomationTests(unittest.TestCase):
             assert(a.set('ping_message','{目标}'))
             assert(a.push_ping({key='a1',category='map',creator_id='A',target='A1'},1000))
             assert(a.poll(1000))
-            assert(a.push_ping({key='a2',category='map',creator_id='A',target='A2'},1001))
+            local dropped, disposition=a.push_ping({key='a2',category='map',creator_id='A',target='A2'},1001)
+            assert(not dropped and disposition==nil, 'cooling event is consumed, never queued for later')
             assert(a.push_ping({key='b1',category='map',creator_id='B',target='B1'},1001))
             assert(a.poll(1001)); assert(h.sent[2]=='B1')
-            assert(a.poll(1004)==false); assert(a.poll(1005)); assert(h.sent[3]=='A2')
+            assert(a.poll(1004)==false); assert(a.poll(1005)==false and #h.sent==2)
+            assert(a.push_ping({key='a3',category='map',creator_id='A',target='A3'},1005))
+            assert(a.poll(1005)); assert(h.sent[3]=='A3')
         ''')
 
-    def test_welcome_and_ping_share_only_the_trigger_players_limit(self):
+    def test_cooldown_drops_bursts_and_reserves_only_the_matching_actor_rule_bucket(self):
         self.run_lua('''
-            assert(a.set('welcome',true)); assert(a.set('ping',true)); a.poll(0)
-            h.peers={h.mine,'A','B'}; a.poll(1); a.poll(3); a.poll(3)
-            assert(#h.sent==2)
-            assert(a.push_ping({key='a1',category='map',creator_id='A'},4))
-            assert(a.poll(4)==false)
-            assert(a.check(4,2), 'local task does not consume a remote player bucket')
-            assert(a.poll(8)); assert(#h.sent==3)
+            h.peers={h.mine,'A','B'}
+            assert(a.set('ping',true)); assert(a.set('ping_sender_prefix',false))
+            assert(a.set_rule('stratagem',4119049994,'cooldown',5))
+            assert(a.set_rule('stratagem',4119049995,'cooldown',5))
+            assert(a.set_rule('stratagem',4119049996,'cooldown',0))
+            assert(a.push_ping({key='actor-a-first',category='map',creator_id='A'},1000))
+            for i=1,100 do
+                local same_actor=a.push_ping({key='actor-a-burst-'..i,category='map',creator_id='A'},1000)
+                assert(not same_actor and #a.state.pings==1, 'a 100-event burst must not stack or wait behind cooldown')
+            end
+            assert(a.push_ping({key='actor-b',category='map',creator_id='B'},1000), 'another actor has an independent bucket')
+            assert(a.push_ping({key='rule-one',category='stratagem',creator_id='A',stratagem_id=4119049994},1000))
+            assert(a.push_ping({key='rule-two',category='stratagem',creator_id='A',stratagem_id=4119049995},1000),
+                'explicit cooldowns reserve independent actor+rule buckets')
+            local duplicate_rule=a.push_ping({key='rule-one-burst',category='stratagem',creator_id='A',stratagem_id=4119049994},1000)
+            assert(not duplicate_rule, 'the same actor+rule bucket cannot accumulate a burst')
+            assert(a.push_ping({key='urgent-zero',category='stratagem',creator_id='A',stratagem_id=4119049996},1000),
+                'zero-cooldown events remain independent and eligible')
+            assert(#a.state.pings==5)
+        ''')
+
+    def test_drain_removes_stale_same_bucket_items_after_first_ping_sends(self):
+        self.run_lua('''
+            h.peers={h.mine,'A'}; assert(a.set('ping',true)); assert(a.set('ping_sender_prefix',false))
+            assert(a.push_ping({key='first',category='map',creator_id='A',target='first'},1000))
+            local stale={};for k,v in pairs(a.state.pings[1]) do stale[k]=v end
+            stale.key='legacy-stale';stale.text='must not send after cooldown'
+            a.state.pings[2]=stale
+            assert(a.poll(1000));assert(#h.sent==1)
+            assert(a.poll(1001)==false and #a.state.pings==0,
+                'drain removes pending entries once their actor bucket enters cooldown')
+            assert(#h.sent==1)
+        ''')
+
+    def test_cooling_event_burst_is_never_replayed_after_cooldown(self):
+        self.run_lua('''
+            h.peers={h.mine,'A'};assert(a.set('ping',true))
+            assert(a.push_ping({key='first',category='map',creator_id='A'},1000))
+            assert(a.poll(1000))
+            for i=1,100 do
+                local accepted,disposition=a.push_ping({key='drop-'..i,category='map',creator_id='A'},1001)
+                assert(not accepted and disposition==nil)
+            end
+            assert(a.poll(1500)==false and #h.sent==1,
+                'events consumed during cooldown never replay after the interval expires')
+        ''')
+
+    def test_expired_or_old_context_pending_ping_does_not_reserve_new_event(self):
+        self.run_lua('''
+            h.peers={h.mine,'A'};assert(a.set('ping',true))
+            assert(a.push_ping({key='old-context',category='map',creator_id='A'},1000))
+            a.state.pings[1].expires=999
+            assert(a.push_ping({key='after-expiry',category='map',creator_id='A'},1001),
+                'expired entries no longer reserve their actor bucket')
+            h.context='context-b'
+            assert(a.push_ping({key='new-context',category='map',creator_id='A'},1002),
+                'a live pending entry from another context does not reserve the bucket')
+            assert(#a.state.pings==3)
+        ''')
+
+    def test_welcome_ignores_but_does_not_extend_event_cooldown(self):
+        self.run_lua('''
+            h.peers={h.mine};assert(a.set('welcome',true));a.poll(0)
+            h.peers={h.mine,'A'};a.record(1,'A');a.poll(1)
+            assert(a.poll(3));assert(h.sent[1]:find('Welcome',1,true))
+            assert(a.check(3,2,'A')==false, 'welcome leaves the existing event cooldown unchanged')
+            assert(a.check(6,2,'A'), 'welcome does not extend that cooldown')
+            h.peers={h.mine,'A','B'};a.poll(4)
+            assert(a.poll(6));assert(h.sent[2]:find('Welcome',1,true), 'another peer remains independently welcome-eligible')
         ''')
 
     def test_uint64_decimal_welcome_id_and_native_hex_ping_use_the_same_bucket(self):
@@ -913,13 +990,25 @@ class AutomationTests(unittest.TestCase):
             assert(h.sent[1]=='欢迎 [Alice] A3 3')
         ''')
 
-    def test_recently_welcomed_rejoining_peer_does_not_hold_up_a_newcomer(self):
+    def test_welcome_due_ignores_peer_event_cooldown_without_blocking_newcomer(self):
         self.run_lua('''
             assert(a.set('welcome',true));a.poll(0)
             h.peers={h.mine,'A','B'};a.poll(1)
             a.record(2,'A')
-            assert(a.poll(3)); assert(a.state.pending.B==nil and a.state.pending.A)
-            assert(a.poll(3)==false);assert(a.poll(7));assert(next(a.state.pending)==nil)
+            assert(a.poll(3)); assert(a.state.pending.A==nil and a.state.pending.B~=nil)
+            assert(a.poll(3));assert(#h.sent==2 and next(a.state.pending)==nil)
+            assert(a.check(3,2,'A')==false and a.check(7,2,'A'),
+                'welcome delivery neither waits for nor extends the peer event cooldown')
+        ''')
+
+    def test_check_cooldown_bypass_keeps_solo_and_clock_guards(self):
+        self.run_lua('''
+            assert(a.set('allow_solo',false))
+            local allowed, reason=a.check(100,0,nil,true)
+            assert(not allowed and reason=='等待：小队中没有其他玩家', 'bypass skips cooldown only')
+            assert(a.set('allow_solo',true))
+            allowed,reason=a.check(nil,1,nil,true)
+            assert(not allowed and reason=='等待：计时尚未就绪', 'clock validation remains active')
         ''')
 
     def test_options_roundtrip_percent_newlines_and_never_execute_settings(self):

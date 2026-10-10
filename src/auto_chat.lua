@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '1.0.0', build_id = 'v1.0.0-build.6', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.0.0', build_id = 'v1.0.0-build.7', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -982,7 +982,10 @@ M.build_language = function(env)
     }
 
     function M.current() return state.locale end
-    function M.is_chinese() return state.locale=='zh' end
+    function M.is_chinese(locale)
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        return selected=='zh'
+    end
     function M.set_dirty(callback) env.dirty=callback end
     function M.update(option,frame)
         if option~='zh' and option~='en' and option~='auto' then option='auto' end
@@ -1007,8 +1010,9 @@ M.build_language = function(env)
         end
         return state.locale
     end
-    function M.text(chinese,english)
-        if state.locale=='zh' then return tostring(chinese or english or '') end
+    function M.text(chinese,english,locale)
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        if selected=='zh' then return tostring(chinese or english or '') end
         return tostring(english or chinese or '')
     end
     function M.phrase(key, locale)
@@ -1016,8 +1020,9 @@ M.build_language = function(env)
         local selected=(locale=='zh' or locale=='en') and locale or state.locale
         return row and row[selected] or tostring(key or '')
     end
-    function M.status(value)
-        if type(value)~='string' or state.locale=='zh' then return value end
+    function M.status(value,locale)
+        local selected=(locale=='zh' or locale=='en') and locale or state.locale
+        if type(value)~='string' or selected=='zh' then return value end
         local translated=statuses[value]
         if translated then return translated end
         if value:match('^战备目录读取就绪（%d+）$') then
@@ -2009,7 +2014,7 @@ local function build_chat_automation(env)
             end
         end
     end
-    local function policy(now, others, snapshot, peer, rule_id, cooldown)
+    local function policy(now, others, snapshot, peer, rule_id, cooldown, ignore_cooldown)
         limits(snapshot)
         if not options.enabled then return false, '自动发送已关闭' end
         if not options.allow_solo and (type(others) ~= 'number' or others < 1) then
@@ -2018,18 +2023,44 @@ local function build_chat_automation(env)
         if type(now) ~= 'number' or now ~= now or now == math.huge or now == -math.huge then
             return false, '等待：计时尚未就绪'
         end
-        local key=bucket(peer,snapshot)
-        local independent=rule_id and cooldown~=nil
-        local last=independent and (state.last_by_rule[key] or {})[rule_id] or nil
-        if not independent then last=state.last_by_peer[key] end
-        if last and now - last < (independent and cooldown or options.cooldown) then
-            return false, '等待：该玩家的自动消息间隔中'
+        if not ignore_cooldown then
+            local key=bucket(peer,snapshot)
+            local independent=rule_id and cooldown~=nil
+            local last=independent and (state.last_by_rule[key] or {})[rule_id] or nil
+            if not independent then last=state.last_by_peer[key] end
+            if last and now - last < (independent and cooldown or options.cooldown) then
+                return false, '等待：该玩家的自动消息间隔中', 'cooldown-active'
+            end
         end
         return true, '可以自动发送'
     end
-    function api.check(now, others, peer)
+    local function pending_ping_reserves(now, snapshot, peer, rule_id, cooldown)
+        if type(snapshot) ~= 'table' then return false end
+        local actor = bucket(peer, snapshot)
+        local independent = rule_id ~= nil and cooldown ~= nil
+        local effective = independent and cooldown or options.cooldown
+        if type(effective) ~= 'number' or effective <= 0 then return false end
+        local context = attempt(env.context)
+        for _, pending in ipairs(state.pings) do
+            local other_independent = pending.rule_id ~= nil and pending.cooldown ~= nil
+            local other_effective = other_independent and pending.cooldown or options.cooldown
+            if type(other_effective) == 'number' and other_effective > 0
+                and type(pending.expires) == 'number' and pending.expires >= now
+                and pending.role == state.active_role and pending.context == context
+                and pending.session == snapshot.session and pending.mine == snapshot.mine
+                and pending.host == snapshot.host
+                and creator_present(pending.creator_id,snapshot)
+                and bucket(pending.creator_id, snapshot) == actor
+                and independent == other_independent
+                and (not independent or rule_id == pending.rule_id) then
+                return true
+            end
+        end
+        return false
+    end
+    function api.check(now, others, peer, bypass_cooldown)
         api.sync()
-        return policy(now, others, api.snapshot(), peer)
+        return policy(now, others, api.snapshot(), peer, nil, nil, bypass_cooldown == true)
     end
     function api.record(now, peer)
         if type(now) == 'number' and now == now and now ~= math.huge and now ~= -math.huge then
@@ -2183,19 +2214,19 @@ local function build_chat_automation(env)
         local candidate, entry, blocked
         for key, pending in pairs(state.pending) do
             if now >= pending.due and now >= pending.retry then
-                local allowed, reason = policy(now,#snapshot.remote,snapshot,key)
+                local allowed, reason = policy(now,#snapshot.remote,snapshot,key,nil,nil,true)
                 if allowed and (not entry or pending.joined < entry.joined
                     or pending.joined == entry.joined and key < candidate) then candidate, entry = key, pending
                 elseif not allowed then blocked=reason end
             end
         end
         if not candidate then state.status = blocked or '等待新人欢迎'; return false, state.status end
-        local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate)
+        local allowed, reason = policy(now, #snapshot.remote, snapshot, candidate,nil,nil,true)
         if not allowed then state.status = reason; return false, reason end
         local sent, send_why = api.send(api.format(api.stock_template(options.welcome_message, options.message_language),candidate,nil,nil,
             options.ping_sender_color==true,options.message_language), state.active_role)
         if sent == true then
-            state.pending[candidate] = nil; api.record(now,candidate)
+            state.pending[candidate] = nil
             state.status = '已发送新人欢迎'; return true, state.status
         end
         -- Chat can be temporarily disabled. Keep this welcome while the player
@@ -2222,6 +2253,17 @@ local function build_chat_automation(env)
         if state.ping_seen[event.key] then event_diagnostic(event,rule_id,'duplicate-event');return false end
         local snapshot = api.snapshot()
         if not creator_present(event.creator_id, snapshot) then event_diagnostic(event,rule_id,'creator-not-in-roster');return false,'retry' end
+        -- Cooldown-active notifications are consumed here rather than retained
+        -- until their bucket reopens. Reserve the bucket while an accepted ping
+        -- is pending so a burst cannot stack behind its first event.
+        local allowed, _, code = policy(now,snapshot and #snapshot.remote or nil,
+            snapshot,event.creator_id,rule_id,rule.cooldown)
+        if (not allowed and code == 'cooldown-active')
+            or (allowed and pending_ping_reserves(now,snapshot,event.creator_id,rule_id,rule.cooldown)) then
+            state.ping_seen[event.key] = now + 30
+            event_diagnostic(event,rule_id,'cooldown-active')
+            return false
+        end
         -- Keep the historical 16 normal slots and reserve 16 additional slots
         -- for urgent zero-cooldown events. Never evict a message already accepted.
         if #state.pings>=32 then event_diagnostic(event,rule_id,'queue-full');return false,'retry' end
@@ -2307,6 +2349,11 @@ local function build_chat_automation(env)
             elseif not ping_enabled(p.category,p.action) then reason='category-disabled'
             elseif p.context ~= context or p.session ~= (snapshot and snapshot.session)
                 or p.mine ~= (snapshot and snapshot.mine) or p.host ~= (snapshot and snapshot.host) then reason='session-changed' end
+            if not reason then
+                local allowed, _, code = policy(now,snapshot and #snapshot.remote or nil,
+                    snapshot,p.creator_id,p.rule_id,p.cooldown)
+                if not allowed and code == 'cooldown-active' then reason='cooldown-active' end
+            end
             if reason then
                 event_diagnostic(p,p.rule_id,reason)
                 table.remove(state.pings,i)
@@ -2672,6 +2719,21 @@ end
 
 M.game_language_reader = M.build_game_language_reader({ffi=ffi})
 M.language = M.build_language({read_game=function() return M.game_language_reader.read() end})
+M.ui_preview_language = nil -- UI_PREVIEW_LOCALE: build-time preview override; default UI follows game language.
+function M.panel_locale()
+    local locale=M.ui_preview_language
+    if locale~='zh' and locale~='en' then locale=M.language.current() end
+    return locale
+end
+function M.panel_text(chinese, english)
+    return M.language.text(chinese, english, M.panel_locale())
+end
+function M.panel_status(value)
+    return M.language.status(value, M.panel_locale())
+end
+function M.panel_is_chinese()
+    return M.language.is_chinese(M.panel_locale())
+end
 automation = build_chat_automation({
     engine = function() return rawget(_G, 'stingray') end,
     context = function() return game_base and u64(game_base + M.CONTEXT_PTR) or nil end,
@@ -5439,7 +5501,7 @@ local function run_tasks(now)
                 if not local_chat then ready, reason = nil, local_why end
             end
             if ready then
-                local allowed, why = automation.check(now, reason)
+                local allowed, why = automation.check(now, reason, nil, true)
                 if not allowed then ready, reason = nil, why end
             end
             if not ready then
@@ -5465,7 +5527,6 @@ local function run_tasks(now)
                 local ok, why = automation.send(automation.format(t.message,nil,nil,false,
                     task_profile and task_profile.ping_sender_color==true,
                     task_profile and task_profile.message_language), task_role)
-                if ok then automation.record(now) end
                 t.result = ok and (why == 'local' and '已显示 / 仅自己可见' or why == 0 and '已发送 / 单人会话' or ('已发送 / ' .. tostring(why) .. ' 位队友'))
                     or ('发送失败：' .. tostring(why))
                 M.last_send = {ok = ok and true or false, why = t.result}
@@ -5740,6 +5801,20 @@ FF92D80000004C8B54244049C782A00000000000000049C782980000000000000041C78294000000
     -- the window filter (tools/window_filter.py): one per install, never removed (another
     -- mod may have chained its own procedure after it); all share the flag
     local filters = {}
+    local debug_wheel = nil
+    local function consume_wheel(f)
+        local current = tonumber(f.u[1]) or 0
+        local previous = f.wheel_seen
+        if previous == nil then previous = current end
+        local delta = (current - previous) % 4294967296
+        if delta >= 2147483648 then delta = delta - 4294967296 end
+        f.wheel_seen = current
+        local remainder = (f.wheel_rest or 0) + delta
+        local notches = remainder >= 0 and math.floor(remainder / 120)
+            or math.ceil(remainder / 120)
+        f.wheel_rest = remainder - notches * 120
+        return notches
+    end
     local function null_pointer(value)
         if value == nil then return true end
         local ok, address = pcall(function() return ffi.cast('uintptr_t', value) end)
@@ -5818,7 +5893,52 @@ FF92D80000004C8B54244049C782A00000000000000049C782980000000000000041C78294000000
         return f
     end
     function input.filter_set(on)
-        for _, f in ipairs(filters) do f.u[0] = on and 1 or 0 end
+        for _, f in ipairs(filters) do
+            if not f.debug then
+                if on and f.u[0] == 0 then
+                    f.wheel_seen = tonumber(f.u[1]) or 0
+                    f.wheel_rest = 0
+                end
+                f.u[0] = on and 1 or 0
+            end
+        end
+    end
+    -- The native window hook consumes WM_MOUSEWHEEL while filtering is active,
+    -- so the engine axis is not a reliable source in that state. Read its signed
+    -- counter, handle uint32 wrap, and retain sub-notch deltas like Armory does.
+    function input.filter_wheel()
+        local filtered, total = false, 0
+        for _, f in ipairs(filters) do
+            if f.u[0] ~= 0 then
+                filtered = true
+                total = total + consume_wheel(f)
+            end
+        end
+        if debug_wheel and debug_wheel.active then
+            filtered = true
+            total = total + consume_wheel(debug_wheel)
+        end
+        if filtered then return total end
+        return nil
+    end
+    -- Tests cannot install a real HWND thunk; this seeds the same uint32_t
+    -- counter reader without changing the production native bridge.
+    function input.debug_set_wheel_counter(value, active)
+        value = tonumber(value) or 0
+        if not debug_wheel or (active and not debug_wheel.active) then
+            debug_wheel = {u={[0]=active and 1 or 0, [1]=value},
+                wheel_seen=value, wheel_rest=0, active=not not active}
+        else
+            if debug_wheel.active ~= not not active then
+                debug_wheel.wheel_seen, debug_wheel.wheel_rest = value, 0
+            end
+            debug_wheel.u[0], debug_wheel.u[1] = active and 1 or 0, value
+            debug_wheel.active = not not active
+        end
+    end
+    function self.filter_wheel() return input.filter_wheel() end
+    function self.debug_set_wheel_counter(value, active)
+        return input.debug_set_wheel_counter(value, active)
     end
     -- Returning false means Windows has not accepted any restoration attempt.
     local function register(devices)
@@ -5992,6 +6112,7 @@ local text_input = build_text_input(64)
 -- exists, and each stage advances only on success so a failure names the exact
 -- engine call that broke instead of dying invisibly.
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
+    scroll_offsets = {},
                lfail = 0, version = 0,
                rw = 0, rh = 0}
 PANEL.context_worlds, PANEL.context_main = nil, nil
@@ -6081,15 +6202,16 @@ local function save_preset_selection()
 end
 load_preset_selection()
 local draft = {name = '', mode = 'repeat', time = '30', message = ''}
-M.batch_rule_ids = function()
+M.batch_rule_ids = function(locale)
     local ids,seen={},{}
+    if locale~='zh' and locale~='en' then locale=M.language.current() end
     local filter=PANEL.rule_filter or 'all'
     local query=tostring(PANEL.rule_search or ''):lower()
     for _,row in ipairs(stratagem_catalog.list_rules and stratagem_catalog.list_rules() or stratagem_catalog.list()) do
         local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
             or (filter=='other' and row.group=='other' and row.family~='mission')
             or (filter~='mission' and filter~='other' and row.group==filter)
-        local display=M.language.is_chinese() and (row.display_name or ('战备 #'..tostring(row.id)))
+        local display=M.language.is_chinese(locale) and (row.display_name or ('战备 #'..tostring(row.id)))
             or (row.display_name_en or ('Stratagem #'..tostring(row.id)))
         if matches_filter and (query=='' or tostring(display or ''):lower():find(query,1,true)
             or tostring(row.id):find(query,1,true)
@@ -6100,7 +6222,6 @@ M.batch_rule_ids = function()
     end
     return ids
 end
-PANEL.task_page = 1
 local POSITION_FILE = HOME .. 'AutoChat/panel-position.txt'
 local function load_position()
     local f = io.open(POSITION_FILE, 'r')
@@ -6298,6 +6419,27 @@ local function mouse_state()
     -- and used to scale, instead of assuming the two are equal.
     PANEL.client_w, PANEL.client_h = cw, ch
     return cx * PANEL.rw / cw, (ch - cy) * PANEL.rh / ch
+end
+M.panel_mouse_wheel_delta = function()
+    local filtered_wheel = panel_input and panel_input.filter_wheel()
+    if filtered_wheel ~= nil then return filtered_wheel end
+    local mouse = sr and sr.Mouse
+    if type(mouse) ~= 'table' then return 0 end
+    local id
+    for _, name in ipairs({'axis_id', 'axis_index'}) do
+        local get_id = rawget(mouse, name)
+        if type(get_id) == 'function' then
+            local ok, value = pcall(get_id, 'wheel')
+            if ok and value ~= nil then id = value; break end
+        end
+    end
+    local axis = rawget(mouse, 'axis')
+    if id == nil or type(axis) ~= 'function' then return 0 end
+    local ok, value = pcall(axis, id)
+    if not ok or value == nil then return 0 end
+    local got, dy = pcall(sr.Vector3.y, value)
+    if not got or type(dy) ~= 'number' then dy = type(value) == 'table' and value[2] or 0 end
+    return tonumber(dy) or 0
 end
 -- ---------------------------------------------------------------- 11c. editing
 -- Keyboard entry for the message field, built the way Super Earth Armory Forge builds
@@ -6744,7 +6886,7 @@ local function panel_context_report(state, reason)
     PANEL.context_status = key
     M.panel_context = key
     if state == 'blocked' or state == 'unknown' then
-        PANEL.guard_hint = M.language.text(
+        PANEL.guard_hint = M.panel_text(
             '面板暂不可用：' .. tostring(reason),
             'Panel unavailable: ' .. tostring(reason))
         PANEL.hint = PANEL.guard_hint
@@ -7972,8 +8114,9 @@ PANEL._signature_cache.collect = function(frame)
             frame.raw[61] = value
             frame.parts[61] = tostring(value); frame.changed = true
         end end
-    do local value = PANEL.task_page or 1
-        if initial or frame.raw[62] ~= value or (type(value)=='number' and value==0 and 1/frame.raw[62]~=1/value) then
+    -- Keep the legacy signature position stable; scroll offsets have dedicated slots.
+    do local value = 1
+        if initial or frame.raw[62] ~= value then
             frame.raw[62] = value
             frame.parts[62] = tostring(value); frame.changed = true
         end end
@@ -8038,6 +8181,18 @@ PANEL._signature_cache.collect = function(frame)
             frame.raw[74] = value
             frame.parts[74] = tostring(value); frame.changed = true
         end end
+    do local value = PANEL.scroll_offsets and PANEL.scroll_offsets.pings or 0
+        if initial or frame.raw[75] ~= value then
+            frame.raw[75] = value; frame.parts[75] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.scroll_offsets and PANEL.scroll_offsets.tasks or 0
+        if initial or frame.raw[76] ~= value then
+            frame.raw[76] = value; frame.parts[76] = tostring(value); frame.changed = true
+        end end
+    do local value = M.panel_locale and M.panel_locale() or M.language.current()
+        if initial or frame.raw[77] ~= value then
+            frame.raw[77] = value; frame.parts[77] = tostring(value); frame.changed = true
+        end end
     if frame.changed then
         frame.epoch = (frame.epoch or 0) + 1
         frame.signature = table.concat(frame.parts, '|')
@@ -8068,7 +8223,7 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local function text(v,x,y,size,c,w) canvas.text(v,x,y,size or 14,c or C.TEXT,w) end
     local function row_name(row)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
-        return row.debug_name or row.name or row.display_name or tostring(row.id)
+        return row.display_name_en or row.name_en or row.debug_name or row.name or row.display_name or tostring(row.id)
     end
     local function button(key,value,x,y,w,on,disabled)
         canvas.rect(x,y,w,32,disabled and C.FIELD or on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
@@ -8357,6 +8512,15 @@ end
 -- END PRESET PANEL
 
 local function draw_panel()
+    local function panel_text(chinese, english)
+        return M.panel_text(chinese, english)
+    end
+    local function panel_status(value)
+        return M.panel_status(value)
+    end
+    local function panel_is_chinese()
+        return M.panel_is_chinese()
+    end
     if not (sr and sr.Gui and sr.Vector3 and sr.Vector2 and sr.Color) then return end
     local Gui, Vector3, Vector2, Color = UI()
     local gui = PANEL.gui
@@ -8382,8 +8546,23 @@ local function draw_panel()
         YELLOW = color(255, 231, 16), INK = color(18, 17, 4),
         SOFT = color(255, 231, 16, 26), GOOD = color(92, 201, 170), BAD = color(255, 107, 91),
     }
+    local active_viewport
+    PANEL.scroll_offsets = PANEL.scroll_offsets or {}
+    PANEL.viewports = {}
+
+    local function viewport_y(y)
+        return active_viewport and y - active_viewport.offset or y
+    end
 
     local function rect(x, y, w, h, c, z)
+        y = viewport_y(y)
+        if active_viewport then
+            local clip = active_viewport
+            local x1, y1 = math.min(x + w, clip.x + clip.w), math.min(y + h, clip.y + clip.h)
+            x, y = math.max(x, clip.x), math.max(y, clip.y)
+            w, h = x1 - x, y1 - y
+            if w <= 0 or h <= 0 then return end
+        end
         local x0, x1 = px(ox + x * s), px(ox + (x + w) * s)
         local y0, y1 = px(oy + y * s), px(oy + (y + h) * s)
         if x1 <= x0 then x1 = x0 + 1 end
@@ -8430,6 +8609,7 @@ local function draw_panel()
     local function text(value, x, y, size, c, limit, align)
         if value == nil or value == '' then return 0 end
         value = tostring(value)
+        y = viewport_y(y)
         local sz = font_px(size)
         local w = measure_px(value, sz) / s
         while limit and w > limit and sz > min_font do
@@ -8447,6 +8627,8 @@ local function draw_panel()
         local tx = x
         if align == 'right' then tx = x - w elseif align == 'center' then tx = x - w / 2 end
         local top = y + (size - sz / s) * 0.5
+        if active_viewport and (top < active_viewport.y or top + sz / s > active_viewport.y + active_viewport.h
+            or tx < active_viewport.x or tx + w > active_viewport.x + active_viewport.w) then return w end
         if FONT.ok then
             local ok = pcall(Gui.text, gui, value, FONT.font, sz, FONT.material,
                              Vector3(px(ox + tx * s), px(height - oy - top * s - sz * 0.8), 954),
@@ -8483,11 +8665,55 @@ local function draw_panel()
     local regions = PANEL.regions
     for i = #regions, 1, -1 do regions[i] = nil end
     local function region(key, x, y, w, h)
+        y = viewport_y(y)
+        if active_viewport then
+            local clip = active_viewport
+            local x1, y1 = math.min(x + w, clip.x + clip.w), math.min(y + h, clip.y + clip.h)
+            x, y = math.max(x, clip.x), math.max(y, clip.y)
+            w, h = x1 - x, y1 - y
+            if w <= 0 or h <= 0 then return end
+        end
         regions[#regions + 1] = {
             key = key,
             x = px(ox + x * s), y = px(height - oy - (y + h) * s),
             w = px(w * s), h = px(h * s),
         }
+    end
+
+    local function begin_viewport(id, x, y, w, h, content_h, row_h)
+        local max_offset = math.max(0, content_h - h)
+        local offset = math.max(0, math.min(max_offset, tonumber(PANEL.scroll_offsets[id]) or 0))
+        PANEL.scroll_offsets[id] = offset
+        local view = {id=id, x=x, y=y, w=w-14, h=h, offset=offset, max=max_offset,
+                      row_h=row_h or 36}
+        PANEL.viewports[id] = view
+        if max_offset > 0 then
+            local tx, tw = x + w - 10, 8
+            local thumb_h = math.max(24, h * h / content_h)
+            local thumb_y = y + (h - thumb_h) * offset / max_offset
+            local previous = active_viewport
+            active_viewport = nil
+            rect(tx, y, tw, h, C.FIELD, 951)
+            rect(tx, thumb_y, tw, thumb_h, C.LINE2, 953)
+            region('scroll:'..id..':track', tx-3, y, tw+6, h)
+            region('scroll:'..id..':thumb', tx-3, thumb_y, tw+6, thumb_h)
+            active_viewport = previous
+            view.track_x, view.track_y, view.track_h = px(ox + (tx-3)*s),
+                px(height - oy - (y+h)*s), px(h*s)
+            view.thumb_y, view.thumb_h = px(thumb_y*s), px(thumb_h*s)
+            view.travel_px = math.max(1, px((h-thumb_h)*s))
+            view.fit = math.max(1, math.floor(h / view.row_h))
+        else
+            view.fit = math.max(1, math.floor(h / view.row_h))
+        end
+        view.screen_x, view.screen_y = px(ox + x*s), px(height - oy - (y+h)*s)
+        view.screen_w, view.screen_h = px(w*s), px(h*s)
+        active_viewport = view
+        return view
+    end
+
+    local function end_viewport()
+        active_viewport = nil
     end
 
     -- Published BEFORE anything draws. A plugin receives these helpers, and they must be
@@ -8546,7 +8772,7 @@ local function draw_panel()
 
     local mx = text('AUTOCHAT', PAD, 12, 11, C.MUTED)
     text(PANEL.hover == 'drag'
-         and M.language.text('拖动移动窗口 / Ctrl+0 复位', 'Drag to move / Ctrl+0 to reset')
+         and panel_text('拖动移动窗口 / Ctrl+0 复位', 'Drag to move / Ctrl+0 to reset')
          or 'AUTOMATIC SQUAD CHAT',
          PAD + mx + 12, 12, 11, C.TEXT)
     text('v' .. M.version, W - PAD, 12, 11, C.DIM, nil, 'right')
@@ -8557,13 +8783,13 @@ local function draw_panel()
     rect(38, 59, 18, 4, C.INK, 953); rect(42, 63, 10, 4, C.INK, 953)
     local tw = text('AUTO', 86, 50, 34, C.TEXT)
     text('CHAT', 86 + tw + 12, 50, 34, C.YELLOW)
-    text(M.language.text('自定义定时事件，自动发送小队消息。','Schedule your squad messages.'),
+    text(panel_text('自定义定时事件，自动发送小队消息。','Schedule your squad messages.'),
          88, 84, 12, C.MUTED, 420)
     text('X', W - PAD - 14, 48, 18, PANEL.hover == 'close' and C.YELLOW or C.MUTED)
     region('close', W - PAD - 28, 38, 28, 30)
     rect(470, 48, 130, 30, PANEL.preset_view and C.YELLOW or PANEL.hover == 'presets:open' and C.ROW_HI or C.PANEL, 951)
     border(470, 48, 130, 30, PANEL.preset_view and C.YELLOW or C.LINE2, 952)
-    text(M.language.text('命名预设','PRESETS'), 535, 56, 13,
+    text(panel_text('命名预设','PRESETS'), 535, 56, 13,
          PANEL.preset_view and C.INK or C.TEXT, 118, 'center')
     region('presets:open', 470, 48, 130, 30)
     if PANEL.preset_view then
@@ -8573,12 +8799,12 @@ local function draw_panel()
             local role_label = role_key == 'host' and 'HOST PRESET' or 'CLIENT PRESET'
             rect(role_x, 48, 146, 30, chosen and C.YELLOW or PANEL.hover == 'profile:' .. role_key and C.ROW_HI or C.PANEL, 951)
             border(role_x, 48, 146, 30, chosen and C.YELLOW or C.LINE2, 952)
-            text(M.language.is_chinese() and (role_key == 'host' and '主机预设' or '客机预设') or role_label,
+            text(panel_is_chinese() and (role_key == 'host' and '主机预设' or '客机预设') or role_label,
                  role_x + 73, 56, 13, chosen and C.INK or C.TEXT, 134, 'center')
             region('profile:' .. role_key, role_x, 48, 146, 30)
         end
         local current_role = automation.sync()
-        text(M.language.is_chinese() and ('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'))
+        text(panel_is_chinese() and ('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'))
              or ('ACTIVE: ' .. (current_role or 'WAITING'):upper()), 614, 86, 12, C.MUTED, 300)
     end
 
@@ -8620,10 +8846,10 @@ local function draw_panel()
     -- The tab order, exactly like Armory's ui.tab_order: armory puts its tabs left to
     -- right in one strip and switches the whole body on the selected key. Tab 1 is
     -- always the SETTINGS tab; every registered mod appends one after it.
-    local tabs = {{key = 'tab:default', title = M.language.text('设置','SETTINGS'), id = nil}}
+    local tabs = {{key = 'tab:default', title = panel_text('设置','SETTINGS'), id = nil}}
     for i = 1, #M.PLUGINS do
         tabs[#tabs + 1] = {key = 'tab:' .. M.PLUGINS[i].id,
-                           title = M.language.current() == 'en'
+                           title = M.panel_locale() == 'en'
                                and (M.PLUGINS[i].name_en or M.PLUGINS[i].title)
                                or M.PLUGINS[i].title,
                            id = M.PLUGINS[i].id}
@@ -8690,12 +8916,12 @@ local function draw_panel()
     -- ---------------------------------------------------------- settings body
     if PANEL.rule_view then
         stratagem_catalog.scan(os.time())
-        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,M.language.is_chinese(),M.version,M.language.status)
+        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,panel_is_chinese(),M.version,panel_status)
         PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
         return
     end
     if PANEL.preset_view then
-        draw_preset_panel(UX, PANEL, automation, preset_library, M.language.is_chinese(),M.language.status)
+        draw_preset_panel(UX, PANEL, automation, preset_library, panel_is_chinese(),panel_status)
         PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
         return
     end
@@ -8745,7 +8971,7 @@ local function draw_panel()
         region(key, x - 5, y - 4, 26, 24)
     end
 
-    local function caption(cn, en) return M.language.text(cn,en) end
+    local function caption(cn, en) return panel_text(cn,en) end
     local function field(key, title, value, y)
         label(title, IX, y)
         local focus = PANEL.edit_field == key and PANEL.editing
@@ -8777,6 +9003,13 @@ local function draw_panel()
            y, navw, 30, true, PANEL.settings_view == 'pings')
     y = y + 44
     if PANEL.settings_view == 'pings' and M.options then
+        local pings_top = y
+        -- Content is eight 34px options, two 34px links, three fields with their
+        -- current spacing, and ten 18px help rows plus the optional status line.
+        local pings_content_h = 8*34 + 2*34 + 64 + 58 + 58 + 230 + 14
+        local pings_view = begin_viewport('pings', IX, pings_top, IW,
+            math.max(1, BOT - 8 - pings_top), pings_content_h, 34)
+        IW = pings_view.w
         local opts = automation.profile(PANEL.profile or 'host')
         for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
             {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
@@ -8798,8 +9031,8 @@ local function draw_panel()
         field('option:task_stratagem_message', caption('任务执行消息', 'TASK ACTION MESSAGE'), opts.task_stratagem_message, y)
         y = y + 58
         text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
-        text(M.language.status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
-        text(M.language.status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
+        text(panel_status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
+        text(panel_status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
         text('{玩家名}/{player_name}', IX, y + 62, 12, C.MUTED, IW)
         text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 80, 12, C.MUTED, IW)
         text('{目标}/{target}', IX, y + 98, 12, C.MUTED, IW)
@@ -8809,7 +9042,8 @@ local function draw_panel()
         text('{任务名}/{objective}', IX, y + 170, 12, C.MUTED, IW)
         text('{任务类型}/{objective_type}', IX, y + 188, 12, C.MUTED, IW)
         text('{位置}/{position}', IX, y + 206, 12, C.MUTED, IW)
-        if PANEL.hint then text(M.language.status(PANEL.hint), IX, y + 230, 11, C.YELLOW, IW) end
+        if PANEL.hint then text(panel_status(PANEL.hint), IX, y + 230, 11, C.YELLOW, IW) end
+        end_viewport()
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
         local function toggle(key, zh, en)
@@ -8824,7 +9058,7 @@ local function draw_panel()
         button('output:local', caption('仅自己可见', 'ONLY ME'), IX + (IW + 8)/2, y, (IW - 8)/2, 30, true, opts.output == 'local')
         y = y + 40
         toggle('allow_solo', '无人房间也发送', 'ALLOW SOLO SEND')
-        field('option:cooldown', caption('每人自动消息最短间隔（秒）', 'PER-PLAYER MESSAGE INTERVAL (SECONDS)'), tostring(opts.cooldown), y)
+        field('option:cooldown', caption('标记/召唤提醒间隔（秒）', 'PING / CALL INTERVAL (SECONDS)'), tostring(opts.cooldown), y)
         y = y + 64
         text(caption('按触发玩家分别计时；0为不限制', 'EACH TRIGGER PLAYER HAS A SEPARATE TIMER; 0 = UNLIMITED'),
              IX, y - 13, 10, C.DIM, IW)
@@ -8835,7 +9069,7 @@ local function draw_panel()
         y = y + 66
         button('view:pings', caption('玩家标记分类设置 >', 'PING CATEGORIES >'), IX, y, IW, 30, true)
         y = y + 44
-        text(PANEL.hint and M.language.status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
+        text(PANEL.hint and panel_status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
              IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW)
         text('{玩家名}/{player_name}', IX, y + 38, 12, C.DIM, IW)
         text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 58, 12, C.DIM, IW)
@@ -8859,14 +9093,15 @@ local function draw_panel()
     y = y + 62
     button('task:add', caption('添加定时任务', 'ADD TASK'), IX, y, IW, 32, true, true)
     y = y + 43
-    text(PANEL.hint and M.language.status(PANEL.hint) or caption('点击输入框填写；Enter 确认，Esc 取消', 'CLICK TO TYPE. ENTER CONFIRMS / ESC CANCELS'),
+    text(PANEL.hint and panel_status(PANEL.hint) or caption('点击输入框填写；Enter 确认', 'CLICK TO TYPE; ENTER CONFIRMS'),
          IX, y, 12, PANEL.hint and C.YELLOW or C.DIM, IW)
+        text(caption('Esc 取消', 'ESC CANCELS'), IX, y + 17, 12, PANEL.hint and C.YELLOW or C.DIM, IW)
         text(caption('填写完成后点击“添加任务”，任务才会保存并进入预设',
-                     'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 32, 11, C.MUTED, IW)
-        text(caption('重复 / 倒计时：5–86400 秒', 'REPEAT / COUNTDOWN: 5-86400 S'), IX, y + 52, 12, C.MUTED, IW)
-        text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 72, 12, C.MUTED, IW)
-        text('{玩家名}/{player_name}', IX, y + 92, 12, C.DIM, IW)
-        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 112, 12, C.DIM, IW)
+                     'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 38, 11, C.MUTED, IW)
+        text(caption('重复 / 倒计时：5 秒至 24 小时', 'REPEAT / COUNTDOWN: 5 S TO 24 H'), IX, y + 58, 12, C.MUTED, IW)
+        text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 78, 12, C.MUTED, IW)
+        text('{玩家名}/{player_name}', IX, y + 98, 12, C.DIM, IW)
+        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 116, 12, C.DIM, IW)
     end
     -- The right column uses the same row controls as the settings form.
     IX, IW = RX, RIW
@@ -8874,34 +9109,45 @@ local function draw_panel()
     head(IX, y, caption('设置', 'SETTINGS'), (PANEL.profile or 'host') == 'host'
          and caption('主机定时任务', 'HOST TASKS') or caption('客机定时任务', 'CLIENT TASKS'))
     local visible_tasks = M.profile_task_view(PANEL.profile or 'host')
-    text(M.language.is_chinese() and ('共 '..#visible_tasks..' 个任务') or (#visible_tasks..' TASKS'), IX + IW, y + 20, 12, C.MUTED, nil, 'right')
+    text(panel_is_chinese() and ('共 '..#visible_tasks..' 个任务') or (#visible_tasks..' TASKS'), IX + IW, y + 20, 12, C.MUTED, nil, 'right')
     y = y + 58
-    local pages = math.max(1, math.ceil(#visible_tasks / 7))
-    PANEL.task_page = math.max(1, math.min(pages, PANEL.task_page or 1))
-    local start = (PANEL.task_page - 1) * 7 + 1
+    local list_top = y
+    local list_bottom = BOT - 52
+    local list_height = math.max(1, list_bottom - list_top)
+    local task_view = begin_viewport('tasks', IX, list_top, IW, list_height,
+        math.max(list_height, #visible_tasks * 76), 76)
+    IW = task_view.w
+    local start = math.floor(task_view.offset / 76) + 1
+    local stop = math.min(#visible_tasks, math.ceil((task_view.offset + list_height) / 76))
     if #visible_tasks == 0 then
         text(caption('暂无任务，填写上方表单即可添加', 'NO TASKS. FILL THE FORM ABOVE.'), IX, y + 12, 13, C.DIM, IW)
     end
-    for i = start, math.min(#visible_tasks, start + 6) do
+    for i = start, stop do
         local t = visible_tasks[i]
-        rect(IX, y, IW, 68, C.ROW, 951)
+        local row_y = list_top + (i - 1) * 76
+        rect(IX, row_y, IW, 68, C.ROW, 951)
         local state = t.done and caption('已执行', 'DONE')
                       or t.enabled and caption('运行中', 'ON') or caption('暂停', 'PAUSED')
-        text(cut(t.name, 14, IW - 160), IX + 8, y + 7, 14, C.TEXT, IW - 160)
+        text(cut(t.name, 14, IW - 160), IX + 8, row_y + 7, 14, C.TEXT, IW - 160)
         text(t.mode:upper() .. ' / ' .. t.time .. (t.mode == 'daily' and '' or ' S') .. ' / ' .. state,
-             IX + 8, y + 27, 11, t.enabled and C.GOOD or C.DIM, IW - 140)
-        text(cut(t.result and M.language.status(t.result) or t.message, 11, IW - 16), IX + 8, y + 48, 11, C.MUTED, IW - 16)
+             IX + 8, row_y + 27, 11, t.enabled and C.GOOD or C.DIM, IW - 140)
+        text(cut(t.result and panel_status(t.result) or t.message, 11, IW - 16), IX + 8, row_y + 48, 11, C.MUTED, IW - 16)
         button('toggle:' .. t.id, t.done and caption('重启', 'RESTART') or t.enabled
                and caption('暂停', 'PAUSE') or caption('启用', 'ENABLE'),
-               IX + IW - 136, y + 7, 72, 28, true)
-        button('delete:' .. t.id, caption('删除', 'DEL'), IX + IW - 58, y + 7, 50, 28, true)
-        y = y + 76
+               IX + IW - 136, row_y + 7, 72, 28, true)
+        button('delete:' .. t.id, caption('删除', 'DEL'), IX + IW - 58, row_y + 7, 50, 28, true)
     end
+    end_viewport()
     -- Fixed footer keeps pagination reachable on both empty and full pages.
     y = BOT - 40
-    button('page:prev', '<', IX, y, 34, 26, PANEL.task_page > 1)
-    text(PANEL.task_page .. ' / ' .. pages, IX + 48, y + 6, 12, C.MUTED)
-    button('page:next', '>', IX + 112, y, 34, 26, PANEL.task_page < pages)
+    button('page:prev', '<', IX, y, 34, 26, task_view.offset > 0)
+    local first_item = #visible_tasks == 0 and 0 or math.min(#visible_tasks, start)
+    local last_item = #visible_tasks == 0 and 0 or math.min(#visible_tasks, stop)
+    local range_label = panel_is_chinese()
+        and ('第'..first_item..'-'..last_item..'条 / 共'..#visible_tasks..'条')
+        or (first_item..'-'..last_item..' / '..#visible_tasks..' TASKS')
+    text(range_label, IX + IW / 2, y + 6, 12, C.MUTED, IW - 84, 'center')
+    button('page:next', '>', IX + IW - 34, y, 34, 26, task_view.offset < task_view.max)
     text(caption('仅在游戏运行时执行 · 本机时间', 'WHILE GAME RUNS / LOCAL TIME'), IX, H - 30, 11, C.DIM, IW)
 
     UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
@@ -8929,6 +9175,7 @@ set_panel_open = function(open, discard_world_gui)
         PANEL.chat_poll_frame = M.frames
         take_cursor()
     else
+        PANEL.scrollbar_drag = nil
         if PANEL.plugin_icon_cache then
             PANEL.plugin_icon_cache.open, PANEL.plugin_icon_cache.icon = false, nil
             PANEL.plugin_icon_cache.next_scan = 0
@@ -8956,6 +9203,7 @@ local function panel_frame()
     local toggle = key_pressed(0x4B)
     local is_focused = focused()
     if not is_focused then
+        PANEL.scrollbar_drag = nil
         if PANEL.open then set_panel_open(false)
         else panel_input.release(); release_cursor() end
         return
@@ -9033,6 +9281,9 @@ local function panel_frame()
     M.input_state = panel_input.status().state
     keep_cursor()
     local gx, gy = mouse_state()
+    -- Read the captured wheel counter once on every open frame. Messages outside
+    -- a scroll viewport are intentionally consumed and discarded here.
+    local wheel_delta = M.panel_mouse_wheel_delta()
     local down = key_down(0x01)
     local pressed, released = mouse_was_down ~= nil and down and not mouse_was_down,
         not down and mouse_was_down
@@ -9049,7 +9300,9 @@ local function panel_frame()
     local function hit(px_, py_)
         local regions = PANEL.regions
         if not (regions and px_) then return nil end
-        for i = 1, #regions do
+        -- Later regions are drawn on top (notably the thumb over its track), so
+        -- hit testing follows the same painter order as the visible controls.
+        for i = #regions, 1, -1 do
             local r = regions[i]
             if px_ >= r.x and px_ <= r.x + r.w
                and py_ >= r.y and py_ <= r.y + r.h then
@@ -9065,9 +9318,46 @@ local function panel_frame()
     PANEL.hover = hovered
 
     if not focused() then
+        PANEL.scrollbar_drag = nil
         if PANEL.drag then PANEL.drag = nil; pcall(save_position) end
         PANEL.armed, mouse_was_down = nil, nil
         return
+    end
+    local scroll_drag = PANEL.scrollbar_drag
+    if scroll_drag then
+        if down and gy then
+            local view = PANEL.viewports and PANEL.viewports[scroll_drag.id]
+            if view then
+                local value = scroll_drag.offset - (gy - scroll_drag.y) / scroll_drag.travel * view.max
+                PANEL.scroll_offsets[scroll_drag.id] = math.max(0, math.min(view.max, value))
+            else
+                PANEL.scrollbar_drag = nil
+            end
+        else
+            PANEL.scrollbar_drag = nil
+        end
+        PANEL.armed = nil
+    elseif pressed and type(hovered) == 'string' then
+        local id = hovered:match('^scroll:(%w+):thumb$')
+        local view = id and PANEL.viewports and PANEL.viewports[id]
+        if view and view.max > 0 then
+            PANEL.scrollbar_drag = {id=id, y=gy, offset=view.offset, travel=view.travel_px}
+            PANEL.armed = nil
+        end
+    end
+    if gx and gy and PANEL.viewports then
+        for id, view in pairs(PANEL.viewports) do
+            if gx >= view.screen_x and gx <= view.screen_x + view.screen_w
+                and gy >= view.screen_y and gy <= view.screen_y + view.screen_h then
+                if wheel_delta ~= 0 and view.max > 0 then
+                    local step = view.id == 'tasks' and 76 or 34
+                    local direction = wheel_delta > 0 and -1 or 1
+                    PANEL.scroll_offsets[id] = math.max(0, math.min(view.max,
+                        view.offset + direction * step * 3 * math.max(1, math.abs(wheel_delta))))
+                end
+                break
+            end
+        end
     end
     if PANEL.drag then
         local d = PANEL.drag
@@ -9157,6 +9447,16 @@ local function panel_frame()
         clicked = false
     end
     if clicked and hovered then
+        local scroll_track = hovered:match('^scroll:(%w+):track$')
+        if scroll_track then
+            local view = PANEL.viewports and PANEL.viewports[scroll_track]
+            if view and view.max > 0 then
+                local from_top = math.max(0, math.min(1,
+                    (view.screen_y + view.screen_h - gy) / view.screen_h))
+                PANEL.scroll_offsets[scroll_track] = from_top * view.max
+                PANEL.version = (PANEL.version or 0) + 1
+            end
+        end
         local field = hovered:match('^task:(name)$') or hovered:match('^task:(time)$')
                       or hovered:match('^task:(message)$')
         local option = hovered:match('^option:(.+)$')
@@ -9175,7 +9475,7 @@ local function panel_frame()
                 PANEL.rule_batch_drafts=PANEL.rule_batch_drafts or {}
                 PANEL.rule_batch_drafts[role]=PANEL.rule_batch_drafts[role] or {}
                 PANEL.editing,PANEL.edit_field,PANEL.edit_text=true,hovered,PANEL.rule_batch_drafts[role][field] or ''
-                PANEL.hint=M.language.text('输入后点“应用到筛选”或“恢复默认”','Type, then choose Apply to Filter or Reset Default')
+                PANEL.hint=M.panel_text('输入后点“应用到筛选”或“恢复默认”','Type, then choose Apply to Filter or Reset Default')
             end
         elseif hovered:match('^rule:') then
             local kind,id,rule_field=hovered:match('^rule:([^:]+):([^:]+):([^:]+)$')
@@ -9193,9 +9493,9 @@ local function panel_frame()
             local action,field=hovered:match('^rules:batch:([%a_]+):(.+)$')
             local reset=action=='reset'
             if field=='cooldown' or field=='mark_message' or field=='call_message' then
-                local ids=M.batch_rule_ids()
+                local ids=M.batch_rule_ids(M.panel_locale())
                 if #ids==0 then
-                    PANEL.hint=M.language.text('当前筛选没有可修改条目','No matching entries in the current filter')
+                    PANEL.hint=M.panel_text('当前筛选没有可修改条目','No matching entries in the current filter')
                 else
                     local role=PANEL.profile or 'host'
                     local value
@@ -9206,7 +9506,7 @@ local function panel_frame()
                         if field=='cooldown' and value~='' then value=tonumber(value) or false end
                     end
                     local ok,why=automation.set_rule_field_batch('stratagem',ids,field,value,role)
-                    PANEL.hint=ok and M.language.text('已更新 '..#ids..' 个战备规则','Updated '..#ids..' stratagem rules') or why
+                    PANEL.hint=ok and M.panel_text('已更新 '..#ids..' 个战备规则','Updated '..#ids..' stratagem rules') or why
                 end
             end
         elseif hovered:match('^rules:select:') then
@@ -9267,7 +9567,7 @@ local function panel_frame()
             else
                 local builtin=false
                 for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then builtin=item.builtin==true;break end end
-                if builtin then PANEL.hint=M.language.text('内置预设不可覆盖','Built-in presets cannot be replaced')
+                if builtin then PANEL.hint=M.panel_text('内置预设不可覆盖','Built-in presets cannot be replaced')
                 else
                     local ok, why = preset_library.replace(selected, role)
                     PANEL.hint = ok and '已替换所选预设内容' or why
@@ -9279,7 +9579,7 @@ local function panel_frame()
             else
                 local builtin=false
                 for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then builtin=item.builtin==true;break end end
-                if builtin then PANEL.hint=M.language.text('内置预设不可重命名','Built-in presets cannot be renamed')
+                if builtin then PANEL.hint=M.panel_text('内置预设不可重命名','Built-in presets cannot be renamed')
                 else
                     local ok, why = preset_library.rename(selected, PANEL.preset_name or '')
                     PANEL.hint = ok and '预设名称已更新' or why
@@ -9288,7 +9588,7 @@ local function panel_frame()
         elseif hovered == 'preset:apply' then
             local role=PANEL.profile or 'host'
             local selected=PANEL.preset_selected_by_role[role]
-            if not selected then PANEL.hint = M.language.text('请先选择预设','Select a preset first.')
+            if not selected then PANEL.hint = M.panel_text('请先选择预设','Select a preset first.')
             else
                 local entry
                 for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then entry=item;break end end
@@ -9304,21 +9604,21 @@ local function panel_frame()
                     local active=automation.sync()
                     local role_name=role=='host' and '主机' or '客机'
                     local active_name=active=='host' and '主机' or active=='client' and '客机' or nil
-                    local applied=M.language.text('已应用到'..role_name..'配置','Applied to '..role:upper()..' configuration')
+                    local applied=M.panel_text('已应用到'..role_name..'配置','Applied to '..role:upper()..' configuration')
                     if active_name then
-                        applied=applied..M.language.text(active==role and '；当前身份匹配' or '；当前身份为'..active_name..'，切换到'..role_name..'身份后生效',
+                        applied=applied..M.panel_text(active==role and '；当前身份匹配' or '；当前身份为'..active_name..'，切换到'..role_name..'身份后生效',
                             active==role and '; active role matches.' or '; active role is '..active:upper()..'. It takes effect in a '..role:upper()..' session.')
                     else
-                        applied=applied..M.language.text('；当前身份尚未确认，检测到'..role_name..'身份后生效',
+                        applied=applied..M.panel_text('；当前身份尚未确认，检测到'..role_name..'身份后生效',
                             '; session role is not confirmed. It will take effect in a '..role:upper()..' session.')
                     end
                     if legacy_without_tasks then
-                        applied=applied..M.language.text('；旧版预设未保存定时任务，已保留当前'..role_name..'任务',
+                        applied=applied..M.panel_text('；旧版预设未保存定时任务，已保留当前'..role_name..'任务',
                             '; this legacy preset has no task snapshot, so current '..role:upper()..' tasks were kept.')
                     end
                     PANEL.hint=applied
-                else PANEL.hint=M.language.text('预设应用失败：'..tostring(why),
-                    'Preset apply failed: '..M.language.status(tostring(why))) end
+                else PANEL.hint=M.panel_text('预设应用失败：'..tostring(why),
+                    'Preset apply failed: '..M.panel_status(tostring(why))) end
             end
         elseif hovered == 'preset:export' then
             local selected=PANEL.preset_selected_by_role[PANEL.profile or 'host']
@@ -9334,7 +9634,7 @@ local function panel_frame()
             else
                 local builtin=false
                 for _,item in ipairs(preset_library._list_view(role)) do if item.id==selected then builtin=item.builtin==true;break end end
-                if builtin then PANEL.hint=M.language.text('内置预设不可删除','Built-in presets cannot be deleted')
+                if builtin then PANEL.hint=M.panel_text('内置预设不可删除','Built-in presets cannot be deleted')
                 else
                     local ok, why = preset_library.remove(selected)
                     PANEL.hint = ok and '预设已删除' or why
@@ -9358,8 +9658,11 @@ local function panel_frame()
             PANEL.hint = ok and '设置已保存' or why
         elseif hovered:match('^profile:') then
             PANEL.profile = hovered:match('^profile:(.+)$')
-            PANEL.task_page = 1
-            PANEL.hint = '正在编辑' .. (PANEL.profile == 'host' and '主机' or '客机') .. '预设；根据身份自动启用'
+            PANEL.scrollbar_drag = nil
+            PANEL.scroll_offsets.tasks = 0
+            PANEL.hint = M.panel_text(
+                '正在编辑' .. (PANEL.profile == 'host' and '主机' or '客机') .. '预设；根据身份自动启用',
+                'Editing ' .. (PANEL.profile or 'host') .. ' preset; enabled according to identity')
         elseif hovered:match('^output:') then
             local ok, why = automation.set('output', hovered:match('^output:(.+)$'), PANEL.profile or 'host')
             PANEL.hint = ok and '输出方式已保存' or why
@@ -9373,6 +9676,7 @@ local function panel_frame()
             PANEL.tab_page = math.max(1, (PANEL.tab_page or 1) + (hovered == 'tabs:next' and 1 or -1))
         elseif hovered == 'view:tasks'  or hovered == 'view:automation' or hovered == 'view:pings' then
             PANEL.settings_view = hovered:match('^view:(.+)$')
+            PANEL.scrollbar_drag = nil
             PANEL.preset_view = nil
             PANEL.hint = nil
         elseif field then
@@ -9388,7 +9692,8 @@ local function panel_frame()
             local t, why = M.add_task(draft.name, draft.mode, draft.time, draft.message, nil, PANEL.profile or 'host')
             PANEL.hint = t and '任务已添加' or why
             if t then
-            PANEL.task_page = math.ceil(#M.profile_task_view(PANEL.profile or 'host') / 7)
+                local tasks=M.profile_task_view(PANEL.profile or 'host')
+                PANEL.scroll_offsets.tasks = math.max(0, (#tasks - 1) * 76)
                 draft.name, draft.message = '', ''
             end
         elseif toggle_id then
@@ -9399,8 +9704,11 @@ local function panel_frame()
             PANEL.hint = M.remove_task(tonumber(delete_id)) and '任务已删除' or '保存失败'
         elseif hovered == 'page:prev' or hovered == 'page:next' then
             finish_edit(true)
-            PANEL.task_page = math.max(1, math.min(math.max(1, math.ceil(#M.profile_task_view(PANEL.profile or 'host') / 7)),
-                PANEL.task_page + (hovered == 'page:next' and 1 or -1)))
+            local view=PANEL.viewports and PANEL.viewports.tasks
+            if view then
+                local delta=hovered=='page:next' and 7*76 or -7*76
+                PANEL.scroll_offsets.tasks=math.max(0,math.min(view.max,view.offset+delta))
+            end
         elseif hovered == 'close' then
             if PANEL.editing and not finish_edit(true) then
                 clicked=false -- validation failed; preserve the field and leave the panel open
@@ -9806,19 +10114,19 @@ load_tasks()
         local migration_ok=true
         if cfg.timer_on and not has_legacy_timer_task then
             local task,why=M.add_task('旧版定时发送','repeat',tostring(cfg.interval),cut_utf8(cfg.message,200),nil,'host')
-            if not task then migration_ok=false;PANEL.hint=M.language.text('旧版定时迁移失败，原设置保留但不会发送：'..tostring(why),'Legacy timer migration failed; old settings were kept, and no hidden sender will run: '..tostring(why));note('legacy timer task migration failed: '..tostring(why)) end
+            if not task then migration_ok=false;PANEL.hint=M.panel_text('旧版定时迁移失败，原设置保留但不会发送：'..tostring(why),'Legacy timer migration failed; old settings were kept, and no hidden sender will run: '..tostring(why));note('legacy timer task migration failed: '..tostring(why)) end
         end
         if migration_ok then
             local ok,why=automation.migrate_legacy_quick_timer(false,cfg.interval,cut_utf8(cfg.message,200))
             if ok then
                 if cfg.timer_on then cfg.timer_on=false;config_save() end
                 note('legacy timer migrated to scheduled task: '..tostring(why))
-            else PANEL.hint=M.language.text('旧版定时设置迁移失败，原设置保留：'..tostring(why),'Legacy timer settings migration failed; old settings were kept: '..tostring(why));note('legacy timer profile migration failed: '..tostring(why)) end
+            else PANEL.hint=M.panel_text('旧版定时设置迁移失败，原设置保留：'..tostring(why),'Legacy timer settings migration failed; old settings were kept: '..tostring(why));note('legacy timer profile migration failed: '..tostring(why)) end
         end
     else
         for _,role in ipairs({'host','client'}) do
             local ok,why=M.migrate_quick_timer(role)
-            if not ok then PANEL.hint=M.language.text('旧版定时迁移失败，原设置保留但不会发送：'..tostring(why),'Legacy timer migration failed; old settings were kept, and no hidden sender will run: '..tostring(why));note('quick timer task migration failed ('..role..'): '..tostring(why)) end
+            if not ok then PANEL.hint=M.panel_text('旧版定时迁移失败，原设置保留但不会发送：'..tostring(why),'Legacy timer migration failed; old settings were kept, and no hidden sender will run: '..tostring(why));note('quick timer task migration failed ('..role..'): '..tostring(why)) end
         end
     end
 end)()
@@ -10060,13 +10368,13 @@ Files / 文件位置
   - 可添加任意数量的任务；单项字段和任务文件仍受明确大小限制
 
 任务按真实时间计时，仅在游戏运行时执行。倒计时保存截止时刻；重启后到期任务尝试一次。
-聊天未就绪、身份未知或冷却中时，任务保持等待，不会直接消耗一次倒计时。
+聊天未就绪、身份未知或角色条件不满足时，任务保持等待，不会直接消耗一次倒计时；任务不受事件冷却限制。
 最早到期的任务优先，避免短周期任务一直占用发送机会。
-自动消息：总开关、主机/客机独立配置并按当前会话身份启用、无人房间允许发送、自动消息最短间隔、新人欢迎及自定义欢迎语/延迟；输出仍可选小队公屏或仅自己可见。旧快捷定时只在升级时转为普通重复任务，不再单独显示或发送。
+自动消息：总开关、主机/客机独立配置并按当前会话身份启用、无人房间允许发送、标记/召唤提醒间隔、新人欢迎及自定义欢迎语/延迟；输出仍可选小队公屏或仅自己可见。旧快捷定时只在升级时转为普通重复任务，不再单独显示或发送。
 默认允许主客机及单人发送，冷却5秒，新人欢迎关闭，欢迎延迟2秒；启用时不欢迎已有队友。
 标记消息：任务建筑、战备提示、中型/大型/巨型敌人、地图标记分别开关；不再提示普通弹药、针剂、手雷、样本。
 静态资源包含 TCS、LAS-98激光大炮、堡垒坦克、重新补给和M-103补给车；特殊标记优先读取游戏本地化名称（需校验当前DLL）。
-本人和队友的新标记均可触发；本人标记与本机定时任务共用本人的消息间隔。
+本人和队友的新标记均可触发；本人标记使用本人的事件间隔，定时任务不受该间隔限制。
 目录外的特殊目标要求游戏提供特殊类型与可读名称，名称未加载会在标记有效期内重试。
 地图图钉读取实际同步状态；任务图钉使用游戏地图名称，支持“获取发射代码”等主线前置目标。
 {目标}/{任务名}显示名称，{任务类型}读取当局主线、前置、支线或战术属性，不按名字猜；{位置}为世界XYZ。
@@ -10079,8 +10387,8 @@ Files / 文件位置
 默认标记功能关闭，开启后响应本人和队友的新标记；消息支持 {类别}/{目标}/{触发者}/{位置}。
 地图任务另支持 {任务名}/{任务类型}，变量提示在“标记消息”面板显示。旧默认模板自动加入 {目标}；其他自定义模板保留。
 可开启真实队友缩写和队色前缀；实际聊天发件人仍为运行本模组的玩家，不冒用其他玩家身份。
-自动消息最短间隔按触发玩家分别计算：同一人的欢迎和标记共用，A不占用B/C的间隔；默认5秒，0为不限制。
-同时加入的新人各有独立欢迎队列，逐条发送；定时任务与不指定触发者的扩展发送使用本机玩家间隔。
+标记、召唤和执行事件间隔按触发玩家分别计算：A不占用B/C；冷却中的新事件直接丢弃，不排队补发。默认5秒，0为不限制。
+同时加入的新人各有独立欢迎队列，逐条发送；欢迎和定时任务忽略且不会延长事件间隔。不指定触发者的扩展发送使用本机玩家间隔。
 欢迎、标记、定时任务与扩展消息支持 {玩家名}/{缩写}/{编号}；{名字}/{触发者}也是名字。
 例如：欢迎 {玩家名}（{缩写}，{编号}号）加入小队！ 数据缺失时显示“队友/队友/?”，不猜编号。
 其他模组可通过 HD2AutoChatAPI v2 注册显示名菜单、按钮与可选事件回调。revision 3
