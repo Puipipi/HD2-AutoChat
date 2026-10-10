@@ -4,6 +4,355 @@ from test_auto_chat_probe import fresh_image, SOURCE
 
 
 class PanelInteractionTest(unittest.TestCase):
+    def test_native_game_chat_view_blocks_hotkey_without_blocking_sender_verification(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.u8(h.chat_view + 0x139b8, 1)
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'the game chat view owns keyboard input')
+        self.assertEqual('match', mod.signature, 'UI reader failure must not disable sender verification')
+        h.user32.set_key(0x4B, False)
+        lua.eval('update()')
+        h.u8(h.chat_view + 0x139b8, 0)
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'a fresh K press opens when native chat is closed: '+str(mod.panel_context))
+
+    def test_native_chat_blocks_hotkey_and_external_open_request(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.u8(h.chat_view + 0x139b8, 1)
+        self.assertFalse(mod.debug_request_open())
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual('match', mod.signature)
+
+    def test_open_panel_closes_on_native_chat_and_cancels_message_draft(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        original = mod.debug_cfg()['message']
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer('unconfirmed while chat opens')
+        self.assertTrue(mod.debug_cursor_state()['taken'])
+        h.u8(h.chat_view + 0x139b8, 1)
+        lua.execute('for i=1,6 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertEqual(original, mod.debug_cfg()['message'])
+        self.assertIsNone(mod.debug_panel()['editing'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual('none', h.user32_clip_text())
+        self.assertEqual(0, h.call_count(), 'a guard close must not submit the draft')
+
+    def test_autochat_ime_editor_does_not_look_like_native_game_chat(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        panel = mod.debug_panel()
+        mod.debug_set_editing(True)
+        panel['input_edit_field'] = 'task:name'
+        panel['edit_text'] = 'local name being typed'
+        lua.execute('for i=1,12 do update() end')
+        self.assertTrue(panel['open'], 'our own IME editor is independent of the game ChatView flag')
+        self.assertEqual('00', h.mem_hex(h.chat_view + 0x139b8, 1))
+        self.assertEqual('local name being typed', panel['edit_text'])
+
+    def test_held_k_through_chat_close_is_consumed_until_a_fresh_press(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.u8(h.chat_view + 0x139b8, 1)
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        h.u8(h.chat_view + 0x139b8, 0)
+        lua.execute('for i=1,12 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'a held key never turns into a delayed open')
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'])
+
+    def test_world_list_change_with_same_main_closes_and_destroys_gui_then_resettles(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        lua.execute('for i=1,12 do update() end')
+        self.assertGreater(h.gui_created, 0)
+        destroyed_before = h.gui_destroyed
+        h.worlds = lua.table_from(['WORLD_MAIN', 'WORLD_OVERLAY'])
+        lua.execute('for i=1,12 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertEqual(destroyed_before + 1, h.gui_destroyed,
+                         'a list-only change keeps the same live GUI owner and must destroy its GUI')
+        self.assertFalse(mod.debug_request_open(), 'the changed list must settle for 1.5 seconds')
+        lua.execute('for i=1,100 do update() end')
+        self.assertTrue(mod.debug_request_open(), 'the same stable list becomes available after 1.5 seconds')
+
+    def test_world_list_error_with_live_main_closes_and_destroys_gui(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.execute('for i=1,12 do update() end')
+        self.assertGreater(h.gui_created, 0)
+        self.assertEqual(1, h.live_guis)
+        destroyed_before = h.gui_destroyed
+        h.worlds_error = True
+        lua.execute('for i=1,12 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertEqual(destroyed_before + 1, h.gui_destroyed,
+                         'a list read failure must still destroy GUI while main_world remains live')
+        self.assertEqual(0, h.live_guis, 'no retained GUI may remain in the live world')
+        self.assertEqual(0, h.call_count(), 'closing for a list failure must not send a message')
+        self.assertIn('world_list_unavailable', mod.panel_context)
+
+    def test_native_ui_reader_mismatch_fails_closed_without_disabling_sender(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.bytes(h.code_base + 0x185f566, 'broken!')
+        self.assertFalse(mod.debug_request_open())
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual('match', mod.signature, 'UI-only signature mismatch cannot disable sender verification')
+        self.assertIn('unknown:chat field fingerprint mismatch', mod.panel_context)
+        self.assertEqual(0, h.call_count())
+
+    def test_native_ui_read_failure_blocks_only_the_panel(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.deny_reads_from = h.ui_registry
+        self.assertFalse(mod.debug_request_open())
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertIn('unknown:chat UI registry count invalid', mod.panel_context)
+        self.assertEqual('match', mod.signature)
+        ok, count = mod.send_text('sender unaffected by UI reader', False)
+        self.assertTrue(ok)
+        self.assertEqual(1, count)
+
+    def test_unavailable_ui_clock_blocks_panel_but_keeps_sender_verified(self):
+        lua, h = fresh_image()
+        h.disable_qpc_frequency()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertFalse(mod.debug_request_open())
+        self.assertIn('clock_unavailable', mod.panel_context)
+        self.assertEqual('match', mod.signature)
+        ok, count = mod.send_text('sender remains usable', False)
+        self.assertTrue(ok)
+        self.assertEqual(1, count)
+
+    def test_clock_failure_during_main_switch_discards_stale_native_gui_handle(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        destroyed_before = h.gui_destroyed
+        h.fail_qpc_counter()
+        h.main_world = 'WORLD_NEXT'
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertIsNone(mod.debug_panel()['gui'])
+        self.assertEqual(destroyed_before, h.gui_destroyed,
+                         'a clock fault plus changed owner must not destroy a stale native handle')
+
+    def test_registry_count_change_invalidates_cached_chat_view_identity(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        h.u32(h.ui_registry + 0x2be8, 2)
+        lua.execute('for i=1,6 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertIn('unknown:chat view identity changed', mod.panel_context)
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+
+    def test_closed_panel_does_not_read_native_chat_registry(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        before = h.ui_reads
+        lua.execute('for i=1,120 do update() end')
+        self.assertEqual(before, h.ui_reads,
+                         'closed steady state must not poll or scan native ChatUI')
+
+    def test_open_chat_check_is_cached_o1_and_does_not_rescan_registry(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        before = h.ui_reads
+        lua.execute('for i=1,6 do update() end')
+        self.assertTrue(mod.debug_panel()['open'])
+        self.assertLessEqual(h.ui_reads - before, 14,
+                             'an open-panel check validates the cached slot, not all registry entries')
+
+    def test_oversized_chat_registry_fails_closed(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.u32(h.ui_registry + 0x2be8, 4097)
+        self.assertFalse(mod.debug_request_open())
+        self.assertIn('unknown:chat UI registry count invalid', mod.panel_context)
+        self.assertEqual('match', mod.signature)
+
+    def test_missing_world_recovery_restarts_settle_window_for_same_identity(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        h.main_world = None
+        lua.execute('for i=1,12 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        h.main_world = 'WORLD_MAIN'
+        self.assertFalse(mod.debug_request_open(), 'restoring the same handle starts a fresh settle interval')
+        lua.execute('for i=1,100 do update() end')
+        self.assertTrue(mod.debug_request_open())
+
+    def test_hotkey_held_during_startup_loading_does_not_open_when_gate_lifts(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        h.user32.set_key(0x4B, True)
+        lua.execute('for i=1,601 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'a K press begun during loading must be consumed')
+        h.user32.set_key(0x4B, False)
+        lua.eval('update()')
+        lua.execute('for i=1,100 do update() end')
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'a fresh K press in a ready context still opens')
+
+    def test_world_loading_closes_panel_and_discards_uncommitted_draft(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_set_open(True)
+        before_message = mod.debug_cfg()['message']
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer('invalid draft that must not commit')
+        self.assertTrue(mod.debug_cursor_state()['taken'])
+        lua.eval('update()')
+        panel_input = mod.debug_panel_input()
+        lua.execute('''local input = ...
+            local release = input.release
+            input.release = function(...)
+                panel_input_release_calls = (panel_input_release_calls or 0) + 1
+                return release(...)
+            end''', panel_input)
+        lua.eval('update()')
+        destroyed_before_world_loss = h.gui_destroyed
+        h.main_world = None
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'panel closes as the world enters loading')
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertGreater(lua.globals().panel_input_release_calls, 0,
+                           'automatic close releases the input bridge')
+        self.assertFalse(mod.debug_panel_input().status()['editing'])
+        self.assertEqual('none', h.user32_clip_text())
+        self.assertIsNone(mod.debug_panel()['editing'])
+        self.assertIsNone(mod.debug_panel()['edit_text'])
+        self.assertEqual(before_message, mod.debug_cfg()['message'])
+        self.assertEqual(destroyed_before_world_loss, h.gui_destroyed,
+                         'a missing world must discard its stale GUI handle without native destruction')
+
+    def test_world_replacement_closes_panel_and_consumes_held_hotkey(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_set_open(True)
+        lua.eval('update()')
+        destroyed_before_replacement = h.gui_destroyed
+        h.user32.set_key(0x4B, True)
+        h.main_world = 'WORLD_NEXT'
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual(destroyed_before_replacement, h.gui_destroyed,
+                         'world replacement must discard the stale native GUI handle')
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'held K must not reopen after the new world is ready')
+        h.user32.set_key(0x4B, False)
+        lua.eval('update()')
+        lua.execute('for i=1,100 do update() end')
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'a fresh press still works in the replacement world')
+
+    def test_invalid_resolution_closes_and_destroys_gui_in_the_live_world(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_set_open(True)
+        lua.eval('update()')
+        self.assertGreater(h.gui_created, 0)
+        destroyed_before = h.gui_destroyed
+        h.res_w = 0
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertEqual(destroyed_before + 1, h.gui_destroyed,
+                         'an unavailable resolution leaves the native world valid for normal GUI teardown')
+
+    def test_confirmed_message_survives_close_and_reopen(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_set_open(True)
+        original = mod.debug_cfg()['message']
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer('confirmed message')
+        h.user32.set_key(0x0D, True)
+        lua.eval('update()')
+        h.user32.set_key(0x0D, False)
+        self.assertEqual('confirmed message', mod.debug_cfg()['message'])
+        self.assertIsNone(mod.debug_panel()['edit_backup'])
+        mod.debug_set_open(False)
+        mod.debug_set_open(True)
+        self.assertEqual('confirmed message', mod.debug_cfg()['message'])
+        self.assertNotEqual(original, mod.debug_cfg()['message'])
+
+    def test_cancelled_message_then_new_edit_uses_fresh_backup(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_set_open(True)
+        original = mod.debug_cfg()['message']
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer('cancelled draft')
+        h.user32.set_key(0x1B, True)
+        lua.eval('update()')
+        h.user32.set_key(0x1B, False)
+        self.assertEqual(original, mod.debug_cfg()['message'])
+        self.assertIsNone(mod.debug_panel()['edit_backup'])
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer('second unconfirmed draft')
+        mod.debug_set_open(False)
+        self.assertEqual(original, mod.debug_cfg()['message'])
+        self.assertIsNone(mod.debug_panel()['edit_backup'])
+
+    def test_loading_close_discards_invalid_option_draft_without_validation(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        mod.debug_set_open(True)
+        original = mod.options['cooldown']
+        panel = mod.debug_panel()
+        panel['editing'], panel['edit_field'], panel['edit_text'] = True, 'option:cooldown', 'invalid'
+        h.main_world = None
+        lua.eval('update()')
+        self.assertFalse(panel['open'], 'forced close must not be blocked by draft validation')
+        self.assertEqual(original, mod.options['cooldown'], 'unconfirmed setting must not be applied')
+
     def test_panel_text_keeps_readable_pixels_when_labels_are_long(self):
         for rw,rh,minimum in ((1920,1080,14),(2560,1600,21)):
             lua,h=fresh_image(font_ids=True)

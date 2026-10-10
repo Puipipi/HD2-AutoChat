@@ -136,6 +136,7 @@ local function new_buffer(ctype, arg)
     if ctype == 'size_t[1]' then
         return setmetatable({0, n = 1}, {__index = function() return 0 end})
     end
+    if ctype == 'int64_t[1]' then return {[0] = 0, n = 1} end
     -- Small integer arrays the input path needs: GetClipCursor writes 4 ints into
     -- one and ClipCursor reads 4 back; GetCursorPos/GetClientRect fill int32 pairs,
     -- and GetWindowThreadProcessId writes a uint32 pid. A PLAIN table, on purpose:
@@ -174,6 +175,11 @@ function harness.bytes(address, str)
     cache = {} -- a later ReadProcessMemory must see changes made by the game
     for i = 1, #str do mem[address + i - 1] = str:sub(i, i) end
 end
+function harness.mem_hex(address, size)
+    local out = {}
+    for i=0,size-1 do out[#out+1] = string.format('%02X', (mem[address+i] or '\0'):byte()) end
+    return table.concat(out)
+end
 
 -- Little-endian writers used to lay out the synthetic game state.
 local function le_bytes(value, size)
@@ -189,6 +195,11 @@ function harness.u32(address, value)
     cache = {}
     local bytes = le_bytes(value, 4)
     for i = 1, 4 do mem[address + i - 1] = bytes[i] end
+end
+
+function harness.u8(address, value)
+    cache = {}
+    mem[address] = string.char(value % 256)
 end
 
 function harness.u64(address, value)
@@ -294,6 +305,13 @@ function harness.install()
     function kernel.ReadProcessMemory(process, address, buf, size, got)
         harness.reads = harness.reads + 1
         address = unwrap(address)
+        if (harness.ui_registry and address >= harness.ui_registry and address < harness.ui_registry + 0x10000)
+           or (harness.chat_view and address >= harness.chat_view and address < harness.chat_view + 0x20000)
+           or address == harness.code_base + 0x1437dd9
+           or address == harness.code_base + 0x185f566
+           or address == harness.code_base + 0x3326e68 then
+            harness.ui_reads = (harness.ui_reads or 0) + 1
+        end
         if harness.deny_reads_from and address >= harness.deny_reads_from then
             return 0
         end
@@ -344,7 +362,11 @@ function harness.install()
         return 48
     end
     function kernel.CreateDirectoryA() return 1 end
-    function kernel.QueryPerformanceCounter() return 1 end
+    function kernel.QueryPerformanceFrequency(out) out[0] = 1000000; return 1 end
+    function kernel.QueryPerformanceCounter(out)
+        out[0] = harness.qpc or 0
+        return 1
+    end
     function kernel.MoveFileExA(from, to)
         if type(from)=='string' and type(to)=='string' and from:find('AutoChat',1,true) then
             virtual_files[to]=virtual_files[from]
@@ -357,6 +379,13 @@ function harness.install()
     -- stops at "missing kernel32 symbol".
     harness.own_pid = harness.own_pid or 4242
     function kernel.GetCurrentProcessId() return harness.own_pid end
+    harness.disable_qpc_frequency = function()
+        kernel.QueryPerformanceFrequency = nil
+        setmetatable(kernel, {__index=function(_, name)
+            if name == 'QueryPerformanceFrequency' then error('undefined symbol: QueryPerformanceFrequency') end
+        end})
+    end
+    harness.fail_qpc_counter = function() kernel.QueryPerformanceCounter = function() return 0 end end
 
     -- ---- fake user32 ---------------------------------------------------------
     -- Without this the mock's ffi.load ERRORS on user32, `user` ends up nil, and
@@ -497,6 +526,7 @@ function harness.install()
     harness.gui_created, harness.gui_destroyed = 0, 0
     harness.live_guis = 0
     harness.main_world = 'WORLD_MAIN'
+    harness.worlds_reads = 0
     _G.stingray = {
         Network = {game_session=function() return 'fixture-session' end,
             peer_id=function() return tostring(0x00112233445566) end},
@@ -509,7 +539,11 @@ function harness.install()
             end},
         Application = {
             main_world = function() return harness.main_world end,
-            worlds = function() return {harness.main_world} end,
+            worlds = function()
+                harness.worlds_reads = harness.worlds_reads + 1
+                if harness.worlds_error then error('synthetic world list failure') end
+                return harness.worlds or {harness.main_world}
+            end,
             -- The mod asks whether a resource is actually LOADED before using its id.
             -- Without this the font path stops at "not loaded" and the material and
             -- Gui.text steps are never exercised.
@@ -644,6 +678,7 @@ function harness.install()
     harness.update_calls, harness.shutdown_calls = 0, 0
     _G.update = function(...)
         harness.update_calls = harness.update_calls + 1
+        harness.qpc = (harness.qpc or 0) + 16667
         return 'prev', select('#', ...)
     end
     _G.shutdown = function(...)
@@ -713,6 +748,21 @@ function harness.build_image(opts)
     harness.bytes(base + 0x186025d, BOX)
     harness.bytes(base + 0xbeb103,  MSGRPC)
     harness.bytes(base + 0x1097a7c, HIST)
+    -- Independently fingerprinted UI-only reader sites from the verified chat-view
+    -- registry chain. These do not participate in M.CODE/send verification.
+    harness.bytes(base + 0x1437dd9, '\72\139\45\136\240\238\1')
+    harness.bytes(base + 0x185f566, '\64\136\187\184\57\1\0')
+    harness.ui_registry = 0x210000000
+    harness.chat_view = 0x211000000
+    harness.ui_reads = 0
+    harness.region(harness.ui_registry, 0x10000, 0x1000, 0x04)
+    harness.region(harness.chat_view, 0x20000, 0x1000, 0x04)
+    harness.u64(base + 0x3326e68, harness.ui_registry)
+    harness.u32(harness.ui_registry + 0x2be8, 1)
+    harness.bytes(harness.ui_registry + 0x2bf0, string.rep('\0', 16))
+    harness.u64(harness.ui_registry + 0x2bf0, harness.chat_view)
+    harness.u32(harness.ui_registry + 0x2bf8, 0xc3)
+    harness.u8(harness.chat_view + 0x139b8, 0)
 
     -- Font resource ids, as the engine fills them in at run time. OFF by default: the
     -- default image leaves them zero, which is the "engine has not filled them in yet"

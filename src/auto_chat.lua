@@ -67,6 +67,7 @@ local cdef_ok, cdef_err = pcall(ffi.cdef, [[
     size_t VirtualQuery(const void *address, void *info, size_t length);
     int CreateDirectoryA(const char *path, void *security);
     int QueryPerformanceCounter(int64_t *counter);
+    int QueryPerformanceFrequency(int64_t *frequency);
     void *GlobalLock(void *mem);
     int GlobalUnlock(void *mem);
     void *GlobalAlloc(uint32_t flags, size_t bytes);
@@ -92,6 +93,22 @@ for _, name in ipairs({'GetCurrentProcess', 'GetModuleHandleA', 'ReadProcessMemo
     end
 end
 local process = kernel.GetCurrentProcess()
+local monotonic_now = (function()
+    local ticks, frequency = ffi.new('int64_t[1]'), ffi.new('int64_t[1]')
+    local ready = false
+    return function()
+        if not ready then
+            local ok, result = pcall(function()
+                return kernel.QueryPerformanceFrequency(frequency)
+            end)
+            ready = ok and result ~= 0 and tonumber(frequency[0]) > 0
+            if not ready then return nil end
+        end
+        local ok, result = pcall(function() return kernel.QueryPerformanceCounter(ticks) end)
+        if not ok or result == 0 then return nil end
+        return tonumber(ticks[0]) / tonumber(frequency[0])
+    end
+end)()
 
 -- ---------------------------------------------------------------- 2. user32
 -- THE SHARED-DECLARATION PROBLEM, and how this avoids it.
@@ -368,6 +385,7 @@ local function write_status(extra)
         'messages sent: ' .. tostring(M.sent or 0),
         'panel       : ' .. (M.panel_open and 'open' or 'closed') .. '  (hotkey K)',
         'game input  : ' .. tostring(M.input_state or 'panel closed'),
+        'panel context: ' .. tostring(M.panel_context or 'not checked'),
         'auto send   : ' .. (M.options and M.options.enabled and 'enabled' or 'disabled'),
         'ping reader : ' .. tostring(M.ping_status or '-'),
         'user32 decls: added[' .. tostring(M.user32_added or '')
@@ -5640,6 +5658,11 @@ local text_input = build_text_input(64)
 local PANEL = {world = nil, gui = nil, draw_guis = nil, open = false, hover = -1,
                lfail = 0, version = 0,
                rw = 0, rh = 0}
+PANEL.context_worlds, PANEL.context_main = nil, nil
+PANEL.context_settled_at, PANEL.next_context_sample = nil, 0
+PANEL.context_is_settled = false
+PANEL.chat_view_cache, PANEL.chat_poll_frame = nil, 0
+PANEL.context_status = 'not checked'
 PANEL.loaded_plugin_icon = PANEL.loaded_plugin_icon or function()
     local cache = PANEL.plugin_icon_cache
     if not cache then
@@ -6208,21 +6231,218 @@ function M.debug_set_edit_buffer(value)
 end
 
 local function world_ready()    refresh_engine()
-    if not sr then return false end
+    if not sr then return false, false, 'world_unavailable' end
     local ok, world = pcall(sr.Application.main_world)
-    if not ok or world == nil then return false end
+    if not ok or world == nil then return false, false, 'world_unavailable' end
     local okr, rw, rh = pcall(Gui.resolution)
-    if not okr or type(rw) ~= 'number' or rw < 640 or rh < 480 then return false end
+    if not okr or type(rw) ~= 'number' or rw < 640 or rh < 480 then
+        return false, false, 'resolution_unavailable'
+    end
     -- A new world means every gui made for the old one is stale, and the geometry
     -- must be recomputed. Teardown here (rather than only in the frame body) is what
     -- makes a world change safe: the panel is rebuilt from scratch for the new world.
-    if PANEL.world ~= nil and world ~= PANEL.world then
-        panel_clear()
+    local changed_world = PANEL.world ~= nil and world ~= PANEL.world
+    if changed_world then
+        -- The old native world may already have been destroyed by the engine.
+        -- Drop our stale GUI handle instead of passing it to destroy_gui.
+        panel_clear(true)
     end
     PANEL.world = world
     PANEL.rw, PANEL.rh = rw, rh
+    return true, changed_world
+end
+
+-- Armory's installed payload snapshots Application.worlds() and main_world(), then
+-- waits for 1.5 seconds without identity changes before drawing. AutoChat applies
+-- that same stability condition to opening and closes if either identity changes.
+-- We sample at 12-frame intervals while idle/open and take a fresh sample per open
+-- request, avoiding a world-list scan on most frames while the panel is closed.
+local panel_context_guard = (function()
+local WORLD_SETTLE_SECONDS, WORLD_SAMPLE_FRAMES = 1.5, 12
+local function invalidate_world_context(reason)
+    PANEL.context_worlds, PANEL.context_main = nil, nil
+    PANEL.context_settled_at, PANEL.context_is_settled = nil, false
+    PANEL.chat_view_cache = nil
+    PANEL.next_context_sample = M.frames + WORLD_SAMPLE_FRAMES
+    PANEL.context_status = tostring(reason)
+    M.panel_context = PANEL.context_status
+    return false, reason
+end
+local function same_world_list(a, b)
+    if not a or not b or #a ~= #b then return false end
+    for i = 1, #a do if a[i] ~= b[i] then return false end end
     return true
 end
+local function world_context_sample(force)
+    if not force and M.frames < PANEL.next_context_sample then
+        if not PANEL.context_worlds then return false, PANEL.context_status or 'world_unavailable' end
+        return true, PANEL.context_is_settled and 'stable' or 'settling'
+    end
+    local now = monotonic_now()
+    if not now then return invalidate_world_context('clock_unavailable') end
+    PANEL.next_context_sample = M.frames + WORLD_SAMPLE_FRAMES
+    refresh_engine()
+    if not sr or not sr.Application or type(sr.Application.main_world) ~= 'function' then
+        return invalidate_world_context('world_unavailable')
+    end
+    local ok_main, main = pcall(sr.Application.main_world)
+    if not ok_main or main == nil then
+        return invalidate_world_context('world_unavailable')
+    end
+    if type(sr.Application.worlds) ~= 'function' then
+        return invalidate_world_context('world_list_unavailable')
+    end
+    local ok_worlds, worlds = pcall(sr.Application.worlds)
+    if not ok_worlds or type(worlds) ~= 'table' then
+        return invalidate_world_context('world_list_unavailable')
+    end
+    local count = #worlds
+    -- The engine's world list is a small runtime set. Refuse malformed/unbounded
+    -- arrays instead of allocating/copying arbitrary Lua-controlled lengths.
+    if count < 1 or count > 256 then return invalidate_world_context('world_list_invalid') end
+    local copy = {}
+    local main_found = false
+    for i = 1, count do
+        if worlds[i] == nil then return invalidate_world_context('world_list_invalid') end
+        copy[i] = worlds[i]
+        if worlds[i] == main then main_found = true end
+    end
+    if not main_found then return invalidate_world_context('main_world_not_listed') end
+    local had_snapshot = PANEL.context_worlds ~= nil
+    local main_changed = PANEL.context_main ~= nil and PANEL.context_main ~= main
+    local changed = PANEL.context_worlds == nil or main_changed
+                  or not same_world_list(copy, PANEL.context_worlds)
+    if changed then
+        PANEL.context_worlds, PANEL.context_main = copy, main
+        PANEL.context_settled_at = now + WORLD_SETTLE_SECONDS
+        PANEL.context_is_settled = false
+        PANEL.chat_view_cache = nil
+        PANEL.context_status = 'worlds changed; settling'
+        M.panel_context = PANEL.context_status
+        if PANEL.open and had_snapshot then set_panel_open(false, main_changed) end
+        note('panel context changed; waiting 1.5 seconds for worlds to settle')
+        write_status('panel context: world identity changed; settling')
+        return true, 'settling'
+    end
+    local was_settled = PANEL.context_is_settled
+    PANEL.context_is_settled = now >= (PANEL.context_settled_at or math.huge)
+    if PANEL.context_is_settled and not was_settled then
+        PANEL.context_status, M.panel_context = 'worlds stable', 'worlds stable'
+        note('panel context stable')
+        write_status('panel context: worlds stable; checking native chat on request')
+    end
+    return true, PANEL.context_is_settled and 'stable' or 'settling'
+end
+
+-- Native UI-context reader. Its two byte fingerprints intentionally live outside
+-- M.CODE: a UI-only mismatch closes/blocks the panel without disabling the sender.
+local CHAT_UI_ROOT_PTR_RVA = 0x3326E68
+local CHAT_UI_ROOT_SIGNATURE_RVA = 0x1437DD9
+local CHAT_UI_ROOT_BYTES = '\72\139\45\136\240\238\1'
+local CHAT_UI_FIELD_RVA = 0x185F566
+local CHAT_UI_FIELD_BYTES = '\64\136\187\184\57\1\0'
+local CHAT_UI_COUNT_OFFSET, CHAT_UI_SLOTS_OFFSET = 0x2be8, 0x2bf0
+local CHAT_UI_SLOT_STRIDE, CHAT_UI_TAG, CHAT_UI_FIELD_OFFSET = 16, 0xc3, 0x139b8
+local CHAT_UI_MAX_COUNT = 4096
+local function u64_off(bytes, offset)
+    local lo, hi = u32_off(bytes, offset), u32_off(bytes, offset + 4)
+    if not lo or not hi then return nil end
+    return lo + hi * 4294967296
+end
+local function chat_view_state(fresh)
+    local base = supported_game_base()
+    if not base then return nil, 'native build gate unavailable' end
+    if read_at(base + CHAT_UI_ROOT_SIGNATURE_RVA, #CHAT_UI_ROOT_BYTES) ~= CHAT_UI_ROOT_BYTES then
+        return nil, 'chat registry fingerprint mismatch'
+    end
+    if read_at(base + CHAT_UI_FIELD_RVA, #CHAT_UI_FIELD_BYTES) ~= CHAT_UI_FIELD_BYTES then
+        return nil, 'chat field fingerprint mismatch'
+    end
+    local registry = u64(base + CHAT_UI_ROOT_PTR_RVA)
+    if not sane_ptr(registry) then return nil, 'chat UI registry unavailable' end
+    local count = u32(registry + CHAT_UI_COUNT_OFFSET)
+    if not count or count > CHAT_UI_MAX_COUNT then return nil, 'chat UI registry count invalid' end
+    local cache = PANEL.chat_view_cache
+    if fresh or not cache or cache.registry ~= registry then
+        local slots = count > 0 and read_at(registry + CHAT_UI_SLOTS_OFFSET,
+                                             count * CHAT_UI_SLOT_STRIDE) or nil
+        if not slots then return nil, 'chat UI registry unreadable' end
+        local found_index, found_object
+        for i = 0, count - 1 do
+            local at = i * CHAT_UI_SLOT_STRIDE
+            if u32_off(slots, at + 8) == CHAT_UI_TAG then
+                local object = u64_off(slots, at)
+                if not sane_ptr(object) or found_index then
+                    return nil, 'chat view identity ambiguous'
+                end
+                found_index, found_object = i, object
+            end
+        end
+        if not found_index then return nil, 'chat view is not registered' end
+        cache = {registry = registry, count = count, index = found_index, object = found_object}
+        PANEL.chat_view_cache = cache
+    end
+    if cache.registry ~= registry or cache.count ~= count or cache.index >= count then
+        PANEL.chat_view_cache = nil
+        return nil, 'chat view identity changed'
+    end
+    local slot = registry + CHAT_UI_SLOTS_OFFSET + cache.index * CHAT_UI_SLOT_STRIDE
+    if u32(slot + 8) ~= CHAT_UI_TAG or u64(slot) ~= cache.object then
+        PANEL.chat_view_cache = nil
+        return nil, 'chat view identity changed'
+    end
+    local raw = read_at(cache.object + CHAT_UI_FIELD_OFFSET, 1)
+    if not raw then return nil, 'chat view state unreadable' end
+    local value = raw:byte(1)
+    if value ~= 0 and value ~= 1 then return nil, 'chat view state invalid' end
+    return value == 1, value == 1 and 'game chat open' or 'game chat closed'
+end
+
+local function panel_context_report(state, reason)
+    local key = tostring(state) .. ':' .. tostring(reason)
+    if PANEL.context_status == key then return end
+    PANEL.context_status = key
+    M.panel_context = key
+    if state == 'blocked' or state == 'unknown' then
+        PANEL.guard_hint = M.language.text(
+            '面板暂不可用：' .. tostring(reason),
+            'Panel unavailable: ' .. tostring(reason))
+        PANEL.hint = PANEL.guard_hint
+    elseif PANEL.hint == PANEL.guard_hint then
+        PANEL.hint, PANEL.guard_hint = nil, nil
+    end
+    note('panel context ' .. key)
+    write_status('panel context: ' .. key)
+end
+
+local function request_panel_open()
+    if PANEL.open then return true end
+    if M.frames < 600 then panel_context_report('blocked', 'startup') return false end
+    local available, world_state = world_context_sample(true)
+    if not available then
+        panel_context_report('unknown', world_state)
+        return false
+    end
+    if world_state ~= 'stable' then
+        panel_context_report('blocked', world_state)
+        return false
+    end
+    local chat_open, chat_reason = chat_view_state(true)
+    if chat_open == nil then
+        panel_context_report('unknown', chat_reason)
+        return false
+    end
+    if chat_open then
+        panel_context_report('blocked', chat_reason)
+        return false
+    end
+    panel_context_report('ready', chat_reason)
+    set_panel_open(true)
+    return true
+end
+return {world_sample=world_context_sample, chat_state=chat_view_state,
+        report=panel_context_report, request_open=request_panel_open}
+end)()
 
 -- ---------------------------------------------------------------- dest / rebuild
 -- The screen GUI is DESTROYED, not left in place. A retained GUI keeps rendering
@@ -6233,9 +6453,18 @@ end
 -- Assigned to the forward-declared local (see above the cursor table), NOT declared
 -- here with `local function`: world_ready above calls it, and a `local` introduced
 -- after its reader leaves the reader holding nil.
-panel_clear = function()
-    if sr and PANEL.gui and PANEL.world then
-        pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui)
+panel_clear = function(discard_world_gui)
+    if not discard_world_gui and sr and PANEL.gui and PANEL.world then
+        local ok, owner = false, nil
+        if sr.Application and type(sr.Application.main_world) == 'function' then
+            ok, owner = pcall(sr.Application.main_world)
+        end
+        -- The GUI belongs to main_world. A guarded native destroy is still unsafe
+        -- when that world has already been replaced or became unavailable, so only
+        -- call into World while the owner identity is freshly confirmed.
+        if ok and owner == PANEL.world then
+            pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui)
+        end
     end
     FONT.resolved, FONT.gui = false, nil
     PANEL.gui, PANEL.draw_guis = nil, nil
@@ -8316,7 +8545,7 @@ end
 -- Assigned now that take_cursor / release_cursor / panel_clear all exist. The
 -- forward declaration sits above (before the hook that closes over it), because a
 -- `local` declared after its reader would leave the reader holding nil.
-set_panel_open = function(open)
+set_panel_open = function(open, discard_world_gui)
     open = open and true or false
     if open == PANEL.open then return PANEL.open end
     PANEL.open = open
@@ -8325,33 +8554,53 @@ set_panel_open = function(open)
     if open then
         PANEL.profile = PANEL.profile or automation.sync() or 'host'
         PANEL.armed, mouse_was_down = nil, nil
+        PANEL.chat_poll_frame = M.frames
         take_cursor()
     else
         if PANEL.plugin_icon_cache then
             PANEL.plugin_icon_cache.open, PANEL.plugin_icon_cache.icon = false, nil
             PANEL.plugin_icon_cache.next_scan = 0
         end
+        -- The message editor previews typing directly in cfg.message. Forced closes
+        -- must cancel that draft so loading/chat guards never apply an unconfirmed edit.
+        if PANEL.editing and not PANEL.edit_field and PANEL.edit_backup ~= nil then
+            cfg.message = PANEL.edit_backup
+        end
+        PANEL.edit_backup = nil
         stop_text_input()
         panel_input.release()
         if PANEL.drag then PANEL.drag = nil; pcall(save_position) end
         PANEL.armed, mouse_was_down = nil, nil
         PANEL.editing, PANEL.edit_field, PANEL.edit_text = nil, nil, nil
         release_cursor()
-        panel_clear()
+        panel_clear(discard_world_gui)
     end
     return PANEL.open
 end
 
 local function panel_frame()
+    -- Sample K even while the panel is unavailable. A key held across startup or a
+    -- world transition must not become a fresh toggle when the gate opens.
+    local toggle = key_pressed(0x4B)
+    local world_context_ok, world_context_state = panel_context_guard.world_sample(false)
+    if not world_context_ok then
+        panel_context_guard.report('unknown', world_context_state)
+        if PANEL.open then set_panel_open(false, world_context_state == 'world_unavailable') end
+    end
     -- Not before the world exists: creating a screen GUI too early faults at native
     -- level, and pcall does not catch native faults.
     if M.frames < 600 then return end
-    if not world_ready() then panel_input.release(); return end
+    local available, changed_world, unavailable_reason = world_ready()
+    if not available or changed_world then
+        if changed_world then panel_context_guard.world_sample(true) end
+        if PANEL.open then set_panel_open(false, unavailable_reason == 'world_unavailable')
+        else panel_input.release(); release_cursor() end
+        return
+    end
 
     -- hotkey K (0x4B)
-    local toggle = key_pressed(0x4B)
     if toggle and not PANEL.editing then
-        set_panel_open(not PANEL.open)
+        if PANEL.open then set_panel_open(false) else panel_context_guard.request_open() end
         note('panel ' .. (PANEL.open and 'opened' or 'closed'))
         write_status()
     end
@@ -8360,6 +8609,22 @@ local function panel_frame()
         panel_input.release()
         release_cursor()
         return
+    end
+    if M.frames - (PANEL.chat_poll_frame or 0) >= 6 then
+        PANEL.chat_poll_frame = M.frames
+        local chat_open, chat_reason = panel_context_guard.chat_state(false)
+        if chat_open == nil then
+            panel_context_guard.report('unknown', chat_reason)
+            set_panel_open(false)
+            return
+        elseif chat_open then
+            panel_context_guard.report('blocked', chat_reason)
+            set_panel_open(false)
+            return
+        elseif PANEL.context_status:find('^blocked:game chat open$')
+           or PANEL.context_status:find('^unknown:') then
+            panel_context_guard.report('ready', chat_reason)
+        end
     end
     if PANEL.lfail >= 3 then
         -- Three refusals from the engine. Stop calling into it every frame; the panel
@@ -8780,6 +9045,7 @@ local function panel_frame()
     -- Message editing. While the field has focus the editor owns the keyboard, so the
     -- K hotkey cannot fire mid-word.
     if PANEL.editing then
+        if not PANEL.edit_field and PANEL.edit_backup == nil then PANEL.edit_backup = cfg.message end
         local now = (M.frames or 0) / 120
         local input_field = PANEL.edit_field or '__message__'
         if PANEL.input_edit_field ~= input_field then
@@ -8834,18 +9100,21 @@ local function panel_frame()
             cfg.message = value or cfg.message
             config_save()
             PANEL.editing = nil
+            PANEL.edit_backup = nil
             stop_text_input()
             PANEL.hint = 'MESSAGE SAVED'
             note('panel: message set to: ' .. tostring(cfg.message))
         elseif what == 'cancel' then
             cfg.message = PANEL.edit_backup or cfg.message
             PANEL.editing = nil
+            PANEL.edit_backup = nil
             stop_text_input()
             PANEL.hint = 'EDIT CANCELLED'
             note('panel: message edit cancelled')
         elseif what == 'reset' then
             cfg.message = PANEL.edit_backup or cfg.message
             PANEL.editing = nil
+            PANEL.edit_backup = nil
             stop_text_input()
             PANEL.hint = '输入队列溢出，已取消并保留原值'
             note('panel text input overflow; edit cancelled')
@@ -8985,13 +9254,11 @@ local function poll_trigger()
     last_trigger = request
     trigger_clear()
     if request == 'panel' then
-        if not PANEL.open then
-            PANEL.open = true
-            M.panel_open = true
-            take_cursor()
+        if not PANEL.open and M.frames >= 600 then
+            panel_context_guard.request_open()
         end
-        note('trigger: panel opened')
-        write_status()
+        note(PANEL.open and 'trigger: panel opened' or 'trigger: panel request unavailable in this context')
+        if PANEL.open then write_status() end
         return
     end
     if request == 'config' then
@@ -9060,6 +9327,7 @@ function M.debug_key(K) return key_pressed(K) end
 -- Forward-declared near the PANEL table (further up); assigned once the cursor and
 -- teardown functions exist.
 function M.debug_set_open(open) return set_panel_open(open) end
+function M.debug_request_open() return panel_context_guard.request_open() end
 
 local function tick()
     M.frames = M.frames + 1
