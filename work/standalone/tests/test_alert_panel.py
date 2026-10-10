@@ -165,8 +165,8 @@ class AlertPanelTests(unittest.TestCase):
         self.assertTrue({'rules:batch:edit:cooldown','rules:batch:edit:mark_message',
                          'rules:batch:edit:call_message','rules:batch:apply:cooldown',
                          'rules:batch:reset:cooldown'} <= keys)
-        self.assertIn('APPLY TO FILTER (1)',labels)
-        self.assertIn('RESET DEFAULT (1)',labels)
+        self.assertIn('APPLY (1)',labels)
+        self.assertIn('RESET (1)',labels)
         p.rule_search='no-matching-target'
         lua.execute('drawn_regions,drawn_text={},{}')
         draw(lua.globals().canvas,p,automation,catalog,False,'1.0.0',lua.eval('function(v)return v end'))

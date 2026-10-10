@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '1.0.0', build_id = 'v1.0.0-build.7', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.0.0', build_id = 'v1.0.0-build.8', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -8193,6 +8193,23 @@ PANEL._signature_cache.collect = function(frame)
         if initial or frame.raw[77] ~= value then
             frame.raw[77] = value; frame.parts[77] = tostring(value); frame.changed = true
         end end
+    do local value = PANEL.scroll_offsets and PANEL.scroll_offsets.rules_detail or 0
+        if initial or frame.raw[78] ~= value then
+            frame.raw[78] = value; frame.parts[78] = tostring(value); frame.changed = true
+        end end
+    do local value = (PANEL.scroll_offsets and PANEL.scroll_offsets.automation or 0) .. ':'
+            .. (PANEL.scroll_offsets and PANEL.scroll_offsets.task_form or 0)
+        if initial or frame.raw[79] ~= value then
+            frame.raw[79] = value; frame.parts[79] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.scroll_offsets and PANEL.scroll_offsets.preset_detail or 0
+        if initial or frame.raw[80] ~= value then
+            frame.raw[80] = value; frame.parts[80] = tostring(value); frame.changed = true
+        end end
+    do local value = PANEL.selected_task_detail_id or 0
+        if initial or frame.raw[81] ~= value then
+            frame.raw[81] = value; frame.parts[81] = tostring(value); frame.changed = true
+        end end
     if frame.changed then
         frame.epoch = (frame.epoch or 0) + 1
         frame.signature = table.concat(frame.parts, '|')
@@ -8218,24 +8235,73 @@ PANEL.active_plugin = PANEL.active_plugin
 -- Dedicated configuration views using the existing Armory frame/input owner.
 -- No native reads here; catalog rows and safely bound icons come from the host.
 local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
+    local body_top=math.max(158,(canvas.body_y or 136)+10)
+    local body_shift=body_top-158
+    local raw_canvas=canvas
+    canvas=setmetatable({}, {__index=function(_,key)
+        local fn=raw_canvas[key]
+        if type(fn)~='function' then return fn end
+        if key=='text' or key=='wrap_text' then
+            return function(value,x,y,... ) return fn(value,x,y+(y>=158 and body_shift or 0),...) end
+        elseif key=='rect' or key=='border' then
+            return function(x,y,w,h,... )
+                local shift=y>=158 and body_shift or 0
+                if x==470 and y==245 then h=math.max(1,h-body_shift) end
+                return fn(x,y+shift,w,h,...)
+            end
+        elseif key=='region' then
+            return function(key,x,y,... ) return fn(key,x,y+(y>=158 and body_shift or 0),...) end
+        elseif key=='icon' then
+            return function(hash,x,y,... ) return fn(hash,x,y+(y>=158 and body_shift or 0),...) end
+        elseif key=='begin_viewport' then
+            return function(id,x,y,w,h,content_h,row_h)
+                local top=y+(y>=158 and body_shift or 0)
+                return fn(id,x,top,w,math.max(1,math.min(h,946-top)),content_h,row_h)
+            end
+        end
+        return fn
+    end})
     local C=canvas.palette
     local function say(cn,en) return chinese and cn or en end
     local function text(v,x,y,size,c,w) canvas.text(v,x,y,size or 14,c or C.TEXT,w) end
+    local function wrapped(v,x,y,size,c,w)
+        if canvas.wrap_text then return canvas.wrap_text(v,x,y,size or 14,c or C.TEXT,w) end
+        text(v,x,y,size,c,w);return size or 14
+    end
+    local function wrap_height(v,size,w)
+        if canvas.wrap_height then return canvas.wrap_height(v,size,w) end
+        return size or 14
+    end
+    local function input_value(v,size,w,editing)
+        v=tostring(v or '')
+        if editing and canvas.input_tail then return canvas.input_tail(v,size,w) end
+        return v
+    end
+    local function begin_viewport(id,x,y,w,h,content_h)
+        if canvas.begin_viewport then return canvas.begin_viewport(id,x,y,w,h,content_h,28) end
+    end
+    local function end_viewport()
+        if canvas.end_viewport then canvas.end_viewport() end
+    end
+    local DETAIL_X,DETAIL_W=486,460 -- UX.begin_viewport reserves 14 units for its scrollbar.
     local function row_name(row)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
         return row.display_name_en or row.name_en or row.debug_name or row.name or row.display_name or tostring(row.id)
     end
-    local function button(key,value,x,y,w,on,disabled)
-        canvas.rect(x,y,w,32,disabled and C.FIELD or on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
-        canvas.border(x,y,w,32,disabled and C.LINE2 or on and C.YELLOW or C.LINE2,952)
-        text(value,x+9,y+8,13,disabled and C.DIM or on and C.INK or C.TEXT,w-18)
-        if not disabled then canvas.region(key,x,y,w,32) end
+    local function button(key,value,x,y,w,on,disabled,min_h)
+        local label_h=wrap_height(value,13,w-18)
+        local h=math.max(32,label_h+16,min_h or 0)
+        canvas.rect(x,y,w,h,disabled and C.FIELD or on and C.YELLOW or p.hover==key and C.ROW_HI or C.PANEL,951)
+        canvas.border(x,y,w,h,disabled and C.LINE2 or on and C.YELLOW or C.LINE2,952)
+        wrapped(value,x+9,y+8,13,disabled and C.DIM or on and C.INK or C.TEXT,w-18)
+        if not disabled then canvas.region(key,x,y,w,h) end
+        return h
     end
     local role=p.profile or 'host';local opts=a.profile(role)
-    button('profile:host',say('主机预设','HOST PRESET'),614,48,146,role=='host')
-    button('profile:client',say('客机预设','CLIENT PRESET'),768,48,146,role=='client')
-    text(say('输出：','OUTPUT: ')..(opts.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),
-        614,86,12,C.YELLOW,300)
+    local host_h=button('profile:host',say('主机','HOST'),614,48,146,role=='host')
+    local client_h=button('profile:client',say('客机','CLIENT'),768,48,146,role=='client')
+    wrapped(say('输出：','OUTPUT: ')..(opts.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),
+        614,48+math.max(host_h,client_h)+8,12,C.YELLOW,300)
     button('rules:back',say('返回设置','BACK'),22,166,120,false)
     local enemy=p.rule_view=='enemy'
     text(enemy and say('敌人细分提醒','ENEMY ALERT RULES') or say('战备细分提醒','STRATAGEM ALERT RULES'),160,170,22,C.TEXT,750)
@@ -8247,14 +8313,18 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
             {'large_enemy','大型敌人','LARGE'}, {'giant_enemy','巨型敌人','MASSIVE'}, {'flying_enemy','飞行敌人','FLYING'}}) do
             rows[#rows+1]={id=v[1],name=say(v[2],v[3])}
         end
-        text(say('飞行分类优先，不受原体型开关影响。','FLYING TAKES PRIORITY OVER SIZE.'),22,253,13,C.YELLOW,440)
-        text(say('体型采用游戏内部 Small / Medium / Large / Massive。','SIZES FOLLOW THE GAME UNIT SIZE ENUM.'),22,278,12,C.MUTED,440)
-        text(say('小型默认关闭；普通物资仍不提示。','SMALL IS OFF BY DEFAULT; NO ORDINARY SUPPLIES.'),22,303,12,C.MUTED,440)
+        local help_y=249
+        for _,line in ipairs({
+            {say('飞行分类优先，不受原体型开关影响。','FLYING TAKES PRIORITY OVER SIZE.'),13,C.YELLOW},
+            {say('体型采用游戏内部 Small / Medium / Large / Massive。','SIZES FOLLOW THE GAME UNIT SIZE ENUM.'),12,C.MUTED},
+            {say('各类别单独设置；普通物资使用标记提醒。','CONFIGURE EACH CATEGORY; SUPPLIES USE PING SETTINGS.'),12,C.MUTED},
+        }) do help_y=help_y+wrapped(line[1],22,help_y,line[2],line[3],440)+3 end
+        rows.list_top=math.max(356,help_y+8)
     else
         local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'},
             {'mission','任务战备','MISSION STRATAGEMS'}}
-        for i,v in ipairs(groups) do
-            local y=237+(i-1)*38
+        local group_y=237
+        for _,v in ipairs(groups) do
             local total,enabled_count=0,0
             for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
                 if (v[1]=='mission' and row.family=='mission') or (v[1]~='mission' and row.group==v[1]) then
@@ -8262,19 +8332,28 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
                     if a.rule('stratagem',row.id,role).enabled~=false then enabled_count=enabled_count+1 end
                 end
             end
-            text(say(v[2],v[3])..' '..enabled_count..'/'..total,22,y+9,14,C.TEXT,104)
-            button('rules:bulk:'..v[1]..':on',say('全部启用','ENABLE ALL'),130,y,128,false)
-            button('rules:bulk:'..v[1]..':off',say('全部关闭','DISABLE ALL'),266,y,112,false)
+            local group_text=say(v[2],v[3])..' '..enabled_count..'/'..total
+            local label_height=wrap_height(group_text,13,104)
+            wrapped(group_text,22,group_y+2,13,C.TEXT,104)
+            local y=group_y
+            local on_h=button('rules:bulk:'..v[1]..':on',say('全部启用','ENABLE ALL'),130,y,128,false)
+            local off_h=button('rules:bulk:'..v[1]..':off',say('全部关闭','DISABLE ALL'),266,y,112,false)
+            group_y=group_y+math.max(38,label_height+4,on_h,off_h)
         end
+        local filters_y=math.max(390,group_y+2)
+        local filters_h=32
         local x=22
         for _,v in ipairs({{'all','全部','ALL'},{'red','红','RED'},{'blue','蓝','BLUE'},
             {'green','绿','GREEN'},{'mission','任务','MISSION'}}) do
-            button('rules:filter:'..v[1],say(v[2],v[3]),x,390,80,(p.rule_filter or 'all')==v[1]);x=x+86
+            filters_h=math.max(filters_h,button('rules:filter:'..v[1],say(v[2],v[3]),x,filters_y,80,(p.rule_filter or 'all')==v[1]));x=x+86
         end
-        canvas.rect(22,432,424,32,C.FIELD,951);canvas.border(22,432,424,32,C.LINE2,952)
+        local search_y=filters_y+filters_h+10
+        canvas.rect(22,search_y,424,32,C.FIELD,951);canvas.border(22,search_y,424,32,C.LINE2,952)
         local search=p.edit_field=='rules:search' and p.edit_text or p.rule_search or ''
-        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,440,14,C.MUTED,408)
-        canvas.region('rules:search',22,432,424,32)
+        local search_edit=p.edit_field=='rules:search' and p.editing
+        search=input_value(search..(search_edit and '_' or ''),14,408,search_edit)
+        text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,search_y+8,14,C.MUTED,408)
+        canvas.region('rules:search',22,search_y,424,32)
         local query=(p.rule_search or ''):lower()
         for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
             local filter=p.rule_filter or 'all'
@@ -8286,7 +8365,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
                     or tostring(row.id):find(query,1,true)
                     or (row.debug_name or row.name or ''):lower():find(query,1,true)) then rows[#rows+1]=row end
         end
-        text(status_text and status_text(catalog.state.status) or catalog.state.status,22,472,12,C.MUTED,424)
+        local status=status_text and status_text(catalog.state.status) or catalog.state.status
+        local status_y=search_y+40
+        local status_h=wrapped(status,22,status_y,12,C.MUTED,424)
+        rows.list_top=status_y+status_h+8
     end
     local selected
     for _,row in ipairs(rows) do if tostring(row.id)==tostring(p.rule_selected) then selected=row end end
@@ -8294,37 +8376,65 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local batch_fields={{'mark_message',say('标记消息','MARK MESSAGE')},
         {'call_message',say('召唤 / 执行消息','CALL / TASK MESSAGE')},
         {'cooldown',say('独立冷却（秒）：空 = 默认；0 合法','RULE COOLDOWN: BLANK = DEFAULT; 0 IS VALID')}}
-    local function batch_toggle()
+    local function batch_toggle(y)
         local key=p.rule_batch_edit and 'rules:batch:close' or 'rules:batch:open'
-        button(key,p.rule_batch_edit and say('返回单项编辑','BACK TO SINGLE RULE')
-            or say('批量编辑筛选 ('..#rows..')','BULK EDIT FILTER ('..#rows..')'),724,334,236,false)
+        return button(key,p.rule_batch_edit and say('返回单项编辑','BACK TO SINGLE RULE')
+            or say('批量编辑筛选 ('..#rows..')','BULK EDIT ('..#rows..')'),DETAIL_X,y or 334,DETAIL_W,false)
     end
-    local function draw_batch_fields()
-        text(say('对当前筛选的全部匹配项应用；包含其他分页。','APPLIES TO ALL FILTER MATCHES, INCLUDING OTHER PAGES.'),486,378,13,C.YELLOW,474)
+    local function draw_batch_fields(start_y,shared_view)
+        start_y=start_y or 378
+        local intro=say('对当前筛选的全部匹配项应用；包含其他分页。','APPLIES TO ALL FILTER MATCHES, INCLUDING OTHER PAGES.')
+        local pad=shared_view and 0 or (canvas.wrap_start_pad and canvas.wrap_start_pad(13) or 0)
+        local row_heights,content_h={},pad+wrap_height(intro,13,DETAIL_W)+8
+        for i,item in ipairs(batch_fields) do
+            local action_h=math.max(wrap_height(say('应用到筛选 ('..#rows..')','APPLY ('..#rows..')'),13,238-18)+16,
+                wrap_height(say('恢复默认 ('..#rows..')','RESET ('..#rows..')'),13,DETAIL_W-252-18)+16,32)
+            row_heights[i]=wrap_height(item[2],12,DETAIL_W)+3+34+8+action_h+8
+            content_h=content_h+row_heights[i]
+        end
+        local hint=p.hint and (status_text and status_text(p.hint) or p.hint) or nil
+        if hint then content_h=content_h+wrap_height(hint,12,DETAIL_W)+4 end
+        local view_h=math.max(1,940-(start_y-pad+body_shift))
+        local view=shared_view or begin_viewport('rules_detail',DETAIL_X,start_y-pad,474,view_h,content_h)
+        local draw_w=view and view.w or DETAIL_W
+        wrapped(intro,DETAIL_X,start_y+pad,13,C.YELLOW,draw_w)
         p.rule_batch_drafts=p.rule_batch_drafts or {}
         p.rule_batch_drafts[role]=p.rule_batch_drafts[role] or {}
         local drafts=p.rule_batch_drafts[role]
+        local offset=wrap_height(intro,13,DETAIL_W)+8
         for i,item in ipairs(batch_fields) do
-            local field,title=item[1],item[2];local y=408+(i-1)*108
+            local field,title=item[1],item[2];local y=start_y+offset
             local key='rules:batch:edit:'..field
             local editing=p.edit_field==key and p.editing
             local value=editing and (p.edit_text or '') or drafts[field] or ''
-            text(title,486,y,12,C.YELLOW,474)
-            canvas.rect(486,y+18,474,34,editing and C.ROW_HI or C.FIELD,951)
-            canvas.border(486,y+18,474,34,editing and C.YELLOW or C.LINE2,952)
-            text(value~='' and tostring(value)..(editing and '_' or '')
-                or say('点击输入本字段批量值','CLICK TO ENTER A VALUE FOR THIS FIELD'),494,y+27,13,editing and C.TEXT or C.MUTED,458)
-            canvas.region(key,486,y+18,474,34)
+            local title_h=wrapped(title,DETAIL_X,y,12,C.YELLOW,draw_w)
+            local field_y=y+title_h+3
+            canvas.rect(DETAIL_X,field_y,draw_w,34,editing and C.ROW_HI or C.FIELD,951)
+            canvas.border(DETAIL_X,field_y,draw_w,34,editing and C.YELLOW or C.LINE2,952)
+            local shown=value~='' and input_value(value..(editing and '_' or ''),13,draw_w-16,editing)
+                or say('点击输入本字段批量值','CLICK TO ENTER A VALUE FOR THIS FIELD')
+            text(shown,DETAIL_X+8,field_y+8,13,editing and C.TEXT or C.MUTED,draw_w-16)
+            canvas.region(key,DETAIL_X,field_y,draw_w,34)
             local count=#rows
-            button('rules:batch:apply:'..field,say('应用到筛选 ('..count..')','APPLY TO FILTER ('..count..')'),486,y+58,260,false,count==0)
-            button('rules:batch:reset:'..field,say('恢复默认 ('..count..')','RESET DEFAULT ('..count..')'),754,y+58,206,false,count==0)
+            local action_y=field_y+42
+            local apply_label=say('应用 ('..count..')','APPLY ('..count..')')
+            local reset_label=say('恢复默认 ('..count..')','RESET ('..count..')')
+            local action_h=math.max(32,wrap_height(apply_label,13,220)+16,
+                wrap_height(reset_label,13,draw_w-270)+16)
+            button('rules:batch:apply:'..field,apply_label,DETAIL_X,action_y,238,false,count==0,action_h)
+            button('rules:batch:reset:'..field,reset_label,DETAIL_X+246,action_y,draw_w-252,false,count==0,action_h)
+            offset=offset+row_heights[i]
         end
-        if p.hint then text(status_text and status_text(p.hint) or p.hint,486,750,12,C.YELLOW,474) end
+        if hint then wrapped(hint,DETAIL_X,start_y+offset,12,C.YELLOW,draw_w) end
+        if not shared_view then end_viewport() end
+        return start_y+offset
     end
-    local page_size=enemy and 5 or 9
+    local top=rows.list_top or (enemy and 356 or 480)
+    local footer_top=enemy and 930 or 860
+    local available_rows=math.max(1,math.floor((footer_top-body_shift-top)/40))
+    local page_size=enemy and math.min(5,available_rows) or available_rows
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
-    local top=enemy and 356 or 480
     for i=(p.rule_page-1)*page_size+1,math.min(#rows,p.rule_page*page_size) do
         local row=rows[i];local y=top+(i-(p.rule_page-1)*page_size-1)*40
         local rule=a.rule(enemy and 'enemy' or 'stratagem',row.id,role)
@@ -8337,63 +8447,109 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
         canvas.region(key,22,y,424,36)
     end
-    if not enemy then
-        button('rules:prev','<',22,872,60,false);text(p.rule_page..' / '..pages..'  ('..#rows..')',98,881,14,C.MUTED,260)
-        button('rules:next','>',386,872,60,false)
-        text(say('新目录条目自动加入；未知分类列在“任务等”。','NEW ROWS AUTO-APPEAR; UNKNOWN GROUPS IN OTHER.'),22,919,12,C.MUTED,424)
+    if not enemy or pages>1 then
+        button('rules:prev','<',22,872-body_shift,60,false);text(p.rule_page..' / '..pages..'  ('..#rows..')',98,881-body_shift,14,C.MUTED,260)
+        button('rules:next','>',386,872-body_shift,60,false)
+        if not enemy then wrapped(say('新目录条目自动加入；未知分类列在“任务等”。','NEW ROWS AUTO-APPEAR; UNKNOWN GROUPS IN OTHER.'),22,919-body_shift,12,C.MUTED,424) end
     end
     canvas.rect(470,245,508,701,C.PANEL,950);canvas.border(470,245,508,701,C.LINE,951)
     if not selected then
-        text(say('等待游戏战备目录，或没有符合筛选的条目。','WAITING FOR CATALOG / NO MATCHES.'),486,270,14,C.MUTED,470)
-        text(say('进入游戏后读取；不支持的版本会停止读取。','READS IN GAME; UNSUPPORTED BUILDS STOP.'),486,305,12,C.MUTED,470)
+        local empty_y=270
+        empty_y=empty_y+wrapped(say('等待游戏战备目录，或没有符合筛选的条目。','WAITING FOR CATALOG / NO MATCHES.'),486,empty_y,14,C.MUTED,470)+8
+        empty_y=empty_y+wrapped(say('进入游戏后读取；不支持的版本会停止读取。','READS IN GAME; UNSUPPORTED BUILDS STOP.'),486,empty_y,12,C.MUTED,470)+10
         if not enemy then
-            batch_toggle()
-            if p.rule_batch_edit then draw_batch_fields() end
+            local toggle_h=batch_toggle(empty_y)
+            if p.rule_batch_edit then draw_batch_fields(empty_y+toggle_h+8) end
         end
         return
     end
     local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
-    text(row_name(selected),486,262,20,C.TEXT,474)
-    if not enemy then
-        text(say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s',486,296,12,C.MUTED,474)
-        if selected.variant_ids and #selected.variant_ids>1 then
-            text(say('同名 '..#selected.variant_ids..' 个变体共用此规则','SHARED BY '..#selected.variant_ids..' SAME-NAME VARIANTS'),735,343,12,C.MUTED,225)
-        end
-    end
+    local title=row_name(selected)
+    local info=not enemy and (say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s') or nil
+    local variants=not enemy and selected.variant_ids and #selected.variant_ids>1
+        and say('同名 '..#selected.variant_ids..' 个变体共用此规则','SHARED BY '..#selected.variant_ids..' SAME-NAME VARIANTS') or nil
     local enabled=enemy and opts['ping_'..selected.id] or not enemy and rule.enabled~=false
-    button('rules:enabled',say('此类提醒 ','THIS ALERT ')..(enabled and 'ON' or 'OFF'),486,334,230,enabled)
+    local enabled_label=say('此类提醒 ','THIS ALERT ')..(enabled and 'ON' or 'OFF')
+    local toggle_label=p.rule_batch_edit and say('返回单项编辑','BACK TO SINGLE RULE')
+        or say('批量编辑筛选 ('..#rows..')','BULK EDIT ('..#rows..')')
+    local fields={{'mark_message',enemy and say('标记消息','MARK MESSAGE') or say('标记落地物品时的消息','LANDED EQUIPMENT MARK MESSAGE')}}
+    if not enemy then fields[#fields+1]={'call_message',say('召唤 / 执行时的消息','CALL / TASK ACTION MESSAGE')} end
+    fields[#fields+1]={'cooldown',say('独立冷却（秒）：空 = 全局；0 = 每次新事件','RULE COOLDOWN: BLANK = GLOBAL; 0 = EVERY EVENT')}
+    local help={
+        {say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),12,C.YELLOW},
+        {say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),12,C.MUTED},
+        {'{玩家名}/{player_name}',12,C.TEXT},{'{缩写}/{abbr}  ·  {编号}/{slot}',12,C.TEXT},
+        {'{目标}/{target}',12,C.TEXT},{'{战备}/{stratagem}',12,C.TEXT},
+        {'{类别}/{category}',12,C.TEXT},{'{动作}/{action}',12,C.TEXT},
+        {'{任务名}/{objective}',12,C.TEXT},{'{任务类型}/{objective_type}',12,C.TEXT},
+        {'{位置}/{position}',12,C.TEXT},
+        {say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),12,C.MUTED},
+    }
+    if p.hint then help[#help+1]={status_text and status_text(p.hint) or p.hint,12,C.YELLOW} end
+    local pad=canvas.wrap_start_pad and canvas.wrap_start_pad(20) or 0
+    local content_h=pad+wrap_height(title,20,DETAIL_W)+8
+    if info then content_h=content_h+wrap_height(info,12,DETAIL_W)+6 end
+    if variants then content_h=content_h+wrap_height(variants,12,DETAIL_W)+6 end
+    local enabled_h=math.max(32,wrap_height(enabled_label,13,212)+16)
+    content_h=content_h+enabled_h+8
+    if not enemy then content_h=content_h+math.max(32,wrap_height(toggle_label,13,218)+16)+8 end
+    if p.rule_batch_edit and not enemy then
+        local intro=say('对当前筛选的全部匹配项应用；包含其他分页。','APPLIES TO ALL FILTER MATCHES, INCLUDING OTHER PAGES.')
+        content_h=content_h+(canvas.wrap_start_pad and canvas.wrap_start_pad(13) or 0)+wrap_height(intro,13,DETAIL_W)+8
+        for _,item in ipairs(batch_fields) do
+            local count=#rows
+            local action_h=math.max(32,wrap_height(say('应用 ('..count..')','APPLY ('..count..')'),13,220)+16,
+                wrap_height(say('恢复默认 ('..count..')','RESET ('..count..')'),13,DETAIL_W-270)+16)
+            content_h=content_h+wrap_height(item[2],12,DETAIL_W)+3+34+8+action_h+8
+        end
+        local hint=p.hint and (status_text and status_text(p.hint) or p.hint) or nil
+        if hint then content_h=content_h+wrap_height(hint,12,DETAIL_W)+4 end
+    else
+        for _,item in ipairs(fields) do content_h=content_h+wrap_height(item[2],13,DETAIL_W)+4+36+6 end
+        content_h=content_h+2
+        for _,item in ipairs(help) do content_h=content_h+wrap_height(item[1],item[2],DETAIL_W)+3 end
+    end
+    local content_top=262
+    local content_bottom=876
+    local view=begin_viewport('rules_detail',DETAIL_X,content_top-pad,474,
+        math.max(1,content_bottom-(content_top-pad+body_shift)),content_h)
+    local draw_w=view and view.w or DETAIL_W
+    local y=content_top+pad
+    y=y+wrapped(title,DETAIL_X,y,20,C.TEXT,draw_w)+8
+    if info then y=y+wrapped(info,DETAIL_X,y,12,C.MUTED,draw_w)+6 end
+    if variants then y=y+wrapped(variants,DETAIL_X,y,12,C.MUTED,draw_w)+6 end
+    local enabled_h=button('rules:enabled',enabled_label,DETAIL_X,y,230,enabled)
+    y=y+enabled_h+8
     if not enemy then
-        batch_toggle()
-        if p.rule_batch_edit then draw_batch_fields();return end
+        local toggle_h=batch_toggle(y)
+        y=y+toggle_h+8
+        if p.rule_batch_edit then
+            draw_batch_fields(y,view)
+            end_viewport()
+            button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,902-body_shift,474,false)
+            return
+        end
     end
     local function field(name,title,y)
         local key='rule:'..kind..':'..selected.id..':'..name
-        text(title,486,y,13,C.YELLOW,474)
+        local title_h=wrapped(title,DETAIL_X,y,13,C.YELLOW,draw_w)
         local value=p.edit_field==key and p.editing and p.edit_text or rule[name]
         value=value==nil and '' or tostring(value)
         local focus=p.edit_field==key and p.editing
-        canvas.rect(486,y+23,474,36,C.FIELD,951);canvas.border(486,y+23,474,36,focus and C.YELLOW or C.LINE2,952)
-        text(value~='' and value..(focus and '_' or '') or say('留空继承默认','BLANK = INHERIT'),494,y+33,14,focus and C.TEXT or C.MUTED,458)
-        canvas.region(key,486,y+23,474,36)
+        local field_y=y+title_h+4
+        canvas.rect(DETAIL_X,field_y,draw_w,36,C.FIELD,951)
+        canvas.border(DETAIL_X,field_y,draw_w,36,focus and C.YELLOW or C.LINE2,952)
+        local shown=value~='' and input_value(value..(focus and '_' or ''),14,draw_w-16,focus)
+            or say('留空继承默认','BLANK = INHERIT')
+        text(shown,DETAIL_X+8,field_y+10,14,focus and C.TEXT or C.MUTED,draw_w-16)
+        canvas.region(key,DETAIL_X,field_y,draw_w,36)
+        return field_y+42
     end
-    field('mark_message',enemy and say('标记消息','MARK MESSAGE') or say('标记落地物品时的消息','LANDED EQUIPMENT MARK MESSAGE'),392)
-    local y=478
-    if not enemy then field('call_message',say('召唤 / 执行时的消息','CALL / TASK ACTION MESSAGE'),y);y=y+86 end
-    field('cooldown',say('独立冷却（秒）：空 = 全局；0 = 每次新事件','RULE COOLDOWN: BLANK = GLOBAL; 0 = EVERY EVENT'),y)
-    text(say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),486,y+78,12,C.YELLOW,474)
-    text(say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),486,y+103,12,C.MUTED,474)
-    text('{玩家名}/{player_name}',486,689,12,C.TEXT,474)
-    text('{缩写}/{abbr}  ·  {编号}/{slot}',486,707,12,C.TEXT,474)
-    text('{目标}/{target}',486,725,12,C.TEXT,474)
-    text('{战备}/{stratagem}',486,743,12,C.TEXT,474)
-    text('{类别}/{category}',486,761,12,C.TEXT,474)
-    text('{动作}/{action}',486,779,12,C.TEXT,474)
-    text('{任务名}/{objective}',486,797,12,C.TEXT,474)
-    text('{任务类型}/{objective_type}',486,815,12,C.TEXT,474)
-    text('{位置}/{position}',486,833,12,C.TEXT,474)
-    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,850,12,C.MUTED,474)
-    button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
-    if p.hint then text(status_text and status_text(p.hint) or p.hint,486,919,12,C.YELLOW,474) end
+    for _,item in ipairs(fields) do y=field(item[1],item[2],y) end
+    y=y+2
+    for _,item in ipairs(help) do y=y+wrapped(item[1],DETAIL_X,y,item[2],item[3],draw_w)+3 end
+    end_viewport()
+    button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,902-body_shift,474,false)
 end
 -- END ALERT PANEL
 
@@ -8403,28 +8559,58 @@ end
 local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok, status_text)
     local C, W, H = UX.palette, 1000, 990
     local text, rect, border, region = UX.text, UX.rect, UX.border, UX.region
+    local wrap, wrap_height = UX.wrap_text, UX.wrap_height
+    local begin_viewport, end_viewport = UX.begin_viewport, UX.end_viewport
+    local input_tail = UX.input_tail
     local role = PANEL.profile or 'host'
     local options = automation.profile(role)
     local function say(cn, en) return font_ok and cn or en end
-    local function button(key, title, x, y, w, h, active, disabled)
+    local TOP = math.max(158, (UX.body_y or 136) + 10)
+    local function text_block(value, x, y, size, colour, limit, align)
+        if wrap then return wrap(value, x, y, size, colour, limit, align) end
+        text(value, x, y, size, colour, limit, align)
+        return size + 4
+    end
+    local function block_height(value, size, limit)
+        return wrap_height and wrap_height(value, size, limit) or size + 4
+    end
+    local function button(key, title, x, y, w, min_h, active, disabled)
+        local label_h = block_height(title, 13, w - 12)
+        local h = math.max(min_h or 28, label_h + 8)
         local hovered = PANEL.hover == key
         rect(x, y, w, h, disabled and C.FIELD or active and C.YELLOW or hovered and C.ROW_HI or C.PANEL, 951)
         border(x, y, w, h, disabled and C.LINE2 or active and C.YELLOW or hovered and C.TEXT or C.LINE2, 952)
-        text(title, x+w/2, y+(h-13)/2, 13, disabled and C.DIM or active and C.INK or C.TEXT, w-12, 'center')
-        if not disabled then region(key, x, y, w, h) end
+        local colour = disabled and C.DIM or active and C.INK or C.TEXT
+        text_block(title, x + w/2, y + math.max(4, (h-label_h)/2), 13, colour, w-12, 'center')
+        if not disabled then region(key,x,y,w,h) end
+        return h
     end
-    local function field(key, title, value, y)
-        text(title, 390, y, 11, C.YELLOW, 568)
+    local function field_height(title, width)
+        return block_height(title, 11, width) + 4 + 31
+    end
+    local function field(key, title, value, x, y, width)
+        local title_h = text_block(title, x, y, 11, C.YELLOW, width)
+        local field_y = y + title_h + 4
         local focus = PANEL.editing and PANEL.edit_field == key
-        rect(390,y+17,568,31,focus and C.ROW_HI or C.FIELD,951)
-        border(390,y+17,568,31,focus and C.YELLOW or C.LINE2,952)
-        local shown = focus and (PANEL.edit_text or value) or value
-        text(tostring(shown or '')..(focus and '_' or ''),398,y+25,13,focus and C.TEXT or C.MUTED,552)
-        region(key,390,y+17,568,31)
+        local shown = tostring(focus and (PANEL.edit_text or value) or value or '')
+        local visible = focus and input_tail and input_tail(shown .. '_', 13, width - 16)
+            or focus and shown .. '_' or shown
+        rect(x,field_y,width,31,focus and C.ROW_HI or C.FIELD,951)
+        border(x,field_y,width,31,focus and C.YELLOW or C.LINE2,952)
+        text(visible,x+8,field_y+8,13,focus and C.TEXT or C.MUTED,width-16)
+        region(key,x,field_y,width,31)
+        return field_y + 31
     end
-    rect(22,158,342,H-210,C.PANEL,950);border(22,158,342,H-210,C.LINE,951)
-    rect(378,158,W-400,H-210,C.PANEL,950);border(378,158,W-400,H-210,C.LINE,951)
-    text(say('命名自动消息预设','NAMED AUTOMATION PRESETS'),40,178,20,C.TEXT,306)
+
+    local list_x, list_w = 22, 342
+    local detail_x, detail_w = 390, 568
+    local detail_content_w = detail_w - 14
+    local bottom = H - 52
+    rect(list_x,TOP,list_w,bottom-TOP,C.PANEL,950);border(list_x,TOP,list_w,bottom-TOP,C.LINE,951)
+    rect(378,TOP,W-400,bottom-TOP,C.PANEL,950);border(378,TOP,W-400,bottom-TOP,C.LINE,951)
+    local list_title = say('命名自动消息预设','NAMED AUTOMATION PRESETS')
+    local list_title_h = text_block(list_title,40,TOP+20,20,C.TEXT,306)
+
     PANEL.preset_selected_by_role=PANEL.preset_selected_by_role or {}
     PANEL.preset_page_by_role=PANEL.preset_page_by_role or {}
     PANEL.preset_index_cache_by_role=PANEL.preset_index_cache_by_role or {}
@@ -8438,29 +8624,32 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
         index_cache={revision=revision,entries=entries,by_id=by_id}
         PANEL.preset_index_cache_by_role[role]=index_cache
     end
-    if selected_id then
-        if not index_cache.by_id[selected_id] then selected_id=nil;PANEL.preset_selected_by_role[role]=nil end
+    if selected_id and not index_cache.by_id[selected_id] then
+        selected_id=nil;PANEL.preset_selected_by_role[role]=nil
     end
     if not selected_id then
         local english_id='builtin-'..role..'-en'
         local english=index_cache.by_id[english_id]
-        if english and english.builtin==true then
-            selected_id=english_id
-            PANEL.preset_selected_by_role[role]=english_id
-        end
+        if english and english.builtin==true then selected_id=english_id;PANEL.preset_selected_by_role[role]=english_id end
     end
     local selected=selected_id and index_cache.by_id[selected_id] or nil
-    text(say('共 '..#entries..' 个预设',#entries..' PRESETS'),346,184,12,C.MUTED,nil,'right')
+    local count_text=say('共 '..#entries..' 个预设',#entries..' PRESETS')
+    local count_h=text_block(count_text,40,TOP+20+list_title_h+4,12,C.MUTED,306)
     if preset_library.state.error then
-        text(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,218,12,C.BAD,300)
-        text(preset_library.state.error,40,240,11,C.BAD,300)
-    elseif #entries==0 then text(say('暂无已保存预设','NO SAVED PRESETS'),40,224,14,C.DIM,300) end
-    local pages=math.max(1,math.ceil(#entries/16))
+        local error_top=TOP+60
+        text_block(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,error_top,12,C.BAD,300)
+        text_block(preset_library.state.error,40,error_top+26,11,C.BAD,300)
+    elseif #entries==0 then text_block(say('暂无已保存预设','NO SAVED PRESETS'),40,TOP+66,14,C.DIM,300) end
+    PANEL.preset_page_size_by_role=PANEL.preset_page_size_by_role or {}
+    local list_top=math.max(TOP+98,TOP+20+list_title_h+count_h+16)
+    local page_size=math.max(1,math.min(16,math.floor((H-160-list_top)/36)))
+    PANEL.preset_page_size_by_role[role]=page_size
+    local pages=math.max(1,math.ceil(#entries/page_size))
     local page=PANEL.preset_page_by_role[role] or 1
     page=math.max(1,math.min(pages,page));PANEL.preset_page_by_role[role]=page
-    local first=(page-1)*16+1
-    for i=first,math.min(#entries,first+15) do
-        local entry=entries[i];local y=266+(i-first)*36
+    local first=(page-1)*page_size+1
+    for i=first,math.min(#entries,first+page_size-1) do
+        local entry=entries[i];local y=list_top+(i-first)*36
         local chosen=entry.id==selected_id
         rect(38,y,308,30,chosen and C.ROW_HI or C.ROW,951)
         border(38,y,308,30,chosen and C.YELLOW or C.LINE2,952)
@@ -8473,41 +8662,75 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
     button('preset:save',say('保存当前配置','SAVE CURRENT'),38,H-94,146,32,false)
     button('preset:replace',say('替换所选','REPLACE'),194,H-94,152,32,false,selected and selected.builtin==true)
 
-    text(say('编辑目标：','EDITING:')..say(role=='host' and '主机' or '客机',role:upper()),390,178,13,C.YELLOW,270)
-    text(say('当前：','ACTIVE: ')..(automation.state.active_role=='host' and say('主机','HOST') or automation.state.active_role=='client' and say('客机','CLIENT') or say('等待','WAITING')),682,178,12,C.MUTED,130)
-    button('preset:back',say('返回设置','BACK TO SETTINGS'),822,168,136,30,false)
-    text(say('当前配置输出：','CURRENT OUTPUT: ')..(options.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),390,201,12,C.MUTED,568)
-    field('preset:name',say('预设名称','PRESET NAME'),PANEL.preset_name or '',230)
-    text(selected and (say('已选：','SELECTED: ')..selected.name) or say('请选择预设','SELECT A PRESET'),390,348,13,selected and C.TEXT or C.DIM,420)
-    button('preset:rename',say('改名','RENAME'),822,340,136,30,false,selected and selected.builtin==true)
-    local valid,parsed
-    if selected then
-        local cached=index_cache.validation
-        if not cached or cached.id~=selected.id or cached.payload~=selected.payload then
-            local ok,profile=automation.validate_profile(selected.payload)
-            cached={id=selected.id,payload=selected.payload,valid=ok,parsed=profile}
-            index_cache.validation=cached
-        end
-        valid,parsed=cached.valid,cached.parsed
+    local header_y=TOP+20
+    local edit_label=say('编辑目标：','EDITING:')..say(role=='host' and '主机' or '客机',role:upper())
+    local active_label=say('当前：','ACTIVE: ')..(automation.state.active_role=='host' and say('主机','HOST')
+        or automation.state.active_role=='client' and say('客机','CLIENT') or say('等待','WAITING'))
+    local edit_label_h=text_block(edit_label,detail_x,header_y,13,C.YELLOW,270)
+    local active_label_h=text_block(active_label,682,header_y,12,C.MUTED,130)
+    local back_h=button('preset:back',say('返回设置','BACK TO SETTINGS'),822,TOP+10,136,30,false)
+    local viewport_top=math.max(TOP+44,header_y+edit_label_h+8,header_y+active_label_h+8,TOP+10+back_h+8)
+    local output_line=say('当前配置输出：','CURRENT OUTPUT: ')..
+        (options.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT'))
+
+    local selected_line=selected and (say('已选：','SELECTED: ')..selected.name) or say('请选择预设','SELECT A PRESET')
+    local selected_width=detail_content_w-150
+    local selected_h=block_height(selected_line,13,selected_width)
+    local rename_h=math.max(30,selected_h+8)
+    local cached=index_cache.validation
+    if selected and (not cached or cached.id~=selected.id or cached.payload~=selected.payload) then
+        local ok,profile=automation.validate_profile(selected.payload)
+        cached={id=selected.id,payload=selected.payload,valid=ok,parsed=profile}
+        index_cache.validation=cached
     end
-    local saved=valid and parsed and parsed.values
+    local saved=selected and cached and cached.valid and cached.parsed and cached.parsed.values
+    local preview_lines={}
     if saved then
-        text(say('将载入：','WILL LOAD: ')..(saved.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT')),390,376,12,C.YELLOW,568)
-        text(say('自动消息：','AUTO SEND: ')..(saved.enabled and 'ON' or 'OFF')..'    '..say('标记：','PING: ')..(saved.ping and 'ON' or 'OFF'),390,394,12,C.MUTED,568)
-    else text(say('无法预览所选预设内容','SELECTED PRESET CANNOT BE PREVIEWED'),390,376,12,C.BAD,568) end
+        preview_lines[1]=say('将载入：','WILL LOAD: ')..(saved.output=='local' and say('仅自己可见','ONLY ME') or say('小队公屏','SQUAD CHAT'))
+        preview_lines[2]=say('自动消息：','AUTO SEND: ')..(saved.enabled and 'ON' or 'OFF')..'    '..say('标记：','PING: ')..(saved.ping and 'ON' or 'OFF')
+    else preview_lines[1]=say('无法预览所选预设内容','SELECTED PRESET CANNOT BE PREVIEWED') end
+    local count_line
     if selected then
         local count=0;for _ in selected.payload:gmatch('\nrule_[^=]+=[^\n]*') do count=count+1 end
-        text(say('包含自动消息设置、模板和细粒度规则；规则字段：','AUTOMATION OPTIONS, TEMPLATES AND FINE GRAIN RULES; RULE FIELDS: ')..tostring(count),390,412,12,C.MUTED,568)
+        count_line=say('包含自动消息设置、模板和细粒度规则；规则字段：','AUTOMATION OPTIONS, TEMPLATES AND FINE GRAIN RULES; RULE FIELDS: ')..tostring(count)
     end
-    button('preset:apply',say(role=='host' and '应用到主机配置' or '应用到客机配置',
-        role=='host' and 'APPLY TO HOST CONFIG' or 'APPLY TO CLIENT CONFIG'),390,432,210,34,false)
-    button('preset:export',say('导出文件','EXPORT FILE'),612,432,160,34,false)
-    button('preset:delete',say('删除','DELETE'),784,432,174,34,false,selected and selected.builtin==true)
-    field('preset:path',say('导入文件路径','IMPORT FILE PATH'),PANEL.preset_path or '',488)
-    button('preset:import',say('导入路径中的文件','IMPORT FILE FROM PATH'),390,556,276,34,false)
-    text(PANEL.hint and status_text and status_text(PANEL.hint) or PANEL.hint
-        or say('选择主机或客机配置后，点击应用按钮写入该角色。','Select a host or client configuration, then apply the preset to that role.'),390,606,12,PANEL.hint and C.YELLOW or C.MUTED,568)
-    if PANEL.preset_export_path then text(say('导出位置：','EXPORTED: ')..PANEL.preset_export_path,390,638,11,C.GOOD,568) end
+    local hint_line=PANEL.hint and status_text and status_text(PANEL.hint) or PANEL.hint
+        or say('选择主机或客机配置后，点击应用按钮写入该角色。','Select a host or client configuration, then apply the preset to that role.')
+    local export_line=PANEL.preset_export_path and (say('导出位置：','EXPORTED: ')..PANEL.preset_export_path) or nil
+    local detail_h=8+block_height(output_line,12,detail_content_w)+10+field_height(say('预设名称','PRESET NAME'),detail_content_w)
+        +10+math.max(selected_h,rename_h)+10
+    for _,line in ipairs(preview_lines) do detail_h=detail_h+block_height(line,12,detail_content_w)+4 end
+    if count_line then detail_h=detail_h+block_height(count_line,12,detail_content_w)+8 end
+    local apply_title=say(role=='host' and '应用到主机配置' or '应用到客机配置',
+        role=='host' and 'APPLY TO HOST CONFIG' or 'APPLY TO CLIENT CONFIG')
+    local action_h=math.max(34,block_height(apply_title,13,186)+8,block_height(say('导出文件','EXPORT FILE'),13,136)+8,
+        block_height(say('删除','DELETE'),13,162)+8)
+    detail_h=detail_h+action_h+10+field_height(say('导入文件路径','IMPORT FILE PATH'),detail_content_w)+10
+        +math.max(34,block_height(say('导入路径中的文件','IMPORT FILE FROM PATH'),13,detail_content_w-18)+8)
+        +10+block_height(hint_line,12,detail_content_w)+6
+    if export_line then detail_h=detail_h+block_height(export_line,11,detail_content_w)+4 end
+    local content_pad=math.max(2,math.ceil(((UX.wrap_height and UX.wrap_height('M',13,detail_content_w) or 15)-13)*0.5+2))
+    local viewport=begin_viewport and begin_viewport('preset_detail',detail_x,viewport_top,detail_w,
+        math.max(1,bottom-(viewport_top+10)),detail_h+content_pad,32) or nil
+    local detail_w_active=viewport and viewport.w or detail_w
+    local dy=viewport_top+content_pad
+    dy=dy+text_block(output_line,detail_x,dy,12,C.MUTED,detail_w_active)+10
+    dy=field('preset:name',say('预设名称','PRESET NAME'),PANEL.preset_name or '',detail_x,dy,detail_w_active)+10
+    local actual_selected_h=text_block(selected_line,detail_x,dy+math.max(0,(rename_h-selected_h)/2),13,
+        selected and C.TEXT or C.DIM,selected_width)
+    button('preset:rename',say('改名','RENAME'),detail_x+detail_w_active-136,dy,136,rename_h,false,selected and selected.builtin==true)
+    dy=dy+math.max(actual_selected_h,rename_h)+10
+    for _,line in ipairs(preview_lines) do dy=dy+text_block(line,detail_x,dy,12,saved and C.YELLOW or C.BAD,detail_w_active)+4 end
+    if count_line then dy=dy+text_block(count_line,detail_x,dy,12,C.MUTED,detail_w_active)+8 end
+    button('preset:apply',apply_title,detail_x,dy,198,action_h,false)
+    button('preset:export',say('导出文件','EXPORT FILE'),detail_x+210,dy,148,action_h,false)
+    button('preset:delete',say('删除','DELETE'),detail_x+370,dy,162,action_h,false,selected and selected.builtin==true)
+    dy=dy+action_h+10
+    dy=field('preset:path',say('导入文件路径','IMPORT FILE PATH'),PANEL.preset_path or '',detail_x,dy,detail_w_active)+10
+    dy=dy+button('preset:import',say('导入路径中的文件','IMPORT FILE FROM PATH'),detail_x,dy,detail_w_active,34,false)+10
+    dy=dy+text_block(hint_line,detail_x,dy,12,PANEL.hint and C.YELLOW or C.MUTED,detail_w_active)+6
+    if export_line then text_block(export_line,detail_x,dy,11,C.GOOD,detail_w_active) end
+    if end_viewport then end_viewport() end
 end
 -- END PRESET PANEL
 
@@ -8603,10 +8826,93 @@ local function draw_panel()
     local function measure(value, size)
         return measure_px(tostring(value), font_px(size)) / s
     end
+    local text
+
+    -- Wrap at redraw time, using the same real-font measurement as drawing. Panel
+    -- frames reuse retained GUIs, so this work runs only when their signature changes.
+    local function wrapped_lines(value, size, limit)
+        value = tostring(value or '')
+        limit = tonumber(limit) or 1
+        if limit ~= limit or limit <= 0 then limit = 1 end
+        local lines, current = {}, ''
+        local function push()
+            current = current:gsub('%s+$', '')
+            if current ~= '' then lines[#lines + 1] = current end
+            current = ''
+        end
+        local i = 1
+        while i <= #value do
+            local byte = value:byte(i)
+            local step = byte >= 0xF0 and 4 or byte >= 0xE0 and 3 or byte >= 0xC0 and 2 or 1
+            local ch = value:sub(i, math.min(#value, i + step - 1))
+            i = i + step
+            if ch == '\n' or ch == '\r' then
+                push()
+            elseif current == '' and ch:match('^%s$') then
+                -- Do not start a wrapped line with the previous word's separator.
+            elseif measure(current .. ch, size) <= limit then
+                current = current .. ch
+            else
+                local space = current:match('^.*() ')
+                if space then
+                    local prefix = current:sub(1, space - 1)
+                    local suffix = current:sub(space + 1)
+                    if prefix ~= '' then lines[#lines + 1] = prefix end
+                    current = suffix
+                    if measure(current .. ch, size) <= limit then
+                        current = current .. ch
+                    else
+                        push()
+                        current = ch
+                    end
+                else
+                    push()
+                    current = ch
+                end
+            end
+        end
+        push()
+        if #lines == 0 then lines[1] = '' end
+        return lines
+    end
+    local function wrapped_text(value, x, y, size, c, limit, align)
+        local lines = wrapped_lines(value, size, limit)
+        local line_h = math.max(size + 2, font_px(size) / s + 2)
+        for i, line in ipairs(lines) do
+            text(line, x, y + (i - 1) * line_h, size, c, limit, align)
+        end
+        return #lines * line_h
+    end
+    local function wrapped_height(value, size, limit)
+        local line_h = math.max(size + 2, font_px(size) / s + 2)
+        return #wrapped_lines(value, size, limit) * line_h
+    end
+    local function wrapped_start_pad(size)
+        return math.max(2, math.ceil((font_px(size) / s - size) * 0.5 + 2))
+    end
+    local function input_tail(value, size, limit)
+        value = tostring(value or '')
+        if measure(value, size) <= limit then return value end
+        local chars = {}
+        local i = 1
+        while i <= #value do
+            local byte = value:byte(i)
+            local step = byte >= 0xF0 and 4 or byte >= 0xE0 and 3 or byte >= 0xC0 and 2 or 1
+            chars[#chars + 1] = value:sub(i, math.min(#value, i + step - 1))
+            i = i + step
+        end
+        local shown = ''
+        for n = #chars, 1, -1 do
+            local candidate = chars[n] .. shown
+            if measure('..' .. candidate, size) > limit then break end
+            shown = candidate
+        end
+        return '..' .. shown
+    end
 
     -- Keep a readable physical size. Long labels are ellipsized rather than
     -- compressed into the former 6-pixel text. Trim whole UTF-8 characters.
-    local function text(value, x, y, size, c, limit, align)
+    text = function(value, x, y, size, c, limit, align)
         if value == nil or value == '' then return 0 end
         value = tostring(value)
         y = viewport_y(y)
@@ -8721,7 +9027,10 @@ local function draw_panel()
     -- (which is where they used to live) handed every plugin a nil palette, and the
     -- plugin's very first u.rect then failed on a nil index.
     UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
-    UX.text, UX.rect, UX.border = text, rect, border
+    UX.text, UX.wrap_text, UX.wrap_height, UX.input_tail = text, wrapped_text, wrapped_height, input_tail
+    UX.wrap_start_pad = wrapped_start_pad
+    UX.begin_viewport, UX.end_viewport = begin_viewport, end_viewport
+    UX.rect, UX.border = rect, border
     UX.colour, UX.palette = color, C
     UX.region = region
     UX.width, UX.panel_h = width, H_PANEL
@@ -8761,8 +9070,7 @@ local function draw_panel()
     --   * the body then starts under the strip.
     local PAD = 22
     local TAB_Y = 108          -- Armory puts its tab strip here
-    local TAB_H = 40           -- ...and its tabs are this tall
-    local HEAD = TAB_Y + TAB_H + 12
+    local TAB_H = 40           -- minimum height; wrapped tab titles can grow it
     local W, H = W_PANEL, H_PANEL
 
     rect(0, 0, W, H, C.BG, 950)
@@ -8816,25 +9124,23 @@ local function draw_panel()
             k = k + 1
         end
     end
-    -- one tab, width measured from its caption, exactly as Armory sizes them
+    -- Keep the strip inside the navigation controls even for long plugin names.
+    local tab_max_width = 290
+    local function tab_width(caption)
+        return math.min(tab_max_width, measure(caption, 13) + 30)
+    end
+    local page_tab_h = TAB_H
     local function tab(key, caption, x, active)
         caption = string.upper(tostring(caption))
-        local w = math.min(230, measure(caption, 15) + 30)
-        local lim = w - 20
-        if measure(caption, 11) > lim then
-            while #caption > 3 and measure(caption .. '..', 11) > lim do
-                caption = cut_utf8(caption, #caption-1)
-            end
-            caption = caption:gsub('[%s,]+$', '') .. '..'
-        end
-        rect(x, TAB_Y, w, TAB_H, active and C.PANEL or C.BG, 951)
-        border(x, TAB_Y, w, TAB_H,
+        local w, h = tab_width(caption), page_tab_h
+        rect(x, TAB_Y, w, h, active and C.PANEL or C.BG, 951)
+        border(x, TAB_Y, w, h,
                active and C.TEXT or (PANEL.hover == key and C.MUTED or C.LINE2), 952)
-        text(caption, x + 12, TAB_Y + 8, 15,
-             active and C.TEXT
-             or (PANEL.hover == key and C.TEXT or C.MUTED), w - 20)
-        if active then hatch(x + 10, TAB_Y + 28, w - 20, C.TEXT) end
-        region(key, x, TAB_Y, w, TAB_H)
+        local text_h = wrapped_height(caption, 13, w - 20)
+        wrapped_text(caption, x + w / 2, TAB_Y + math.max(4, (h - text_h) / 2), 13,
+            active and C.TEXT or (PANEL.hover == key and C.TEXT or C.MUTED), w - 20, 'center')
+        if active then hatch(x + 10, TAB_Y + h - 8, w - 20, C.TEXT) end
+        region(key, x, TAB_Y, w, h)
         return w
     end
 
@@ -8860,6 +9166,15 @@ local function draw_panel()
     local page_size = 3
     local pages = math.max(1, math.ceil(#tabs/page_size))
     PANEL.tab_page = math.max(1, math.min(pages, PANEL.tab_page or 1))
+    local visible_tabs = math.min(page_size, #tabs - (PANEL.tab_page - 1) * page_size)
+    local tab_right = pages > 1 and (W - 200) or (W - PAD)
+    tab_max_width = math.min(290, math.max(96,
+        math.floor((tab_right - PAD - math.max(0, visible_tabs - 1) * 6)
+            / math.max(1, visible_tabs))))
+    for i = (PANEL.tab_page-1)*page_size+1, math.min(#tabs,PANEL.tab_page*page_size) do
+        local title = string.upper(tostring(tabs[i].title))
+        page_tab_h = math.max(page_tab_h, wrapped_height(title, 13, tab_width(title) - 20) + 8)
+    end
     local tab_x = PAD
     local tab_keys = {}
     for i = (PANEL.tab_page-1)*page_size+1, math.min(#tabs,PANEL.tab_page*page_size) do
@@ -8872,11 +9187,12 @@ local function draw_panel()
         if PANEL.tab_page > 1 then
             tab('tabs:prev', '<', W-200, false)
         end
-        text(PANEL.tab_page .. '/' .. pages, W-135, TAB_Y+12, 12, C.MUTED)
+        text(PANEL.tab_page .. '/' .. pages, W-135, TAB_Y+math.max(12,(page_tab_h-12)/2), 12, C.MUTED)
         if PANEL.tab_page < pages then tab('tabs:next', '>', W-80, false) end
     end
     PANEL.tab_keys = tab_keys
-    local body_y = TAB_Y + TAB_H + 12
+    local body_y = TAB_Y + page_tab_h + 12
+    UX.body_y = body_y
 
     -- ---------------------------------------------------------- plugin body
     local active = PANEL.active_plugin and M.PLUGIN_BY_ID[PANEL.active_plugin] or nil
@@ -8900,7 +9216,9 @@ local function draw_panel()
         end
         -- The plugin owns the body; the default rows below are not drawn.
         UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
-        UX.text, UX.rect = text, rect
+        UX.text, UX.wrap_text, UX.wrap_height, UX.input_tail = text, wrapped_text, wrapped_height, input_tail
+        UX.begin_viewport, UX.end_viewport = begin_viewport, end_viewport
+        UX.rect = rect
         UX.border, UX.colour, UX.palette = border, color, C
         UX.region = region
         UX.width, UX.panel_h = width, H_PANEL
@@ -8931,7 +9249,7 @@ local function draw_panel()
     -- as labelled rows, which is the shape of an Armory settings page rather than a list
     -- of my own devising.
     -- Armory's two-column settings frame, with the same original dimensions.
-    local LX, LW, TOP = 22, 330, 158
+    local LX, LW, TOP = 22, 400, math.max(158, body_y + 10)
     local X0 = LX + LW + 14
     local RW, BOT = W - 22 - X0, H - 52
     rect(LX, TOP, LW, BOT - TOP, C.PANEL, 950)
@@ -8964,6 +9282,23 @@ local function draw_panel()
         region(key, x, y, w, h)
         return w
     end
+    local function wrapped_button(key, caption, x, y, w, enabled, filled, ink)
+        local limit = math.max(1, w - 18)
+        local label_h = wrapped_height(caption, 13, limit)
+        local h = math.max(30, label_h + 8)
+        local hovered = PANEL.hover == key and enabled ~= false
+        if filled then
+            rect(x, y, w, h, enabled == false and C.YELLOW_DK or C.YELLOW, 951)
+            if hovered then border(x, y, w, h, C.TEXT, 953) end
+        else
+            rect(x, y, w, h, hovered and C.ROW_HI or C.PANEL, 951)
+            border(x, y, w, h, enabled == false and C.LINE or hovered and C.TEXT or C.LINE2)
+        end
+        local c = enabled == false and C.DIM or filled and C.INK or ink or C.TEXT
+        wrapped_text(caption, x + w / 2, y + math.max(4, (h - label_h) / 2), 13, c, limit, 'center')
+        region(key, x, y, w, h)
+        return h
+    end
     local function checkbox(key, x, y, on)
         local hovered = PANEL.hover == key
         border(x, y, 16, 16, on and C.YELLOW or hovered and C.YELLOW or C.MUTED, 952)
@@ -8972,22 +9307,30 @@ local function draw_panel()
     end
 
     local function caption(cn, en) return panel_text(cn,en) end
+    local function field_height(title, width)
+        return math.max(18, wrapped_height(title, 11, width) + 4) + 30
+    end
     local function field(key, title, value, y)
-        label(title, IX, y)
+        local title_h = wrapped_text(title, IX, y, 11, C.YELLOW, IW)
+        local field_y = y + math.max(18, title_h + 4)
         local focus = PANEL.edit_field == key and PANEL.editing
         local shown = focus and (PANEL.edit_text or value) or value
-        rect(IX, y + 18, IW, 30, focus and C.ROW_HI or C.FIELD, 951)
-        border(IX, y + 18, IW, 30, focus and C.YELLOW or C.LINE2, 952)
-        text(cut(tostring(shown) .. (focus and '_' or ''), 14, IW - 18),
-             IX + 8, y + 25, 14, focus and C.TEXT or C.MUTED, IW - 18)
-        region(key:match('^option:') and key or ('task:' .. key), IX, y + 18, IW, 30)
+        local visible = focus and input_tail(tostring(shown) .. '_', 14, IW - 18)
+            or cut(tostring(shown), 14, IW - 18)
+        rect(IX, field_y, IW, 30, focus and C.ROW_HI or C.FIELD, 951)
+        border(IX, field_y, IW, 30, focus and C.YELLOW or C.LINE2, 952)
+        text(visible, IX + 8, field_y + 7, 14, focus and C.TEXT or C.MUTED, IW - 18)
+        region(key:match('^option:') and key or ('task:' .. key), IX, field_y, IW, 30)
+        return field_y + 30
     end
     local editing_role = PANEL.profile or 'host'
-    button('profile:host', caption('主机预设', 'HOST PRESET'), 614, 48, 146, 30, true, editing_role == 'host')
-    button('profile:client', caption('客机预设', 'CLIENT PRESET'), 768, 48, 146, 30, true, editing_role == 'client')
+    local profile_h1 = wrapped_button('profile:host', caption('主机', 'HOST'),
+        614, 48, 146, true, editing_role == 'host')
+    local profile_h2 = wrapped_button('profile:client', caption('客机', 'CLIENT'),
+        768, 48, 146, true, editing_role == 'client')
     local current_role = automation.sync()
     text(caption('当前身份：' .. (current_role == 'host' and '主机' or current_role == 'client' and '客机' or '等待确认'),
-         'ACTIVE: ' .. (current_role or 'WAITING'):upper()), 614, 86, 12, C.MUTED, 300)
+         'ACTIVE: ' .. (current_role or 'WAITING'):upper()), 614, 48 + math.max(profile_h1, profile_h2) + 8, 12, C.MUTED, 300)
     local y = TOP + 14
     head(IX, y, 'AUTOCHAT', PANEL.settings_view == 'automation' and caption('自动消息设置', 'AUTO MESSAGE SETTINGS')
         or PANEL.settings_view == 'pings' and caption('玩家标记消息', 'PLAYER PING MESSAGES')
@@ -8997,111 +9340,229 @@ local function draw_panel()
     local navw = (IW - 12) / 3
     button('view:tasks', caption('定时任务', 'TASKS'), IX, y, navw, 30, true,
            PANEL.settings_view ~= 'automation' and PANEL.settings_view ~= 'pings')
-    button('view:automation', caption('自动消息', 'AUTO SEND'), IX + navw + 6,
+    button('view:automation', caption('自动消息', 'AUTO'), IX + navw + 6,
            y, navw, 30, true, PANEL.settings_view == 'automation')
     button('view:pings', caption('标记消息', 'PING'), IX + 2 * (navw + 6),
            y, navw, 30, true, PANEL.settings_view == 'pings')
     y = y + 44
     if PANEL.settings_view == 'pings' and M.options then
         local pings_top = y
-        -- Content is eight 34px options, two 34px links, three fields with their
-        -- current spacing, and ten 18px help rows plus the optional status line.
-        local pings_content_h = 8*34 + 2*34 + 64 + 58 + 58 + 230 + 14
-        local pings_view = begin_viewport('pings', IX, pings_top, IW,
-            math.max(1, BOT - 8 - pings_top), pings_content_h, 34)
-        IW = pings_view.w
         local opts = automation.profile(PANEL.profile or 'host')
-        for _, item in ipairs({{'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
-            {'ping_building','任务建筑','MISSION BUILDINGS'}, {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
+        local pings_width = IW - 14
+        local ping_fields = {
+            caption('标记提示消息', 'PING MESSAGE'),
+            caption('召唤提示消息', 'CALL-IN MESSAGE'),
+            caption('任务执行消息', 'TASK ACTION MESSAGE'),
+        }
+        local pings_options = {
+            {'ping','玩家标记自动消息','ENABLE PING MESSAGES'},
+            {'ping_building','任务建筑','MISSION BUILDINGS'},
+            {'ping_stratagem','战备物品标记','STRATAGEM EQUIPMENT'},
             {'ping_supplies','普通物资','ORDINARY SUPPLIES'},
             {'ping_summon','战备召唤 / 任务执行','CALL-INS / TASK ACTIONS'},
             {'ping_map','地图任务 / 撤离区','MAP OBJECTIVES / EXTRACTION'},
             {'ping_sender_prefix','显示触发者缩写','TRIGGER PLAYER PREFIX'},
-            {'ping_sender_color','玩家名称与缩写使用队员颜色','PLAYER NAME AND PREFIX COLOR'}}) do
-            button('opt:' .. item[1], caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]'),
-                   IX, y, IW, 30, true, opts[item[1]])
-            y = y + 34
+            {'ping_sender_color','玩家名称与缩写使用队员颜色','PLAYER NAME AND PREFIX COLOR'},
+        }
+        local pings_links = {
+            {'rules:open:stratagem', caption('战备细分设置 →','STRATAGEM RULES >')},
+            {'rules:open:enemy', caption('敌人体型 / 飞行提醒 →','ENEMY / FLYING RULES >')},
+        }
+        local function pings_button_height(title)
+            return math.max(30, wrapped_height(title, 13, pings_width - 18) + 8)
         end
-        button('rules:open:stratagem',caption('战备细分设置 →','STRATAGEM RULES >'),IX,y,IW,30,true,false);y=y+34
-        button('rules:open:enemy',caption('敌人体型 / 飞行提醒 →','ENEMY / FLYING RULES >'),IX,y,IW,30,true,false);y=y+34
-        field('option:ping_message', caption('标记提示消息', 'PING MESSAGE'), opts.ping_message, y)
-        y = y + 64
-        field('option:summon_message', caption('召唤提示消息', 'CALL-IN MESSAGE'), opts.summon_message, y)
-        y = y + 58
-        field('option:task_stratagem_message', caption('任务执行消息', 'TASK ACTION MESSAGE'), opts.task_stratagem_message, y)
-        y = y + 58
-        text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
-        text(panel_status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
-        text(panel_status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
-        text('{玩家名}/{player_name}', IX, y + 62, 12, C.MUTED, IW)
-        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 80, 12, C.MUTED, IW)
-        text('{目标}/{target}', IX, y + 98, 12, C.MUTED, IW)
-        text('{战备}/{stratagem}', IX, y + 116, 12, C.MUTED, IW)
-        text('{类别}/{category}', IX, y + 134, 12, C.MUTED, IW)
-        text('{动作}/{action}', IX, y + 152, 12, C.MUTED, IW)
-        text('{任务名}/{objective}', IX, y + 170, 12, C.MUTED, IW)
-        text('{任务类型}/{objective_type}', IX, y + 188, 12, C.MUTED, IW)
-        text('{位置}/{position}', IX, y + 206, 12, C.MUTED, IW)
-        if PANEL.hint then text(panel_status(PANEL.hint), IX, y + 230, 11, C.YELLOW, IW) end
+        local ping_tail = {
+            {caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), 12, C.YELLOW},
+            {panel_status(M.ping_status or '等待标记数据'), 12, C.MUTED},
+            {panel_status(M.task_stratagem_status or '等待任务战备数据'), 12, C.MUTED},
+            {'{玩家名}/{player_name}', 12, C.MUTED},
+            {'{缩写}/{abbr}  ·  {编号}/{slot}', 12, C.MUTED},
+            {'{目标}/{target}', 12, C.MUTED},
+            {'{战备}/{stratagem}', 12, C.MUTED},
+            {'{类别}/{category}', 12, C.MUTED},
+            {'{动作}/{action}', 12, C.MUTED},
+            {'{任务名}/{objective}', 12, C.MUTED},
+            {'{任务类型}/{objective_type}', 12, C.MUTED},
+            {'{位置}/{position}', 12, C.MUTED},
+        }
+        if PANEL.hint then ping_tail[#ping_tail + 1] = {panel_status(PANEL.hint), 11, C.YELLOW} end
+        local pings_content_h = 0
+        for _, item in ipairs(pings_options) do
+            local title = caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]')
+            pings_content_h = pings_content_h + pings_button_height(title) + 4
+        end
+        for _, item in ipairs(pings_links) do
+            pings_content_h = pings_content_h + pings_button_height(item[2]) + 4
+        end
+        for _, title in ipairs(ping_fields) do
+            pings_content_h = pings_content_h + field_height(title, pings_width) + 10
+        end
+        for _, item in ipairs(ping_tail) do
+            pings_content_h = pings_content_h + wrapped_height(item[1], item[2], pings_width) + 4
+        end
+        local content_pad = wrapped_start_pad(13)
+        pings_content_h = pings_content_h + content_pad
+        local pings_view = begin_viewport('pings', IX, pings_top, IW,
+            math.max(1, BOT - 8 - pings_top), pings_content_h, 34)
+        IW = pings_view.w
+        y = y + content_pad
+        for _, item in ipairs(pings_options) do
+            local title = caption(item[2], item[3]) .. (opts[item[1]] and ' [ON]' or ' [OFF]')
+            y = y + wrapped_button('opt:' .. item[1], title, IX, y, IW, true, opts[item[1]]) + 4
+        end
+        for _, item in ipairs(pings_links) do
+            y = y + wrapped_button(item[1], item[2], IX, y, IW, true, false) + 4
+        end
+        y = field('option:ping_message', ping_fields[1], opts.ping_message, y) + 10
+        y = field('option:summon_message', ping_fields[2], opts.summon_message, y) + 10
+        y = field('option:task_stratagem_message', ping_fields[3], opts.task_stratagem_message, y) + 10
+        for _, item in ipairs(ping_tail) do
+            y = y + wrapped_text(item[1], IX, y, item[2], item[3], IW) + 4
+        end
         end_viewport()
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
+        local form_top, form_width = y, IW - 14
+        local toggle_titles = {
+            caption('自动发送总开关', 'ENABLE AUTO SEND') .. (opts.enabled and ' [ON]' or ' [OFF]'),
+            caption('无人房间也发送', 'ALLOW SOLO SEND') .. (opts.allow_solo and ' [ON]' or ' [OFF]'),
+            caption('新人加入自动欢迎', 'WELCOME NEW PLAYERS') .. (opts.welcome and ' [ON]' or ' [OFF]'),
+        }
+        local function auto_toggle_height(title)
+            return math.max(30, wrapped_height(title, 13, form_width - 18) + 8) + 10
+        end
+        local auto_content_h = auto_toggle_height(toggle_titles[1])
+            + wrapped_height(caption('消息输出方式', 'MESSAGE OUTPUT'), 11, form_width) + 4
+            + 30 + 10 + auto_toggle_height(toggle_titles[2])
+            + field_height(caption('标记/召唤提醒间隔（秒）', 'PING / CALL INTERVAL (SECONDS)'), form_width) + 10
+            + wrapped_height(caption('按触发玩家分别计时；0为不限制',
+                'EACH TRIGGER PLAYER HAS A SEPARATE TIMER; 0 = UNLIMITED'), 10, form_width) + 8
+            + auto_toggle_height(toggle_titles[3])
+            + field_height(caption('欢迎消息', 'WELCOME MESSAGE'), form_width) + 10
+            + field_height(caption('欢迎延迟（秒）', 'WELCOME DELAY (SECONDS)'), form_width) + 12
+            + 30 + 14
+        local auto_tail = {
+            {PANEL.hint and panel_status(PANEL.hint)
+                or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'), 12},
+            {'{玩家名}/{player_name}', 12},
+            {'{缩写}/{abbr}  ·  {编号}/{slot}', 12},
+        }
+        for _, item in ipairs(auto_tail) do
+            auto_content_h = auto_content_h + wrapped_height(item[1], item[2], form_width) + 4
+        end
+        local content_pad = wrapped_start_pad(13)
+        auto_content_h = auto_content_h + content_pad
+        local auto_view = begin_viewport('automation', IX, form_top, IW,
+            math.max(1, BOT - 8 - form_top), auto_content_h, 34)
+        IW = auto_view.w
+        y = y + content_pad
         local function toggle(key, zh, en)
-            button('opt:' .. key, caption(zh, en) .. (opts[key] and ' [ON]' or ' [OFF]'),
-                   IX, y, IW, 30, true, opts[key])
-            y = y + 40
+            local title = caption(zh, en) .. (opts[key] and ' [ON]' or ' [OFF]')
+            local h = wrapped_button('opt:' .. key, title,
+                IX, y, IW, true, opts[key])
+            y = y + h + 10
         end
         toggle('enabled', '自动发送总开关', 'ENABLE AUTO SEND')
-        label(caption('消息输出方式', 'MESSAGE OUTPUT'), IX, y)
-        y = y + 18
+        y = y + wrapped_text(caption('消息输出方式', 'MESSAGE OUTPUT'), IX, y, 11, C.YELLOW, IW) + 4
         button('output:squad', caption('小队公屏', 'SQUAD CHAT'), IX, y, (IW - 8)/2, 30, true, opts.output == 'squad')
         button('output:local', caption('仅自己可见', 'ONLY ME'), IX + (IW + 8)/2, y, (IW - 8)/2, 30, true, opts.output == 'local')
         y = y + 40
         toggle('allow_solo', '无人房间也发送', 'ALLOW SOLO SEND')
-        field('option:cooldown', caption('标记/召唤提醒间隔（秒）', 'PING / CALL INTERVAL (SECONDS)'), tostring(opts.cooldown), y)
-        y = y + 64
-        text(caption('按触发玩家分别计时；0为不限制', 'EACH TRIGGER PLAYER HAS A SEPARATE TIMER; 0 = UNLIMITED'),
-             IX, y - 13, 10, C.DIM, IW)
+        y = field('option:cooldown', caption('标记/召唤提醒间隔（秒）', 'PING / CALL INTERVAL (SECONDS)'), tostring(opts.cooldown), y) + 10
+        y = y + wrapped_text(caption('按触发玩家分别计时；0为不限制', 'EACH TRIGGER PLAYER HAS A SEPARATE TIMER; 0 = UNLIMITED'),
+             IX, y, 10, C.DIM, IW) + 8
         toggle('welcome', '新人加入自动欢迎', 'WELCOME NEW PLAYERS')
-        field('option:welcome_message', caption('欢迎消息', 'WELCOME MESSAGE'), opts.welcome_message, y)
-        y = y + 64
-        field('option:welcome_delay', caption('欢迎延迟（秒）', 'WELCOME DELAY (SECONDS)'), tostring(opts.welcome_delay), y)
-        y = y + 66
+        y = field('option:welcome_message', caption('欢迎消息', 'WELCOME MESSAGE'), opts.welcome_message, y) + 10
+        y = field('option:welcome_delay', caption('欢迎延迟（秒）', 'WELCOME DELAY (SECONDS)'), tostring(opts.welcome_delay), y) + 12
         button('view:pings', caption('玩家标记分类设置 >', 'PING CATEGORIES >'), IX, y, IW, 30, true)
         y = y + 44
-        text(PANEL.hint and panel_status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
-             IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW)
-        text('{玩家名}/{player_name}', IX, y + 38, 12, C.DIM, IW)
-        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 58, 12, C.DIM, IW)
+        y = y + wrapped_text(PANEL.hint and panel_status(PANEL.hint)
+            or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
+            IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW) + 6
+        y = y + wrapped_text('{玩家名}/{player_name}', IX, y, 12, C.DIM, IW) + 2
+        wrapped_text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y, 12, C.DIM, IW)
+        end_viewport()
     else
-    field('name', caption('事件名称', 'EVENT NAME'), draft.name, y)
-    y = y + 62
-    label(caption('定时类型', 'SCHEDULE TYPE'), IX, y)
-    y = y + 18
+    local form_top, form_width = y, IW - 14
+    local selected_task_detail
+    if PANEL.selected_task_detail_id then
+        for _, task in ipairs(M.profile_task_view(PANEL.profile or 'host')) do
+            if task.id == PANEL.selected_task_detail_id then selected_task_detail = task; break end
+        end
+        if not selected_task_detail then PANEL.selected_task_detail_id = nil end
+    end
+    local task_name_title = caption('事件名称', 'EVENT NAME')
+    local schedule_title = caption('定时类型', 'SCHEDULE TYPE')
+    local time_title = draft.mode == 'daily' and caption('每天发送时间 (HH:MM)', 'LOCAL TIME (HH:MM)')
+        or caption('时间（秒）', 'TIME (SECONDS)')
+    local message_title = caption('发送消息', 'MESSAGE TO SEND')
+    local task_help = {
+        {PANEL.hint and panel_status(PANEL.hint) or caption('点击输入框填写；Enter 确认', 'CLICK TO TYPE; ENTER CONFIRMS'), 12, 2},
+        {caption('Esc 取消', 'ESC CANCELS'), 12, 2},
+        {caption('填写完成后点击“添加任务”，任务才会保存并进入预设',
+                 'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), 11, 4},
+        {caption('重复 / 倒计时：5 秒至 24 小时', 'REPEAT / COUNTDOWN: 5 S TO 24 H'), 12, 4},
+        {caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), 12, 4},
+        {'{玩家名}/{player_name}', 12, 2},
+        {'{缩写}/{abbr}  ·  {编号}/{slot}', 12, 0},
+    }
+    local task_mode_w = (form_width - 8) / 2
+    local mode_heights = {
+        math.max(30, wrapped_height(caption('重复间隔', 'REPEAT'), 13, task_mode_w - 18) + 8),
+        math.max(30, wrapped_height(caption('一次倒计时', 'COUNTDOWN'), 13, task_mode_w - 18) + 8),
+        math.max(30, wrapped_height(caption('每天定时', 'DAILY'), 13, task_mode_w - 18) + 8),
+    }
+    local task_content_h = field_height(task_name_title, form_width) + 10
+        + wrapped_height(schedule_title, 11, form_width) + 4
+        + math.max(mode_heights[1], mode_heights[2]) + 6 + mode_heights[3] + 8
+        + field_height(time_title, form_width) + 10
+        + field_height(message_title, form_width) + 12
+        + 43
+    for _, item in ipairs(task_help) do
+        task_content_h = task_content_h + wrapped_height(item[1], item[2], form_width) + item[3]
+    end
+    if selected_task_detail then
+        task_content_h = task_content_h + wrapped_height(caption('所选任务详情', 'TASK DETAILS'), 12, form_width) + 4
+            + wrapped_height(selected_task_detail.name, 12, form_width) + 4
+            + wrapped_height(selected_task_detail.message, 12, form_width) + 8
+    end
+    local content_pad = wrapped_start_pad(13)
+    task_content_h = task_content_h + content_pad
+    local task_form_view = begin_viewport('task_form', IX, form_top, IW,
+        math.max(1, BOT - 8 - form_top), task_content_h, 34)
+    IW = task_form_view.w
+    y = y + content_pad
+    y = field('name', caption('事件名称', 'EVENT NAME'), draft.name, y) + 10
+    y = y + wrapped_text(schedule_title, IX, y, 11, C.YELLOW, IW) + 4
     local modes = {{'repeat', '重复间隔', 'REPEAT'}, {'once', '一次倒计时', 'COUNTDOWN'},
                    {'daily', '每天定时', 'DAILY'}}
-    local bw = (IW - 12) / 3
-    for i, mode in ipairs(modes) do
-        button('mode:' .. mode[1], caption(mode[2], mode[3]), IX + (i - 1) * (bw + 6),
-               y, bw, 30, true, draft.mode == mode[1])
-    end
-    y = y + 44
-    field('time', draft.mode == 'daily' and caption('每天发送时间 (HH:MM)', 'LOCAL TIME (HH:MM)')
-          or caption('时间（秒）', 'TIME (SECONDS)'), draft.time, y)
-    y = y + 62
-    field('message', caption('发送消息', 'MESSAGE TO SEND'), draft.message, y)
-    y = y + 62
+    local bw = (IW - 8) / 2
+    local mode_h1 = math.max(30, wrapped_height(caption(modes[1][2], modes[1][3]), 13, bw - 18) + 8)
+    local mode_h2 = math.max(30, wrapped_height(caption(modes[2][2], modes[2][3]), 13, bw - 18) + 8)
+    local mode_h3 = math.max(30, wrapped_height(caption(modes[3][2], modes[3][3]), 13, bw - 18) + 8)
+    wrapped_button('mode:repeat', caption(modes[1][2], modes[1][3]), IX, y, bw, true,
+           draft.mode == modes[1][1])
+    wrapped_button('mode:once', caption(modes[2][2], modes[2][3]), IX + bw + 8, y, bw, true,
+           draft.mode == modes[2][1])
+    y = y + math.max(mode_h1, mode_h2) + 6
+    wrapped_button('mode:daily', caption(modes[3][2], modes[3][3]), IX, y, bw, true,
+           draft.mode == modes[3][1])
+    y = y + mode_h3 + 8
+    y = field('time', time_title, draft.time, y) + 10
+    y = field('message', message_title, draft.message, y) + 12
     button('task:add', caption('添加定时任务', 'ADD TASK'), IX, y, IW, 32, true, true)
     y = y + 43
-    text(PANEL.hint and panel_status(PANEL.hint) or caption('点击输入框填写；Enter 确认', 'CLICK TO TYPE; ENTER CONFIRMS'),
-         IX, y, 12, PANEL.hint and C.YELLOW or C.DIM, IW)
-        text(caption('Esc 取消', 'ESC CANCELS'), IX, y + 17, 12, PANEL.hint and C.YELLOW or C.DIM, IW)
-        text(caption('填写完成后点击“添加任务”，任务才会保存并进入预设',
-                     'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 38, 11, C.MUTED, IW)
-        text(caption('重复 / 倒计时：5 秒至 24 小时', 'REPEAT / COUNTDOWN: 5 S TO 24 H'), IX, y + 58, 12, C.MUTED, IW)
-        text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 78, 12, C.MUTED, IW)
-        text('{玩家名}/{player_name}', IX, y + 98, 12, C.DIM, IW)
-        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 116, 12, C.DIM, IW)
+    for i, item in ipairs(task_help) do
+        y = y + wrapped_text(item[1], IX, y, item[2],
+            i <= 2 and PANEL.hint and C.YELLOW or i <= 2 and C.DIM or i <= 5 and C.MUTED or C.DIM,
+            IW) + item[3]
+    end
+    if selected_task_detail then
+        y = y + wrapped_text(caption('所选任务详情', 'TASK DETAILS'), IX, y, 12, C.YELLOW, IW) + 4
+        y = y + wrapped_text(selected_task_detail.name, IX, y, 12, C.TEXT, IW) + 4
+        y = y + wrapped_text(selected_task_detail.message, IX, y, 12, C.MUTED, IW) + 8
+    end
+    end_viewport()
     end
     -- The right column uses the same row controls as the settings form.
     IX, IW = RX, RIW
@@ -9136,6 +9597,7 @@ local function draw_panel()
                and caption('暂停', 'PAUSE') or caption('启用', 'ENABLE'),
                IX + IW - 136, row_y + 7, 72, 28, true)
         button('delete:' .. t.id, caption('删除', 'DEL'), IX + IW - 58, row_y + 7, 50, 28, true)
+        region('task:details:' .. t.id, IX, row_y, IW - 148, 68)
     end
     end_viewport()
     -- Fixed footer keeps pagination reachable on both empty and full pages.
@@ -9151,7 +9613,9 @@ local function draw_panel()
     text(caption('仅在游戏运行时执行 · 本机时间', 'WHILE GAME RUNS / LOCAL TIME'), IX, H - 30, 11, C.DIM, IW)
 
     UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
-    UX.text, UX.rect = text, rect
+    UX.text, UX.wrap_text, UX.wrap_height, UX.input_tail = text, wrapped_text, wrapped_height, input_tail
+    UX.begin_viewport, UX.end_viewport = begin_viewport, end_viewport
+    UX.rect = rect
     UX.border, UX.colour, UX.palette = border, color, C
     UX.region = region
     UX.width, UX.panel_h = width, H_PANEL
@@ -9545,7 +10009,8 @@ local function panel_frame()
             PANEL.hint = nil
         elseif hovered == 'preset:prev' or hovered == 'preset:next' then
             local role=PANEL.profile or 'host'
-            local pages = math.max(1, math.ceil(#preset_library._list_view(role)/16))
+            local page_size=PANEL.preset_page_size_by_role and PANEL.preset_page_size_by_role[role] or 16
+            local pages = math.max(1, math.ceil(#preset_library._list_view(role)/page_size))
             PANEL.preset_page_by_role[role] = math.max(1, math.min(pages, (PANEL.preset_page_by_role[role] or 1)
                 + (hovered == 'preset:next' and 1 or -1)))
         elseif preset_field then
@@ -9558,7 +10023,8 @@ local function panel_frame()
             PANEL.hint = ok and '已保存当前自动消息配置' or why
             if ok then
                 PANEL.preset_selected_by_role[role] = id
-                PANEL.preset_page_by_role[role] = math.ceil(#preset_library._list_view(role)/16)
+                local page_size=PANEL.preset_page_size_by_role and PANEL.preset_page_size_by_role[role] or 16
+                PANEL.preset_page_by_role[role] = math.ceil(#preset_library._list_view(role)/page_size)
                 save_preset_selection()
             end
         elseif hovered == 'preset:replace' then
@@ -9647,7 +10113,8 @@ local function panel_frame()
             PANEL.hint = ok and '预设已导入，请选择后加载' or why
             if ok then
                 PANEL.preset_selected_by_role[role] = id
-                PANEL.preset_page_by_role[role] = math.ceil(#preset_library._list_view(role)/16)
+                local page_size=PANEL.preset_page_size_by_role and PANEL.preset_page_size_by_role[role] or 16
+                PANEL.preset_page_by_role[role] = math.ceil(#preset_library._list_view(role)/page_size)
                 save_preset_selection()
             end
         elseif option then
@@ -9679,6 +10146,9 @@ local function panel_frame()
             PANEL.scrollbar_drag = nil
             PANEL.preset_view = nil
             PANEL.hint = nil
+        elseif hovered:match('^task:details:(%d+)$') then
+            PANEL.selected_task_detail_id = tonumber(hovered:match('^task:details:(%d+)$'))
+            PANEL.scroll_offsets.task_form = 1000000000
         elseif field then
             PANEL.editing, PANEL.edit_field, PANEL.edit_text = true, field, draft[field]
             PANEL.hint = 'Enter 确认 / Esc 取消 / Ctrl+V 粘贴'

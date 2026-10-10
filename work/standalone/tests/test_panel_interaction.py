@@ -156,6 +156,47 @@ class PanelInteractionTest(unittest.TestCase):
         lua.eval('update()')
         self.assertLessEqual(mod.debug_panel()['scroll_offsets']['tasks'], 103 * 76)
 
+    def test_selecting_task_row_shows_full_name_and_message_without_mutating_task(self):
+        lua, h = fresh_image(font_ids=True)
+        mod = h.load(SOURCE)
+        full_name = 'A very long task name that does not fit in one compact row'
+        full_message = 'A very long scheduled message whose full text remains available in the details pane'
+        lua.globals().full_name = full_name
+        lua.globals().full_message = full_message
+        lua.execute("assert(HD2AutoChat.add_task(full_name,'repeat','30',full_message,nil,'host'))")
+        mod.debug_set_open(True)
+        lua.execute('for i=1,601 do update() end')
+        panel = mod.debug_panel()
+        details = self._region(panel, 'task:details:1')
+        toggle = self._region(panel, 'toggle:1')
+        delete = self._region(panel, 'delete:1')
+        self.assertIsNotNone(details)
+        self.assertIsNotNone(toggle)
+        self.assertIsNotNone(delete)
+        self.assertLessEqual(details['x'] + details['w'], toggle['x'])
+        enabled_before = bool(mod.tasks[1]['enabled'])
+        lua.execute('''
+            captured_task_detail_text={}
+            local original=stingray.Gui.text
+            stingray.Gui.text=function(gui,value,font,size,material,pos,color)
+                captured_task_detail_text[#captured_task_detail_text+1]=tostring(value)
+                return original(gui,value,font,size,material,pos,color)
+            end''')
+        h.mouse_x = details['x'] + details['w'] / 2
+        h.mouse_y = 1080 - details['y'] - details['h'] / 2
+        h.user32.set_key(1, True); lua.eval('update()')
+        h.user32.set_key(1, False); lua.eval('update()')
+        panel = mod.debug_panel()
+        self.assertEqual(1, panel['selected_task_detail_id'])
+        self.assertGreater(panel['scroll_offsets']['task_form'], 0)
+        drawn = ' '.join(str(lua.globals().captured_task_detail_text[i])
+                         for i in range(1, len(lua.globals().captured_task_detail_text)+1))
+        self.assertIn(full_name, drawn)
+        self.assertIn(full_message, drawn)
+        self.assertEqual(enabled_before, bool(mod.tasks[1]['enabled']),
+                         'the details hit target must not toggle the task')
+        self.assertEqual(1, len(mod.tasks))
+
     def test_background_k_cannot_open_or_capture_cursor(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)

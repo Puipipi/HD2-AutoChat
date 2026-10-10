@@ -911,13 +911,13 @@ class AutoChatProbeTest(unittest.TestCase):
     def test_build_identity_is_distinct_from_product_version_and_logged(self):
         _, h, mod = self.fresh()
         self.assertEqual("1.0.0", mod.version)
-        self.assertEqual("v1.0.0-build.7", mod.build_id)
-        self.assertIn("AutoChat v1.0.0 starting (build v1.0.0-build.7; send + panel)",
+        self.assertEqual("v1.0.0-build.8", mod.build_id)
+        self.assertIn("AutoChat v1.0.0 starting (build v1.0.0-build.8; send + panel)",
                       h.log_text())
         written = h.written()
         status = "".join(written[i]["text"] for i in range(1, len(written) + 1)
                          if written[i]["path"].endswith("AutoChat-STATUS.txt"))
-        self.assertIn("build       : v1.0.0-build.7", status)
+        self.assertIn("build       : v1.0.0-build.8", status)
 
     def test_observation_reports_the_synthetic_values(self):
         lua, h, mod = self.fresh()
@@ -1852,8 +1852,8 @@ class AutoChatProbeTest(unittest.TestCase):
             current_mod = current_h.load(SOURCE)
             self.assertEqual(74, len(legacy_mod.debug_panel_signature().split("|")),
                              "the reference must exercise all original signature fields")
-            self.assertEqual(77, len(current_mod.debug_panel_signature().split("|")),
-                             "the current signature includes three panel-state fields")
+            self.assertEqual(81, len(current_mod.debug_panel_signature().split("|")),
+                             "the current signature includes the retained panel-state fields")
 
             def signature_parts(mod):
                 return mod.debug_panel_signature().split("|")
@@ -1862,7 +1862,7 @@ class AutoChatProbeTest(unittest.TestCase):
                 legacy_parts = signature_parts(legacy_mod)
                 current_parts = signature_parts(current_mod)
                 self.assertEqual(74, len(legacy_parts))
-                self.assertEqual(77, len(current_parts))
+                self.assertEqual(81, len(current_parts))
                 # Slot 62 used to be task_page. It is deliberately constant now;
                 # normalize only that known schema change before comparing all
                 # remaining legacy fields.
@@ -1914,6 +1914,23 @@ class AutoChatProbeTest(unittest.TestCase):
             current_mod.ui_preview_language = None
             self.assertEqual("zh", signature_parts(current_mod)[76],
                              "clearing preview follows the game locale")
+            current_panel['scroll_offsets']['rules_detail'] = 19
+            rules_signature = signature_parts(current_mod)
+            self.assertEqual('19', rules_signature[77], 'slot 78 records alert detail scrolling')
+            current_panel['scroll_offsets']['rules_detail'] = 0
+            current_panel['scroll_offsets']['automation'] = 23
+            current_panel['scroll_offsets']['task_form'] = 29
+            form_signature = signature_parts(current_mod)
+            self.assertEqual('23:29', form_signature[78], 'slot 79 records both settings form offsets')
+            current_panel['scroll_offsets']['automation'] = 0
+            current_panel['scroll_offsets']['task_form'] = 0
+            current_panel['scroll_offsets']['preset_detail'] = 31
+            preset_signature = signature_parts(current_mod)
+            self.assertEqual('31', preset_signature[79], 'slot 80 records preset detail scrolling')
+            current_panel['scroll_offsets']['preset_detail'] = 0
+            current_panel['selected_task_detail_id'] = 42
+            task_detail_signature = signature_parts(current_mod)
+            self.assertEqual('42', task_detail_signature[80], 'slot 81 records selected task details')
         finally:
             Path(legacy_path).unlink(missing_ok=True)
 

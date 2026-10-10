@@ -135,11 +135,12 @@ class ArmoryFrameTest(unittest.TestCase):
                              "%s must be Armory's value (%d), not an invention"
                              % (name, expected))
 
-        # And the three things that must agree about that rectangle must all use them.
+        # Wrapped tab titles may grow beyond TAB_H. Fill, border, and hitbox must
+        # still share the same computed h so visual and interactive bounds agree.
         for label, literal in [
-                ("tab fill", "rect(x, TAB_Y, w, TAB_H"),
-                ("tab border", "border(x, TAB_Y, w, TAB_H"),
-                ("tab hit region", "region(key, x, TAB_Y, w, TAB_H)")]:
+                ("tab fill", "rect(x, TAB_Y, w, h,"),
+                ("tab border", "border(x, TAB_Y, w, h,"),
+                ("tab hit region", "region(key, x, TAB_Y, w, h)")]:
             self.assertIn(literal, source,
                           "the %s must be drawn from the same named rectangle, or the "
                           "click area can disagree with what is drawn" % label)
@@ -149,7 +150,8 @@ class ArmoryFrameTest(unittest.TestCase):
                 ("background fill at z950", "rect(0, 0, W, H, C.BG, 950)"),
                 ("outer border at z955", "border(0, 0, W, H, C.LINE, 955)"),
                 ("yellow strip along the TOP edge", "rect(0, 0, W, 3, C.YELLOW, 952)"),
-                ("tab width capped at 230", "math.min(230")]:
+                ("tab width capped at its computed bound", "math.min(tab_max_width"),
+                ("tab maximum remains 290 units", "local tab_max_width = 290")]:
             self.assertIn(literal, source,
                           "the panel frame is missing Armory's %s; an invented frame is "
                           "what the user rejected" % label)

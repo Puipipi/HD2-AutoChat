@@ -218,18 +218,23 @@ class PresetPanelTests(unittest.TestCase):
                 dx = min(a.x+a.w,b.x+b.w)-max(a.x,b.x)
                 dy = min(a.y+a.h,b.y+b.h)-max(a.y,b.y)
                 self.assertFalse(dx > 1 and dy > 1, (a.key,b.key))
-        self.assertTrue(any(r.key == 'preset:select:P00000014' for r in regions))
+        page_size = mod.debug_panel().preset_page_size_by_role['host']
+        self.assertEqual(page_size, len([r for r in regions if r.key.startswith('preset:select:')]))
+        first_page_custom = max(0, page_size - 2)  # the two built-in presets precede saved entries
+        self.assertTrue(any(r.key == 'preset:select:P%08d' % first_page_custom for r in regions))
         self.click(lua, h, mod, 'preset:next')
         lua.execute('for i=1,3 do update() end')
         self.assertEqual(2, mod.debug_panel().preset_page_by_role['host'])
         boxes = mod.debug_panel().regions
-        self.assertTrue(any(boxes[i].key == 'preset:select:P00000030'
+        second_page_last = min(40, page_size * 2 - 2)
+        self.assertTrue(any(boxes[i].key == 'preset:select:P%08d' % second_page_last
                             for i in range(1,len(boxes)+1)))
         self.click(lua, h, mod, 'preset:next')
         lua.execute('for i=1,3 do update() end')
         self.assertEqual(3, mod.debug_panel().preset_page_by_role['host'])
         boxes = mod.debug_panel().regions
-        self.assertTrue(any(boxes[i].key == 'preset:select:P00000040'
+        third_page_last = min(40, page_size * 3 - 2)
+        self.assertTrue(any(boxes[i].key == 'preset:select:P%08d' % third_page_last
                             for i in range(1,len(boxes)+1)))
 
     def test_builtins_keep_fixed_names_default_to_english_highlight_and_disable_mutations(self):
@@ -463,6 +468,85 @@ class PresetPanelTests(unittest.TestCase):
         self.assertTrue(any('当前配置输出：仅自己可见' in s for s in labels), labels)
         self.assertEqual('local', automation.profile('client').output)
         self.assertEqual('local', automation.profile('client').output)
+
+    def test_long_preset_name_wraps_and_edit_field_keeps_visible_tail(self):
+        lua, h, mod = self.fresh()
+        h.res_w, h.res_h = 960, 540
+        mod.debug_language().update('en', 0)
+        name = 'LongCustomPresetName-' * 4
+        ok, _, preset_id = mod.debug_preset_library().save(name, 'host')
+        self.assertTrue(ok)
+        panel = mod.debug_panel()
+        panel.preset_view = True
+        panel.preset_selected_by_role['host'] = preset_id
+        lua.execute('''captured_text={}
+            stingray.Gui.text=function(gui,value,...)captured_text[#captured_text+1]=tostring(value)end
+            stingray.Gui.text_extents=function(gui,value,face,size)return {x=0},{x=#tostring(value)*size*.65}end''')
+        lua.execute('for i=1,3 do update() end')
+        shown = ''.join(str(lua.globals().captured_text[i])
+                        for i in range(1, len(lua.globals().captured_text)+1)).replace(' ', '')
+        self.assertIn(name, shown, 'the selected preset name must be readable beyond the old one-line cut')
+        panel.editing, panel.edit_field = True, 'preset:name'
+        panel.edit_text = 'hidden-prefix-that-must-scroll-to-tail-KEEP-THIS-CURSOR'
+        panel.sig = None
+        lua.globals().captured_text = lua.table()
+        lua.execute('for i=1,3 do update() end')
+        shown = [str(lua.globals().captured_text[i])
+                 for i in range(1, len(lua.globals().captured_text)+1)]
+        self.assertTrue(any(value.startswith('..') and value.endswith('KEEP-THIS-CURSOR_')
+                            for value in shown), shown)
+        keys = [str(panel.regions[i].key) for i in range(1, len(panel.regions)+1)]
+        self.assertIn('preset:name', keys)
+        self.assertIn('preset:rename', keys)
+        viewport = panel.viewports.preset_detail
+        self.assertIsNotNone(viewport)
+        for i in range(1, len(panel.regions)+1):
+            region = panel.regions[i]
+            if region.key.startswith('preset:') and region.key not in ('preset:prev', 'preset:next'):
+                self.assertLessEqual(region.x + region.w, viewport.screen_x + viewport.screen_w + 1)
+
+    def test_preset_header_height_pushes_detail_viewport_below_chrome_at_small_resolution(self):
+        lua, h = fresh_image(font_ids=True)
+        h.res_w, h.res_h = 960, 540
+        mod = h.load(SOURCE)
+        mod.debug_set_open(True)
+        lua.execute('for i=1,601 do update() end')
+        lua.execute('''
+            preset_header_drawn={}
+            local original=stingray.Gui.text
+            stingray.Gui.text=function(gui,value,font,size,material,pos,color)
+                preset_header_drawn[#preset_header_drawn+1]={text=tostring(value),y=pos.y,size=size}
+                return original(gui,value,font,size,material,pos,color)
+            end''')
+        open_button = next(mod.debug_panel()['regions'][i]
+                           for i in range(1, len(mod.debug_panel().regions)+1)
+                           if mod.debug_panel()['regions'][i]['key'] == 'presets:open')
+        client_scale_x, client_scale_y = 1920 / h.res_w, 1080 / h.res_h
+        h.mouse_x = (open_button['x'] + open_button['w'] / 2) * client_scale_x
+        h.mouse_y = 1080 - (open_button['y'] + open_button['h'] / 2) * client_scale_y
+        h.user32.set_key(1, True); lua.eval('update()')
+        h.user32.set_key(1, False); lua.eval('update()')
+        panel = mod.debug_panel()
+        viewport = panel['viewports']['preset_detail']
+        name = next(panel['regions'][i] for i in range(1, len(panel.regions)+1)
+                    if panel.regions[i]['key'] == 'preset:name')
+        back = next(panel['regions'][i] for i in range(1, len(panel.regions)+1)
+                    if panel.regions[i]['key'] == 'preset:back')
+        rows = [lua.globals().preset_header_drawn[i]
+                for i in range(1, len(lua.globals().preset_header_drawn)+1)]
+        active = next(row for row in rows if str(row['text']).startswith('ACTIVE:'))
+        output = next(row for row in rows if str(row['text']).startswith('CURRENT OUTPUT:'))
+        self.assertGreater(active['y'], output['y'], 'output begins below wrapped active-role chrome')
+        field_top = 540 - (float(name['y']) + float(name['h']))
+        output_top = 540 - float(output['y'])
+        self.assertLess(output_top, field_top, 'output line must stay above the first editable field')
+        back_bottom = 540 - float(back['y'])
+        viewport_top = 540 - (float(viewport['screen_y']) + float(viewport['screen_h']))
+        self.assertLessEqual(back_bottom, viewport_top,
+                             'detail viewport starts below the wrapped back button')
+        self.assertGreaterEqual(float(name['x']), float(viewport['screen_x']))
+        self.assertLessEqual(float(name['x']) + float(name['w']),
+                             float(viewport['screen_x']) + float(viewport['screen_w']))
 
 
 if __name__ == '__main__':

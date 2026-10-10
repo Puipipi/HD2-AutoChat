@@ -104,6 +104,301 @@ class UiPreviewTests(unittest.TestCase):
         self.assertNotIn('AUTO MESSAGES', rendered)
         self.assertEqual('zh', language.current())
 
+    def test_timer_mode_and_range_help_are_drawn_without_truncation_in_both_locales(self):
+        for locale in ('en', 'zh'):
+            for width, height in ((1920, 1080), (1280, 720), (960, 540)):
+                with self.subTest(locale=locale, resolution=(width, height)):
+                    lua, harness, mod = self.fresh()
+                    mod.ui_preview_language = locale
+                    mod.debug_panel().settings_view = 'tasks'
+                    harness.res_w, harness.res_h = width, height
+                    mod.debug_panel().sig = None
+                    lua.execute('''
+                        stingray.Gui.text_extents=function(gui,value,font,size)
+                            local width=0
+                            local value=tostring(value)
+                            for i=1,#value do
+                                local byte=value:byte(i)
+                                if byte<128 then
+                                    local ch=value:sub(i,i)
+                                    width=width+size*(ch:match('%s') and 0.36
+                                        or ch:match('%u') and 0.72 or 0.62)
+                                elseif byte>=224 then width=width+size
+                                elseif byte>=192 then width=width+size*0.7 end
+                            end
+                            return {x=0},{x=width}
+                        end
+                        preview_metrics={}
+                        local original_text=stingray.Gui.text
+                        stingray.Gui.text=function(gui,value,font,size,material,position,color)
+                            local _,upper=stingray.Gui.text_extents(gui,tostring(value),font,size)
+                            preview_metrics[#preview_metrics+1]={text=tostring(value),size=size,
+                                x=position.x,y=position.y,width=upper.x}
+                            return original_text(gui,value,font,size,material,position,color)
+                        end
+                    ''')
+                    lua.globals().preview_drawn = lua.table()
+                    lua.eval('update()')
+                    rendered = self.rendered(lua)
+                    wrapped = rendered.replace('\n', ' ')
+                    if locale == 'en':
+                        self.assertIn('COUNTDOWN', rendered)
+                        self.assertNotIn('COUNT..', rendered)
+                        self.assertIn('REPEAT / COUNTDOWN: 5 S TO 24 H', wrapped)
+                    else:
+                        self.assertIn('一次倒计时', rendered)
+                        self.assertNotIn('一次倒..', rendered)
+                        self.assertIn('重复 / 倒计时：5 秒至 24 小时', wrapped)
+                    metrics = lua.globals().preview_metrics
+                    self.assertGreater(len(metrics), 0)
+                    self.assertGreaterEqual(min(metrics[i].size for i in range(1, len(metrics) + 1)), 9)
+                    countdown = next(metrics[i] for i in range(1, len(metrics) + 1)
+                                     if metrics[i].text == ('COUNTDOWN' if locale == 'en' else '一次倒计时'))
+                    mode = next(mod.debug_panel().regions[i] for i in range(1, len(mod.debug_panel().regions) + 1)
+                                if mod.debug_panel().regions[i].key == 'mode:once')
+                    self.assertGreaterEqual(countdown.x, mode.x)
+                    self.assertLessEqual(countdown.x + countdown.width, mode.x + mode.w)
+
+                    # The form is intentionally scrollable at small resolutions;
+                    # hints below the fold must be checked after real viewport scroll.
+                    panel = mod.debug_panel()
+                    task_view = panel.viewports.task_form
+                    if task_view.max > 0:
+                        panel.scroll_offsets.task_form = task_view.max
+                        panel.sig = None
+                        lua.globals().preview_drawn = lua.table()
+                        lua.eval('update()')
+                        rendered = self.rendered(lua)
+                    self.assertIn('{abbr}', rendered)
+
+                    panel.editing, panel.edit_field = True, 'message'
+                    panel.edit_text = 'long-prefix-that-must-scroll-to-tail-KEEP-THIS-CURSOR'
+                    panel.sig = None
+                    lua.globals().preview_drawn = lua.table()
+                    lua.globals().preview_metrics = lua.table()
+                    lua.eval('update()')
+                    edited = lua.globals().preview_metrics
+                    tail = next(str(edited[i].text) for i in range(1, len(edited) + 1)
+                                if str(edited[i].text).endswith('KEEP-THIS-CURSOR_'))
+                    self.assertTrue(tail.startswith('..'))
+                    tail_metric = next(edited[i] for i in range(1, len(edited) + 1)
+                                       if str(edited[i].text) == tail)
+                    message_box = next(panel.regions[i] for i in range(1, len(panel.regions) + 1)
+                                       if panel.regions[i].key == 'task:message')
+                    self.assertGreater(message_box.w, 0)
+                    self.assertGreaterEqual(tail_metric.x, message_box.x)
+                    self.assertLessEqual(tail_metric.x + tail_metric.width,
+                                         message_box.x + message_box.w)
+                    self.assertEqual('long-prefix-that-must-scroll-to-tail-KEEP-THIS-CURSOR',
+                                     str(panel.edit_text), 'display tail must not change the draft value')
+
+    def test_pings_viewport_content_height_tracks_wrapped_hint_rows(self):
+        lua, _, mod = self.fresh()
+        mod.debug_panel().settings_view = 'pings'
+        lua.execute('''
+            stingray.Gui.text_extents=function(gui,value,font,size)
+                local width=0
+                local value=tostring(value)
+                for i=1,#value do
+                    local byte=value:byte(i)
+                    if byte<128 then
+                        local ch=value:sub(i,i)
+                        width=width+size*(ch:match('%s') and 0.36
+                            or ch:match('%u') and 0.72 or 0.62)
+                    elseif byte>=224 then width=width+size
+                    elseif byte>=192 then width=width+size*0.7 end
+                end
+                return {x=0},{x=width}
+            end
+            preview_drawn={}
+        ''')
+        lua.eval('update()')
+        panel = mod.debug_panel()
+        viewport = panel.viewports.pings
+        self.assertGreater(viewport.max, 0)
+        panel.scroll_offsets.pings = viewport.max
+        panel.sig = None
+        lua.globals().preview_drawn = lua.table()
+        lua.eval('update()')
+        rendered = self.rendered(lua)
+        self.assertIn('{位置}/{position}', rendered,
+                      'the final help row stays reachable at the calculated scroll limit')
+        self.assertNotIn('{位置}/{posit..', rendered)
+
+    def test_automation_and_ping_forms_wrap_long_labels_at_narrow_resolution(self):
+        for locale in ('en', 'zh'):
+            with self.subTest(locale=locale):
+                lua, h, mod = self.fresh()
+                h.res_w, h.res_h = 960, 540
+                mod.ui_preview_language = locale
+                panel = mod.debug_panel()
+                panel.settings_view = 'pings'
+                panel.sig = None
+                lua.execute('''
+                    stingray.Gui.text_extents=function(gui,value,font,size)
+                        local width=0
+                        local value=tostring(value)
+                        for i=1,#value do
+                            local byte=value:byte(i)
+                            if byte<128 then
+                                local ch=value:sub(i,i)
+                                width=width+size*(ch:match('%s') and 0.36
+                                    or ch:match('%u') and 0.72 or 0.62)
+                            elseif byte>=224 then width=width+size
+                            elseif byte>=192 then width=width+size*0.7 end
+                        end
+                        return {x=0},{x=width}
+                    end
+                    preview_drawn={}
+                ''')
+                lua.eval('update()')
+                rendered = self.rendered(lua).replace('\n', ' ')
+                ping_label = ('PLAYER NAME AND PREFIX COLOR' if locale == 'en'
+                              else '玩家名称与缩写使用队员颜色')
+                self.assertIn(ping_label, rendered)
+                self.assertTrue('[ON]' in rendered or '[OFF]' in rendered)
+                view = panel.viewports.pings
+                panel.scroll_offsets.pings = view.max
+                panel.sig = None
+                lua.globals().preview_drawn = lua.table()
+                lua.eval('update()')
+                self.assertIn('{位置}/{position}', self.rendered(lua))
+
+                panel.settings_view = 'automation'
+                panel.scroll_offsets.automation = 0
+                panel.sig = None
+                lua.globals().preview_drawn = lua.table()
+                lua.eval('update()')
+                initial = self.rendered(lua).replace('\n', ' ')
+                auto_label = 'ENABLE AUTO SEND' if locale == 'en' else '自动发送总开关'
+                self.assertIn(auto_label, initial)
+                self.assertTrue('[ON]' in initial or '[OFF]' in initial)
+                automation_view = panel.viewports.automation
+                self.assertIsNotNone(automation_view)
+                panel.scroll_offsets.automation = automation_view.max
+                panel.sig = None
+                lua.globals().preview_drawn = lua.table()
+                lua.eval('update()')
+                self.assertIn('{abbr}', self.rendered(lua))
+
+    def test_long_plugin_tabs_stay_clear_of_navigation_and_default_content(self):
+        lua, _, mod = self.fresh()
+        mod.ui_preview_language = 'en'
+        lua.execute('''
+            local registry=rawget(_G,'HD2AutoChatPlugins')
+            assert(registry.register({id='long.one',title='A VERY LONG FIRST PLUGIN SETTINGS TITLE',
+                name_en='A VERY LONG FIRST PLUGIN SETTINGS TITLE',draw=function() end}))
+            assert(registry.register({id='long.two',title='ANOTHER EXTREMELY LONG SECOND PLUGIN SETTINGS TITLE',
+                name_en='ANOTHER EXTREMELY LONG SECOND PLUGIN SETTINGS TITLE',draw=function() end}))
+            assert(registry.register({id='long.three',title='THIRD VERY LONG PLUGIN SETTINGS TITLE',
+                name_en='THIRD VERY LONG PLUGIN SETTINGS TITLE',draw=function() end}))
+        ''')
+        panel = mod.debug_panel()
+        panel.active_plugin = None
+        panel.tab_page = 1
+        panel.sig = None
+        lua.globals().preview_drawn = lua.table()
+        lua.eval('update()')
+        tabs = [panel.regions[i] for i in range(1, len(panel.regions) + 1)
+                if str(panel.regions[i].key).startswith('tab:')]
+        next_tab = next(panel.regions[i] for i in range(1, len(panel.regions) + 1)
+                        if panel.regions[i].key == 'tabs:next')
+        self.assertEqual(3, len(tabs))
+        self.assertLessEqual(max(region.x + region.w for region in tabs), next_tab.x,
+                             'long plugin tabs must leave navigation controls unobstructed')
+        default_tab = next(region for region in tabs if region.key == 'tab:default')
+        settings_button = next(panel.regions[i] for i in range(1, len(panel.regions) + 1)
+                               if panel.regions[i].key == 'view:tasks')
+        self.assertLess(settings_button.y + settings_button.h, default_tab.y,
+                           'default settings controls must start below the dynamic tab strip')
+
+    def test_compact_profile_header_and_task_footer_fit_at_small_resolution(self):
+        lua, harness = fresh_image(font_ids=True)
+        harness.res_w, harness.res_h = 960, 540
+        mod = harness.load(SOURCE)
+        mod.ui_preview_language = 'en'
+        mod.debug_set_open(True)
+        lua.execute('for i=1,700 do update() end')
+        panel = mod.debug_panel()
+        panel.sig = None
+        drawn = []
+        native_text = lua.globals().stingray.Gui.text
+        def record(gui, value, font, size, material, pos, color):
+            drawn.append(str(value))
+            return native_text(gui, value, font, size, material, pos, color)
+        lua.globals().stingray.Gui.text = record
+        lua.eval('update()')
+        self.assertIn('HOST', drawn)
+        self.assertIn('CLIENT', drawn)
+        self.assertIn('ACTIVE: HOST', drawn)
+        self.assertIn('WHILE GAME RUNS / LOCAL TIME', drawn)
+        profile_host = next(panel.regions[i] for i in range(1, len(panel.regions)+1)
+                            if panel.regions[i].key == 'profile:host')
+        profile_client = next(panel.regions[i] for i in range(1, len(panel.regions)+1)
+                              if panel.regions[i].key == 'profile:client')
+        tasks = next(panel.regions[i] for i in range(1, len(panel.regions)+1)
+                     if panel.regions[i].key == 'view:tasks')
+        self.assertLessEqual(profile_host.x + profile_host.w, profile_client.x)
+        self.assertGreater(profile_host.y, tasks.y + tasks.h,
+                           'profile header must stay above the page tabs')
+
+    def test_settings_navigation_captions_fit_wide_english_and_chinese_metrics(self):
+        for locale, expected in (
+            ('en', ('TASKS', 'AUTO', 'PING')),
+            ('zh', ('定时任务', '自动消息', '标记消息')),
+        ):
+            with self.subTest(locale=locale):
+                lua, harness = fresh_image(font_ids=True)
+                harness.res_w, harness.res_h = 960, 540
+                mod = harness.load(SOURCE)
+                mod.ui_preview_language = locale
+                mod.debug_set_open(True)
+                lua.execute('for i=1,700 do update() end')
+                panel = mod.debug_panel()
+                panel.settings_view = 'automation'
+                panel.sig = None
+                lua.execute('''
+                    stingray.Gui.text_extents=function(gui,value,font,size)
+                        local width=0
+                        local value=tostring(value)
+                        for i=1,#value do
+                            local byte=value:byte(i)
+                            if byte<128 then
+                                local ch=value:sub(i,i)
+                                width=width+size*(ch:match('%s') and 0.45
+                                    or ch:match('%u') and 0.78 or 0.68)
+                            elseif byte>=224 then width=width+size end
+                        end
+                        return {x=0},{x=width}
+                    end
+                    nav_drawn={}
+                    local original=stingray.Gui.text
+                    stingray.Gui.text=function(gui,value,font,size,material,pos,color)
+                        nav_drawn[#nav_drawn+1]={text=tostring(value),x=pos.x,y=pos.y,size=size}
+                        return original(gui,value,font,size,material,pos,color)
+                    end
+                ''')
+                lua.eval('update()')
+                drawn = lua.globals().nav_drawn
+                nav_regions = {}
+                for i in range(1, len(panel.regions) + 1):
+                    region = panel.regions[i]
+                    if str(region.key).startswith('view:'):
+                        nav_regions[str(region.key)] = region
+                keys = ('view:tasks', 'view:automation', 'view:pings')
+                self.assertTrue(all(key in nav_regions for key in keys))
+                texts = [str(drawn[i].text) for i in range(1, len(drawn) + 1)]
+                for key, caption_text in zip(keys, expected):
+                    self.assertIn(caption_text, texts,
+                                  f'{locale} navigation caption must render in full')
+                    region = nav_regions[key]
+                    matching = [drawn[i] for i in range(1, len(drawn) + 1)
+                                if str(drawn[i].text) == caption_text]
+                    self.assertTrue(matching)
+                    # The fixture supplies deliberately wide CJK metrics so the
+                    # assertion catches truncation at the real small-screen width.
+                    self.assertGreater(region.w, 0)
+
 
 if __name__ == '__main__':
     unittest.main()
