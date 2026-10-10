@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '1.0.0', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.0.0', build_id = 'v1.0.0-build.6', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -379,6 +379,7 @@ local function write_status(extra)
     if not handle then return end
     local lines = {
         'AutoChat / 自动聊天  v' .. M.version .. '  (SEND + PANEL)',
+        'build       : ' .. tostring(M.build_id),
         'status      : ' .. tostring(M.status),
         'signature   : ' .. tostring(M.signature),
         'send ready  : ' .. tostring(M.send_ready),
@@ -8226,10 +8227,16 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     field('cooldown',say('独立冷却（秒）：空 = 全局；0 = 每次新事件','RULE COOLDOWN: BLANK = GLOBAL; 0 = EVERY EVENT'),y)
     text(say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),486,y+78,12,C.YELLOW,474)
     text(say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),486,y+103,12,C.MUTED,474)
-    text(say('玩家','PLAYER')..': {player_name} / {abbr} / {slot}',486,755,13,C.TEXT,474)
-    text(say('事件','EVENT')..': {target}/{stratagem} / {category} / {action}',486,781,12,C.TEXT,474)
-    text(say('任务/位置','MISSION / POSITION')..': {objective} / {objective_type} / {position}',486,807,12,C.TEXT,474)
-    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,833,12,C.MUTED,474)
+    text('{玩家名}/{player_name}',486,689,12,C.TEXT,474)
+    text('{缩写}/{abbr}  ·  {编号}/{slot}',486,707,12,C.TEXT,474)
+    text('{目标}/{target}',486,725,12,C.TEXT,474)
+    text('{战备}/{stratagem}',486,743,12,C.TEXT,474)
+    text('{类别}/{category}',486,761,12,C.TEXT,474)
+    text('{动作}/{action}',486,779,12,C.TEXT,474)
+    text('{任务名}/{objective}',486,797,12,C.TEXT,474)
+    text('{任务类型}/{objective_type}',486,815,12,C.TEXT,474)
+    text('{位置}/{position}',486,833,12,C.TEXT,474)
+    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,850,12,C.MUTED,474)
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
     if p.hint then text(status_text and status_text(p.hint) or p.hint,486,919,12,C.YELLOW,474) end
 end
@@ -8793,10 +8800,16 @@ local function draw_panel()
         text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
         text(M.language.status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
         text(M.language.status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
-        text(caption('事件：{target}/{stratagem} / {category} / {action}', 'EVENT: {target}/{stratagem} / {category} / {action}'), IX, y + 62, 12, C.MUTED, IW)
-        text(caption('任务/位置：{objective} / {objective_type} / {position}', 'MISSION / POSITION: {objective} / {objective_type} / {position}'), IX, y + 84, 12, C.MUTED, IW)
-        text(caption('玩家：{玩家名}/{player_name} / {缩写}/{abbr} / {编号}/{slot}', 'PLAYER: {player_name} / {abbr} / {slot}'), IX, y + 106, 11, C.MUTED, IW)
-        if PANEL.hint then text(M.language.status(PANEL.hint), IX, y + 128, 11, C.YELLOW, IW) end
+        text('{玩家名}/{player_name}', IX, y + 62, 12, C.MUTED, IW)
+        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 80, 12, C.MUTED, IW)
+        text('{目标}/{target}', IX, y + 98, 12, C.MUTED, IW)
+        text('{战备}/{stratagem}', IX, y + 116, 12, C.MUTED, IW)
+        text('{类别}/{category}', IX, y + 134, 12, C.MUTED, IW)
+        text('{动作}/{action}', IX, y + 152, 12, C.MUTED, IW)
+        text('{任务名}/{objective}', IX, y + 170, 12, C.MUTED, IW)
+        text('{任务类型}/{objective_type}', IX, y + 188, 12, C.MUTED, IW)
+        text('{位置}/{position}', IX, y + 206, 12, C.MUTED, IW)
+        if PANEL.hint then text(M.language.status(PANEL.hint), IX, y + 230, 11, C.YELLOW, IW) end
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
         local function toggle(key, zh, en)
@@ -8824,7 +8837,8 @@ local function draw_panel()
         y = y + 44
         text(PANEL.hint and M.language.status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
              IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW)
-        text(caption('欢迎/定时：{玩家名}/{player_name} / {缩写}/{abbr} / {编号}/{slot}', 'PLAYER: {player_name} / {abbr} / {slot}'), IX, y + 38, 10, C.DIM, IW)
+        text('{玩家名}/{player_name}', IX, y + 38, 12, C.DIM, IW)
+        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 58, 12, C.DIM, IW)
     else
     field('name', caption('事件名称', 'EVENT NAME'), draft.name, y)
     y = y + 62
@@ -8851,7 +8865,8 @@ local function draw_panel()
                      'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 32, 11, C.MUTED, IW)
         text(caption('重复 / 倒计时：5–86400 秒', 'REPEAT / COUNTDOWN: 5-86400 S'), IX, y + 52, 12, C.MUTED, IW)
         text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 72, 12, C.MUTED, IW)
-        text(caption('玩家：{玩家名}/{player_name} / {缩写}/{abbr} / {编号}/{slot}', 'PLAYER: {player_name} / {abbr} / {slot}'), IX, y + 92, 10, C.DIM, IW)
+        text('{玩家名}/{player_name}', IX, y + 92, 12, C.DIM, IW)
+        text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y + 112, 12, C.DIM, IW)
     end
     -- The right column uses the same row controls as the settings form.
     IX, IW = RX, RIW
@@ -9772,7 +9787,7 @@ local function summarize()
 end
 
 -- ---------------------------------------------------------------- 15. boot
-note(string.format('AutoChat v%s starting (send + panel)', M.version))
+note(string.format('AutoChat v%s starting (build %s; send + panel)', M.version, M.build_id))
 note('user32 declarations: added[' .. tostring(M.user32_added)
      .. '] reused[' .. tostring(M.user32_reused) .. ']')
 config_load()
