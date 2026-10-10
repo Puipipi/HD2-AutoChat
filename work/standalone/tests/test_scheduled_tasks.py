@@ -11,6 +11,103 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertTrue(callable(mod.add_task), "settings needs a real task creation path")
         return lua, h, mod
 
+    def test_future_active_role_tasks_do_not_sort_or_mutate_on_poll(self):
+        lua, _, mod = self.fresh()
+        automation = mod.debug_automation()
+        self.assertEqual('host', automation.sync(), 'fixture must exercise the active role')
+        lua.globals().M = mod
+        lua.execute('''
+            local future = os.time() + 86400
+            M.tasks = {}
+            for i=1,1000 do
+                M.tasks[i] = {id='future-'..i, name='Future '..i, profile='host',
+                    mode='once', time='1', message='future message', enabled=true,
+                    done=false, due=future}
+            end
+            local before = {}
+            for i,t in ipairs(M.tasks) do before[i] = {t.enabled,t.done,t.due,t.retry_after,t.last_day} end
+            local native_sort, sorts = table.sort, 0
+            table.sort = function(list, ...)
+                if #list == 1000 and list[1] and list[1].id == 'future-1' then
+                    sorts = sorts + 1
+                end
+                return native_sort(list, ...)
+            end
+            M.debug_run_tasks(os.time())
+            table.sort = native_sort
+            FUTURE_SORTS = sorts
+            FUTURE_TASKS_UNCHANGED = #M.tasks == 1000
+            for i,t in ipairs(M.tasks) do
+                local b=before[i]
+                if t.enabled~=b[1] or t.done~=b[2] or t.due~=b[3]
+                    or t.retry_after~=b[4] or t.last_day~=b[5] then FUTURE_TASKS_UNCHANGED=false end
+            end
+        ''')
+        self.assertEqual(1000, len(mod.tasks))
+        self.assertTrue(all(mod.tasks[i].profile == 'host' and mod.tasks[i].enabled
+                            and mod.tasks[i].due > 0 for i in (1, 1000)))
+        self.assertEqual(0, lua.globals().FUTURE_SORTS,
+                         'future-only polls should return before allocating/sorting')
+        self.assertTrue(lua.globals().FUTURE_TASKS_UNCHANGED)
+
+    def test_inactive_disabled_done_retried_and_non_due_daily_items_skip_task_sort(self):
+        lua, _, mod = self.fresh()
+        self.assertEqual('host', mod.debug_automation().sync())
+        lua.globals().M = mod
+        lua.execute('''
+            local native_date=os.date
+            os.date=function(fmt,now)
+                if fmt=='*t' then return {year=2026,month=1,day=1,hour=0,min=5,sec=0} end
+                if fmt=='%Y-%m-%d' then return '2026-01-01' end
+                return native_date(fmt,now)
+            end
+            local now=os.time()
+            local today='2026-01-01'
+            local calendar=os.date('*t',now)
+            local current_minute=calendar.hour*60+calendar.min
+            M.tasks={
+                {id='inactive',profile='client',mode='once',enabled=true,done=false,due=now-1,bench_probe=true},
+                {id='disabled',profile='host',mode='once',enabled=false,done=false,due=now-1,bench_probe=true},
+                {id='done',profile='host',mode='once',enabled=true,done=true,due=now-1,bench_probe=true},
+                {id='retry',profile='host',mode='once',enabled=true,done=false,due=now-1,
+                    retry_after=now+30,bench_probe=true},
+                {id='daily-later',profile='host',mode='daily',enabled=true,done=false,
+                    minute=current_minute+1,last_day='never',bench_probe=true},
+                {id='daily-done',profile='host',mode='daily',enabled=true,done=false,
+                    minute=0,last_day=today,bench_probe=true},
+            }
+            local native_sort, task_sorts=table.sort,0
+            table.sort=function(list,...)
+                if list[1] and list[1].bench_probe then task_sorts=task_sorts+1 end
+                return native_sort(list,...)
+            end
+            M.debug_run_tasks(now)
+            table.sort=native_sort
+            FILTERED_TASK_SORTS=task_sorts
+        ''')
+        self.assertEqual(0, lua.globals().FILTERED_TASK_SORTS,
+                         'only eligible retry-ready tasks whose own deadline passed are sorted')
+
+    def test_due_task_path_still_sorts_and_sends(self):
+        lua, h, mod = self.fresh()
+        self.assertEqual('host', mod.debug_automation().sync())
+        lua.globals().M = mod
+        lua.execute('''
+            M.tasks={{id='due',profile='host',mode='once',time='1',message='due fixture',
+                enabled=true,done=false,due=1000,bench_probe=true}}
+            local native_sort, task_sorts=table.sort,0
+            table.sort=function(list,...)
+                if list[1] and list[1].bench_probe then task_sorts=task_sorts+1 end
+                return native_sort(list,...)
+            end
+            M.debug_run_tasks(1005)
+            table.sort=native_sort
+            DUE_TASK_SORTS=task_sorts
+        ''')
+        self.assertEqual(1, lua.globals().DUE_TASK_SORTS,
+                         'due work keeps the previous ordered snapshot and sort')
+        self.assertEqual(1, h.call_count(), 'the due task still reaches its normal send path')
+
     def test_enabled_quick_timer_migrates_once_to_role_scoped_repeat_task(self):
         _,_,mod=self.fresh();a=mod.debug_automation()
         self.assertTrue(a.set('quick_timer_enabled',True,'host')[0])

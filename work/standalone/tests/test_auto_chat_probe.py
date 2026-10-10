@@ -911,13 +911,13 @@ class AutoChatProbeTest(unittest.TestCase):
     def test_build_identity_is_distinct_from_product_version_and_logged(self):
         _, h, mod = self.fresh()
         self.assertEqual("1.0.0", mod.version)
-        self.assertEqual("v1.0.0-build.9", mod.build_id)
-        self.assertIn("AutoChat v1.0.0 starting (build v1.0.0-build.9; send + panel)",
+        self.assertEqual("v1.0.0-build.10", mod.build_id)
+        self.assertIn("AutoChat v1.0.0 starting (build v1.0.0-build.10; send + panel)",
                       h.log_text())
         written = h.written()
         status = "".join(written[i]["text"] for i in range(1, len(written) + 1)
                          if written[i]["path"].endswith("AutoChat-STATUS.txt"))
-        self.assertIn("build       : v1.0.0-build.9", status)
+        self.assertIn("build       : v1.0.0-build.10", status)
 
     def test_observation_reports_the_synthetic_values(self):
         lua, h, mod = self.fresh()

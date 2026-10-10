@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '1.0.0', build_id = 'v1.0.0-build.9', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.0.0', build_id = 'v1.0.0-build.10', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -5467,6 +5467,31 @@ local function run_tasks(now)
     local active_role = automation.sync()
     if not active_role then return end
     local calendar
+    local calendar_checked, calendar_day = false, nil
+    local has_due = false
+    for _, t in ipairs(M.tasks) do
+        if (t.profile or 'host') == active_role and t.enabled and not t.done
+            and (not t.retry_after or now >= t.retry_after) then
+            local task_due = false
+            if t.mode == 'daily' then
+                if not calendar_checked then
+                    calendar, calendar_checked = os.date('*t', now), true
+                    if type(calendar) == 'table' then
+                        calendar_day = string.format('%04d-%02d-%02d', calendar.year,
+                            calendar.month, calendar.day)
+                    end
+                end
+                if type(calendar) == 'table' then
+                    task_due = calendar.hour * 60 + calendar.min >= t.minute
+                        and calendar_day ~= t.last_day
+                end
+            else
+                task_due = now >= t.due
+            end
+            if task_due then has_due = true; break end
+        end
+    end
+    if not has_due then return end
     local ordered, order = {}, {}
     for i, t in ipairs(M.tasks) do
         ordered[i], order[t] = t, i
