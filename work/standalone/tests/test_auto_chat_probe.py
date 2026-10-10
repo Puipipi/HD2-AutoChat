@@ -542,7 +542,7 @@ function harness.install()
             worlds = function()
                 harness.worlds_reads = harness.worlds_reads + 1
                 if harness.worlds_error then error('synthetic world list failure') end
-                return harness.worlds or {harness.main_world}
+                return harness.worlds or {harness.main_world, 'WORLD_OVERLAY'}
             end,
             -- The mod asks whether a resource is actually LOADED before using its id.
             -- Without this the font path stops at "not loaded" and the material and

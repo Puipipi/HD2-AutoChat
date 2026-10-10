@@ -89,7 +89,7 @@ class PanelInteractionTest(unittest.TestCase):
         lua.execute('for i=1,12 do update() end')
         self.assertGreater(h.gui_created, 0)
         destroyed_before = h.gui_destroyed
-        h.worlds = lua.table_from(['WORLD_MAIN', 'WORLD_OVERLAY'])
+        h.worlds = lua.table_from(['WORLD_MAIN', 'WORLD_OVERLAY', 'WORLD_OVERLAY_NEXT'])
         lua.execute('for i=1,12 do update() end')
         self.assertFalse(mod.debug_panel()['open'])
         self.assertEqual(destroyed_before + 1, h.gui_destroyed,
@@ -97,6 +97,51 @@ class PanelInteractionTest(unittest.TestCase):
         self.assertFalse(mod.debug_request_open(), 'the changed list must settle for 1.5 seconds')
         lua.execute('for i=1,100 do update() end')
         self.assertTrue(mod.debug_request_open(), 'the same stable list becomes available after 1.5 seconds')
+
+    def test_main_only_world_list_blocks_hotkey_and_external_open_until_overlay_resettles(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.worlds = lua.table_from(['WORLD_MAIN'])
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertFalse(mod.debug_request_open(), 'an external request must require an Armory overlay world')
+        self.assertIn('overlay_world_unavailable', mod.panel_context)
+        lua.execute('for i=1,120 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'main-only state remains blocked after 1.5 seconds')
+        h.worlds = lua.table_from(['WORLD_MAIN', 'WORLD_OVERLAY'])
+        self.assertFalse(mod.debug_request_open(), 'overlay restoration starts a new settle interval')
+        lua.execute('for i=1,100 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'held K cannot auto-open when overlay becomes ready')
+        h.user32.set_key(0x4B, False)
+        lua.eval('update()')
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'a fresh K press opens after overlay settles')
+
+    def test_open_panel_closes_and_destroys_gui_when_overlay_disappears(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.execute('for i=1,12 do update() end')
+        self.assertEqual(1, h.live_guis)
+        original_message = mod.debug_cfg()['message']
+        mod.debug_set_editing(True)
+        mod.debug_set_edit_buffer('draft canceled by overlay loss')
+        self.assertTrue(mod.debug_cursor_state()['taken'])
+        lua.eval('update()')  # let the editor redraw settle before measuring teardown
+        self.assertEqual(1, h.live_guis)
+        destroyed_before = h.gui_destroyed
+        h.worlds = lua.table_from(['WORLD_MAIN'])
+        lua.execute('for i=1,12 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertEqual(destroyed_before + 1, h.gui_destroyed)
+        self.assertEqual(0, h.live_guis)
+        self.assertEqual(original_message, mod.debug_cfg()['message'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual(0, h.call_count(), 'overlay loss must not send the unconfirmed draft')
 
     def test_world_list_error_with_live_main_closes_and_destroys_gui(self):
         lua, h = fresh_image()

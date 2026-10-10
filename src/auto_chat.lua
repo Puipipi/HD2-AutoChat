@@ -6301,13 +6301,17 @@ local function world_context_sample(force)
     -- arrays instead of allocating/copying arbitrary Lua-controlled lengths.
     if count < 1 or count > 256 then return invalidate_world_context('world_list_invalid') end
     local copy = {}
-    local main_found = false
+    local main_found, overlay_found = false, false
     for i = 1, count do
         if worlds[i] == nil then return invalidate_world_context('world_list_invalid') end
         copy[i] = worlds[i]
         if worlds[i] == main then main_found = true end
+        if worlds[i] ~= main then overlay_found = true end
     end
     if not main_found then return invalidate_world_context('main_world_not_listed') end
+    -- Armory draws only after it can find a non-main overlay world. AutoChat keeps
+    -- its GUI owned by main_world, but uses the same overlay availability gate.
+    if not overlay_found then return invalidate_world_context('overlay_world_unavailable') end
     local had_snapshot = PANEL.context_worlds ~= nil
     local main_changed = PANEL.context_main ~= nil and PANEL.context_main ~= main
     local changed = PANEL.context_worlds == nil or main_changed
