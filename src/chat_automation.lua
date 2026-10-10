@@ -272,6 +272,14 @@ local function build_chat_automation(env)
         if not source then return nil,'未知预设' end
         if language~='zh' and language~='en' then return nil,'消息语言无效' end
         source=copy(source)
+        -- Built-in presets are explicitly complete reminder configurations.
+        -- Keep role policy (allow_solo/output) from the factory profile, and
+        -- leave retired quick-timer settings and per-user rules untouched.
+        for _,key in ipairs({'enabled','welcome','ping','ping_building','ping_stratagem','ping_map',
+            'ping_supplies','ping_summon','ping_small_enemy','ping_flying_enemy',
+            'ping_medium_enemy','ping_large_enemy','ping_giant_enemy'}) do
+            source[key]=true
+        end
         source.message_language=language
         for key,value in pairs(type(templates)=='table' and templates or {}) do
             if key=='welcome_message' or key=='ping_message' or key=='summon_message'
@@ -654,8 +662,12 @@ local function build_chat_automation(env)
         local group,teammate=language=='en' and 'Squad' or '小队',language=='en' and 'Teammate' or '队友'
         local name = anonymous and group or identity and plain(identity.name,96) or teammate
         local short = anonymous and group or identity and plain(identity.short,16) or teammate
+        local has_player_name = not anonymous and identity ~= nil and name ~= ''
         if name=='' then name=teammate end
         if short=='' then short=teammate end
+        if has_player_name and not (name:sub(1,1)=='[' and name:sub(-1)==']') then
+            name='['..name..']'
+        end
         if color_player_names and not anonymous and identity and type(identity.color)=='string'
             and (#identity.color==6 or #identity.color==8) and identity.color:match('^%x+$') then
             local color=identity.color:upper()

@@ -221,7 +221,7 @@ class AutomationTests(unittest.TestCase):
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
             assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='upload',category='stratagem',action='use',target='上传数据',creator_id=h.mine},1000))
-            assert(a.poll(1000));assert(h.sent[1]=='Alice正在开始上传数据',h.sent[1])
+            assert(a.poll(1000));assert(h.sent[1]=='[Alice]正在开始上传数据',h.sent[1])
             assert(a.set('task_stratagem_message','{缩写}：正在{动作}{目标}'))
             local b=h.new(h.writes[#h.writes]);assert(b.options.task_stratagem_message=='{缩写}：正在{动作}{目标}')
             assert(a.push_ping({key='upload2',category='stratagem',action='use',target='上传数据',creator_id=h.mine},1005))
@@ -269,7 +269,7 @@ class AutomationTests(unittest.TestCase):
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
             assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给',creator_id=h.mine},1000))
-            assert(a.poll(1000));assert(h.sent[1]=='Alice召唤了重新补给',h.sent[1])
+            assert(a.poll(1000));assert(h.sent[1]=='[Alice]召唤了重新补给',h.sent[1])
             assert(a.push_ping({key='mark',category='stratagem',action='mark',target='重新补给',creator_id=h.mine},1005))
             local sent,why=a.poll(1005);assert(sent,string.format('poll=%s queued=%d',tostring(why),#a.state.pings))
             assert(h.sent[2]=='标记了重新补给（战备提示）',h.sent[2])
@@ -459,10 +459,10 @@ class AutomationTests(unittest.TestCase):
             h.identities.friend={peer_id='friend',name='Alice',short='AL',color='FF0000'}
             assert(a.push_ping({key='map1',category='map',creator_id='friend',target='地图标记',
                 position={x=123,y=456,z=7}},1000))
-            assert(a.poll(1000)); assert(h.sent[1]=='[AL] Alice：地图标记 (123, 456, 7)')
+            assert(a.poll(1000)); assert(h.sent[1]=='[AL] [Alice]：地图标记 (123, 456, 7)')
             assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='map2',category='map',creator_id='friend',target='地图标记'},1005))
-            assert(a.poll(1005)); assert(h.sent[2]=='Alice：地图标记 未知位置')
+            assert(a.poll(1005)); assert(h.sent[2]=='[Alice]：地图标记 未知位置')
         ''')
 
     def test_native_localized_target_truncation_preserves_utf8_boundaries(self):
@@ -506,12 +506,13 @@ class AutomationTests(unittest.TestCase):
 
     def test_colored_prefix_resets_before_body_and_message_stays_within_native_limit(self):
         self.run_lua('''
-            assert(a.set('ping',true)); assert(a.set('ping_message',string.rep('中',170)))
+            assert(a.set('ping',true)); assert(a.set('ping_message','{player_name}'..string.rep('中',160)))
             h.identities.friend={peer_id='friend',name='Alice',short='A2',color='FF81ACFE'}
             assert(a.push_ping({key='long',category='building',creator_id='friend'},1000))
             assert(a.poll(1000))
             assert(h.sent[1]:sub(1,29)=='<c=FF81ACFE>[A2]<c=FFFFFFFF> ')
-            assert(#h.sent[1]<=512 and #h.sent[1]:sub(30)%3==0)
+            assert(#h.sent[1]<=511 and h.sent[1]:find('<c=FF81ACFE>[Alice]<c=FFFFFFFF>',30,true))
+            assert(select(2,h.sent[1]:gsub('<c=',''))==4,'both colored labels must be closed before clipping')
             assert(h.raw_sent[1]:sub(1,1)=='\\n' and #h.raw_sent[1]<=512
                 and h.raw_sent[1]:find('<c=FFFFFFFF> ',1,true),
                 string.format('rawlen=%d first=%q',#h.raw_sent[1],h.raw_sent[1]:sub(1,29)))
@@ -732,9 +733,9 @@ class AutomationTests(unittest.TestCase):
             a.poll(1); a.poll(3); a.poll(3); a.poll(3)
             assert(#h.sent==3 and next(a.state.pending)==nil)
             local lines=table.concat(h.sent,'|')
-            assert(lines:find('欢迎 one（P2，2号）',1,true))
-            assert(lines:find('欢迎 two（P3，3号）',1,true))
-            assert(lines:find('欢迎 three（P4，4号）',1,true))
+            assert(lines:find('欢迎 [one]（P2，2号）',1,true))
+            assert(lines:find('欢迎 [two]（P3，3号）',1,true))
+            assert(lines:find('欢迎 [three]（P4，4号）',1,true))
         """)
 
     def test_failed_chat_send_retains_welcome_and_waits_five_seconds(self):
@@ -796,10 +797,10 @@ class AutomationTests(unittest.TestCase):
         self.run_lua('''
             h.identities.friend={peer_id='friend',name='张三%{编号}<tag>',short='Z2',color_index=1}
             assert(a.format('{玩家名}|{名字}|{触发者}|{缩写}|{编号}|{未知}', 'friend')==
-                '张三%{编号}tag|张三%{编号}tag|张三%{编号}tag|Z2|2|{未知}')
+                '[张三%{编号}tag]|[张三%{编号}tag]|[张三%{编号}tag]|Z2|2|{未知}')
             assert(a.format('{玩家名}/{缩写}/{编号}','missing')=='队友/队友/?')
             assert(a.format('{player}|{player_name}|{name}|{short}|{abbr}|{slot}|{number}', 'friend')==
-                '张三%{编号}tag|张三%{编号}tag|张三%{编号}tag|Z2|Z2|2|2')
+                '[张三%{编号}tag]|[张三%{编号}tag]|[张三%{编号}tag]|Z2|Z2|2|2')
             assert(#a.format(string.rep('中',200),'friend')<=512)
         ''')
 
@@ -820,6 +821,32 @@ class AutomationTests(unittest.TestCase):
             assert(a.format('{玩家名}|{缩写}',h.mine,nil,true,true,'en')=='Squad|Squad')
         ''')
 
+    def test_builtin_default_profiles_enable_all_alerts_and_keep_role_policies(self):
+        self.run_lua(r'''
+            assert(a.set('enabled',false));assert(a.set('welcome',false));assert(a.set('ping',false))
+            local alerts={'enabled','welcome','ping','ping_building','ping_stratagem','ping_map',
+                'ping_supplies','ping_summon','ping_small_enemy','ping_flying_enemy',
+                'ping_medium_enemy','ping_large_enemy','ping_giant_enemy'}
+            for _,role in ipairs({'host','client'}) do
+                for _,language in ipairs({'zh','en'}) do
+                    local payload=a.export_default_profile(role,language)
+                    local ok,parsed=a.validate_profile(payload)
+                    assert(ok,parsed)
+                    for _,key in ipairs(alerts) do
+                        assert(parsed.values[key]==true,role..'/'..language..' left '..key..' off')
+                    end
+                    assert(parsed.values.output==(role=='host' and 'squad' or 'local'))
+                    assert(parsed.values.allow_solo==true,'the role send permission must keep its factory value')
+                    assert(parsed.values.message_language==language)
+                    assert(parsed.values.quick_timer_enabled==false)
+                    assert(#parsed.tasks==0)
+                    assert(next(parsed.rules)==nil,'catalog rules remain implicit defaults, with no user rule overrides')
+                end
+            end
+            assert(a.profile('host').enabled==false and a.profile('host').welcome==false
+                and a.profile('host').ping==false,'building defaults must not change active user configuration')
+        ''')
+
     def test_event_english_aliases_and_mixed_language_tokens_share_one_value_set(self):
         self.run_lua(r'''
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
@@ -831,7 +858,7 @@ class AutomationTests(unittest.TestCase):
                 objective_name='广播任务',objective_names={zh='广播任务',en='Broadcast objective'},
                 objective_kind='primary',position={x=1,y=2,z=3}},1000))
             assert(a.poll(1000))
-            assert(h.sent[1]=='Alice/Alice|A1/1|Illegal Broadcast Tower/Illegal Broadcast Tower|OBJECTIVE BUILDING|marked|Broadcast objective/Broadcast objective|PRIMARY OBJECTIVE/PRIMARY OBJECTIVE|(1, 2, 3)',h.sent[1])
+            assert(h.sent[1]=='[Alice]/[Alice]|A1/1|Illegal Broadcast Tower/Illegal Broadcast Tower|OBJECTIVE BUILDING|marked|Broadcast objective/Broadcast objective|PRIMARY OBJECTIVE/PRIMARY OBJECTIVE|(1, 2, 3)',h.sent[1])
             assert(a.set('message_language','zh'));assert(a.set('cooldown',0))
             assert(a.set('ping_message','{target}/{战备}'))
             assert(a.set('summon_message','{target}/{战备}'))
@@ -844,18 +871,22 @@ class AutomationTests(unittest.TestCase):
         self.run_lua(r'''
             h.identities.friend={peer_id='friend',name='张三%{编号}<tag>',short='Z2',color_index=1,color='81ACFE'}
             local plain=a.format('{玩家名}|{名字}|{触发者}','friend')
-            assert(plain=='张三%{编号}tag|张三%{编号}tag|张三%{编号}tag')
+            assert(plain=='[张三%{编号}tag]|[张三%{编号}tag]|[张三%{编号}tag]')
             local colored=a.format('{玩家名}|{名字}|{触发者}','friend',nil,false,true)
-            local name='<c=FF81ACFE>张三%{编号}tag<c=FFFFFFFF>'
+            local name='<c=FF81ACFE>[张三%{编号}tag]<c=FFFFFFFF>'
             assert(colored==name..'|'..name..'|'..name)
+            assert(h.identities.friend.name=='张三%{编号}<tag>','formatting must not change the source identity')
             assert(a.format('{玩家名}','friend',nil,true,true)=='小队')
             h.identities.friend.color='not-a-color'
-            assert(a.format('{玩家名}','friend',nil,false,true)=='张三%{编号}tag')
+            assert(a.format('{玩家名}','friend',nil,false,true)=='[张三%{编号}tag]')
             h.identities.friend.color='81ACFE'
             h.identities.friend.name=string.rep('中',96)
             local clipped=a.format(string.rep('x',400)..'{玩家名}','friend',nil,false,true)
             assert(#clipped<=512 and clipped:sub(-12)=='<c=FFFFFFFF>')
             assert(select(2,clipped:gsub('<c=',''))==2,'colored output must contain one opening and one closing tag')
+            h.identities.friend.name='[Already Wrapped]'
+            assert(a.format('{player}/{player_name}/{name}','friend')=='[Already Wrapped]/[Already Wrapped]/[Already Wrapped]')
+            assert(h.identities.friend.name=='[Already Wrapped]')
         ''')
 
     def test_welcome_full_name_obeys_the_existing_player_color_switch(self):
@@ -865,12 +896,12 @@ class AutomationTests(unittest.TestCase):
             assert(a.set('ping_sender_color',true));a.poll(0)
             h.peers={h.mine,'friend'};h.identities.friend={peer_id='friend',name='Bob',short='B2',color_index=1,color='FF0000'}
             a.poll(1);assert(a.poll(3))
-            assert(h.sent[1]=='Welcome <c=FFFF0000>Bob<c=FFFFFFFF>')
+            assert(h.sent[1]=='Welcome <c=FFFF0000>[Bob]<c=FFFFFFFF>')
             assert(a.set('welcome_message','Welcome {名字}'))
             assert(a.set('ping_sender_color',false));a.poll(4)
             h.peers={h.mine,'friend','other'};h.identities.other={peer_id='other',name='Eve',short='E3',color_index=2,color='00FF00'}
             a.poll(5);assert(a.poll(7))
-            assert(h.sent[2]=='Welcome Eve')
+            assert(h.sent[2]=='Welcome [Eve]')
         ''')
 
     def test_welcome_resolves_native_profile_from_session_uint64_without_guessing_slot(self):
@@ -879,7 +910,7 @@ class AutomationTests(unittest.TestCase):
             h.identities['0110000100000022']={peer_id='0110000100000022',name='Alice',short='A3',color_index=2}
             assert(a.set('welcome',true));assert(a.set('welcome_message','欢迎 {玩家名} {缩写} {编号}'));a.poll(0)
             h.peers={h.mine,id};a.poll(1);assert(a.poll(3))
-            assert(h.sent[1]=='欢迎 Alice A3 3')
+            assert(h.sent[1]=='欢迎 [Alice] A3 3')
         ''')
 
     def test_recently_welcomed_rejoining_peer_does_not_hold_up_a_newcomer(self):

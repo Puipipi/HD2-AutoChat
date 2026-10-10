@@ -28,7 +28,7 @@ class PackageDocumentsTests(unittest.TestCase):
                     'Addon/9ba626afa44a3aa3.patch_0.stream',
                     'Addon/9ba626afa44a3aa3.patch_0.gpu_resources',
                     'manifest.json', 'README.txt',
-                    'Docs/PLUGIN-API.md', 'Docs/INTERFACE-DEMO.md'}
+                    'Docs/PLUGIN-API.md', 'Docs/INTERFACE-DEMO.md', 'Docs/PLAYER-TEMPLATES.md'}
                 self.assertTrue(expected.issubset(names), names)
                 self.assertLessEqual(names - expected, {'cover-autochat.png'})
                 manifest = json.loads(package.read('manifest.json'))
@@ -37,6 +37,8 @@ class PackageDocumentsTests(unittest.TestCase):
                                  (ROOT / 'docs/PLUGIN-API.md').read_bytes())
                 self.assertEqual(package.read('Docs/INTERFACE-DEMO.md'),
                                  (ROOT / 'docs/INTERFACE-DEMO.md').read_bytes())
+                self.assertEqual(package.read('Docs/PLAYER-TEMPLATES.md'),
+                                 (ROOT / 'docs/PLAYER-TEMPLATES.md').read_bytes())
                 if 'cover-autochat.png' in names:
                     self.assertEqual(manifest.get('IconPath'), 'cover-autochat.png')
                     self.assertEqual(package.read('cover-autochat.png'),

@@ -28,7 +28,7 @@ class PluginIntegrationTests(unittest.TestCase):
             assert(test_api.send('aware','{玩家名}/{缩写}/{编号}','0110000100000023'))
         ''')
         self.assertEqual(h.call_count(),2)
-        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'\nBob/B3/3')
+        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'\n[Bob]/B3/3')
         lua.execute('''test_profiles['0110000100000022']=nil;table.remove(test_peers,2)
             assert(test_api.send('aware','departed','0110000100000022')==false)''')
         self.assertEqual(h.call_count(),2)

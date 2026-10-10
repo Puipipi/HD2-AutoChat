@@ -4,6 +4,106 @@ from test_auto_chat_probe import fresh_image, SOURCE
 
 
 class PanelInteractionTest(unittest.TestCase):
+    def test_background_k_cannot_open_or_capture_cursor(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.user32.set_foreground_pid(h.own_pid + 1)
+        self.assertFalse(mod.debug_request_open(), 'external open requests must also require foreground focus')
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        h.user32.set_key(0x4B, True)
+        lua.execute('for i=1,3 do update() end')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        h.user32.set_foreground_pid(h.own_pid)
+        lua.execute('for i=1,3 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'a background K edge must stay consumed after focus returns')
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'])
+
+    def test_focus_loss_closes_even_after_panel_error_circuit_breaker(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'])
+        mod.debug_panel()['lfail'] = 3
+        h.user32.set_foreground_pid(h.own_pid + 1)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'error throttling must not bypass focus-loss teardown')
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual(0, h.live_guis)
+
+    def test_focus_loss_while_panel_open_closes_and_releases_owned_ui_state(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        self.assertEqual(1, h.live_guis)
+        self.assertTrue(mod.debug_cursor_state()['taken'])
+
+        h.user32.set_foreground_pid(h.own_pid + 1)
+        h.user32.set_key(0x4B, True)
+        lua.execute('for i=1,12 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'losing the game window must close its panel')
+        self.assertFalse(mod.debug_cursor_state()['taken'], 'focus loss must release cursor ownership')
+        self.assertEqual(0, h.live_guis, 'focus loss must destroy the retained native GUI')
+        self.assertEqual('none', h.user32_clip_text(), 'focus loss must restore the prior cursor clip')
+
+        h.user32.set_foreground_pid(h.own_pid)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'K held from background must not recapture after focus returns')
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'a fresh focused K press may open normally')
+
+    def test_same_vm_resource_reentry_reuses_current_instance(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        self.assertEqual(1, h.live_guis)
+        same_instance = h.load(SOURCE)
+        self.assertTrue(lua.eval('rawequal')(mod, same_instance))
+        frames_before = mod.frames
+        self.assertTrue(same_instance.debug_request_open())
+        lua.eval('update()')
+        self.assertEqual(frames_before + 1, same_instance.frames, 'resource reentry must not add an update wrapper')
+        self.assertEqual(1, h.live_guis)
+
+    def test_main_world_switch_destroys_old_owner_still_in_world_list_before_reopen(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        old_gui = mod.debug_panel()['gui']
+        old_gui_id = old_gui['id']
+        self.assertTrue(h.gui_is_live(old_gui_id))
+        destroyed_before = h.gui_destroyed
+
+        # The game can retain a world as a non-main overlay during task UI changes.
+        # Exercise world_sample, world_ready, close, and native GUI teardown together.
+        h.main_world = 'WORLD_NEXT'
+        h.worlds = lua.table_from(['WORLD_NEXT', 'WORLD_MAIN', 'WORLD_OVERLAY'])
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertFalse(h.gui_is_live(old_gui_id),
+                         'a still-live GUI owner must be found and destroyed after ceasing to be main')
+        self.assertEqual(destroyed_before + 1, h.gui_destroyed)
+
+        lua.execute('for i=1,120 do update() end')
+        self.assertTrue(mod.debug_request_open())
+        lua.eval('update()')
+        self.assertNotEqual(old_gui_id, mod.debug_panel()['gui']['id'])
+        self.assertEqual(1, h.live_guis,
+                         'the prior owner must be destroyed before the new world GUI is created')
+
     def test_native_game_chat_view_blocks_hotkey_without_blocking_sender_verification(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)

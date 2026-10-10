@@ -261,7 +261,7 @@ class InterfaceDemoTests(unittest.TestCase):
                     'Addon/9ba626afa44a3aa3.patch_0.stream',
                     'Addon/9ba626afa44a3aa3.patch_0.gpu_resources',
                     'manifest.json', 'README.txt',
-                    'Docs/PLUGIN-API.md', 'Docs/INTERFACE-DEMO.md'})
+                    'Docs/PLUGIN-API.md', 'Docs/INTERFACE-DEMO.md', 'Docs/PLAYER-TEMPLATES.md'})
                 manifest = json.loads(package.read('manifest.json'))
                 self.assertEqual(manifest['Guid'], builder.GUID)
                 self.assertEqual(manifest['Name'], 'AutoChat 接口示例')
@@ -276,6 +276,8 @@ class InterfaceDemoTests(unittest.TestCase):
                                  (root / 'docs/PLUGIN-API.md').read_bytes())
                 self.assertEqual(package.read('Docs/INTERFACE-DEMO.md'),
                                  (root / 'docs/INTERFACE-DEMO.md').read_bytes())
+                self.assertEqual(package.read('Docs/PLAYER-TEMPLATES.md'),
+                                 (root / 'docs/PLAYER-TEMPLATES.md').read_bytes())
             sidecar = output.with_suffix(output.suffix + '.sha256').read_text(encoding='ascii')
             digest = hashlib.sha256(output.read_bytes()).hexdigest()
             self.assertEqual(sidecar, digest + '  ' + output.name + '\n')

@@ -165,9 +165,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     field('cooldown',say('独立冷却（秒）：空 = 全局；0 = 每次新事件','RULE COOLDOWN: BLANK = GLOBAL; 0 = EVERY EVENT'),y)
     text(say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),486,y+78,12,C.YELLOW,474)
     text(say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),486,y+103,12,C.MUTED,474)
-    text(say('变量：{玩家名} / {缩写} / {编号}','TOKENS: PLAYER NAME / SHORT / SLOT'),486,755,14,C.TEXT,474)
-    text('{目标} / {类别} / {动作} / {位置}',486,786,14,C.TEXT,474)
-    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,828,12,C.MUTED,474)
+    text(say('玩家','PLAYER')..': {player_name} / {abbr} / {slot}',486,755,13,C.TEXT,474)
+    text(say('事件','EVENT')..': {target}/{stratagem} / {category} / {action}',486,781,12,C.TEXT,474)
+    text(say('任务/位置','MISSION / POSITION')..': {objective} / {objective_type} / {position}',486,807,12,C.TEXT,474)
+    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,833,12,C.MUTED,474)
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
     if p.hint then text(status_text and status_text(p.hint) or p.hint,486,919,12,C.YELLOW,474) end
 end

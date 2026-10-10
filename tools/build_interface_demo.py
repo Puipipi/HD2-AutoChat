@@ -31,7 +31,7 @@ def build(output=None):
             '示例消息由插件自己的字符串和处理逻辑生成；适配其他模组时可替换这些内容。\r\n'
             '游戏图标由宿主从当前已加载的catalog材质提供；资源不可用时显示说明文字。\r\n'
             '资源：' + RESOURCE + '\r\nGUID：' + GUID + '\r\n')
-        for name in ('PLUGIN-API.md', 'INTERFACE-DEMO.md'):
+        for name in ('PLUGIN-API.md', 'INTERFACE-DEMO.md', 'PLAYER-TEMPLATES.md'):
             archive.write(ROOT / 'docs' / name, 'Docs/' + name)
     with zipfile.ZipFile(output) as archive:
         assert archive.testzip() is None
@@ -41,10 +41,11 @@ def build(output=None):
             'Addon/9ba626afa44a3aa3.patch_0.stream',
             'Addon/9ba626afa44a3aa3.patch_0.gpu_resources',
             'manifest.json', 'README.txt',
-            'Docs/PLUGIN-API.md', 'Docs/INTERFACE-DEMO.md'}
+            'Docs/PLUGIN-API.md', 'Docs/INTERFACE-DEMO.md', 'Docs/PLAYER-TEMPLATES.md'}
         assert names == expected, 'unexpected demo archive members: ' + repr(names)
         assert archive.read('Docs/PLUGIN-API.md') == (ROOT / 'docs/PLUGIN-API.md').read_bytes()
         assert archive.read('Docs/INTERFACE-DEMO.md') == (ROOT / 'docs/INTERFACE-DEMO.md').read_bytes()
+        assert archive.read('Docs/PLAYER-TEMPLATES.md') == (ROOT / 'docs/PLAYER-TEMPLATES.md').read_bytes()
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     output.with_suffix(output.suffix + '.sha256').write_text(
         digest + '  ' + output.name + '\n', encoding='ascii')

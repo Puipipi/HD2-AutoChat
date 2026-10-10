@@ -92,7 +92,7 @@ class ScheduledTasksTest(unittest.TestCase):
         """)
         mod.add_task('template','once','5','{玩家名} {缩写} {编号}',1000)
         mod.debug_run_tasks(1005)
-        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'\nAlice A1 1')
+        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'\n[Alice] A1 1')
 
     def test_named_preset_roundtrips_behavior_and_role_task_definitions(self):
         lua, _, mod = self.fresh()
@@ -296,11 +296,11 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertTrue(automation.set("ping_sender_color", True, "host")[0])
         colored = mod.add_task("Colored", "once", "5", "Hi {玩家名}", 1000, "host")
         mod.debug_run_tasks(1005)
-        self.assertEqual("\nHi <c=FF81ACFE>Alice<c=FFFFFFFF>\0", h.last_call()["arg3_text"])
+        self.assertEqual("\nHi <c=FF81ACFE>[Alice]<c=FFFFFFFF>\0", h.last_call()["arg3_text"])
         self.assertTrue(automation.set("ping_sender_color", False, "host")[0])
         plain = mod.add_task("Plain", "once", "5", "Hi {名字}", 1010, "host")
         mod.debug_run_tasks(1015)
-        self.assertEqual("\nHi Alice\0", h.last_call()["arg3_text"])
+        self.assertEqual("\nHi [Alice]\0", h.last_call()["arg3_text"])
         self.assertTrue(colored["done"] and plain["done"])
 
     def test_daily_runs_once_per_local_calendar_day(self):

@@ -1568,6 +1568,14 @@ local function build_chat_automation(env)
         if not source then return nil,'未知预设' end
         if language~='zh' and language~='en' then return nil,'消息语言无效' end
         source=copy(source)
+        -- Built-in presets are explicitly complete reminder configurations.
+        -- Keep role policy (allow_solo/output) from the factory profile, and
+        -- leave retired quick-timer settings and per-user rules untouched.
+        for _,key in ipairs({'enabled','welcome','ping','ping_building','ping_stratagem','ping_map',
+            'ping_supplies','ping_summon','ping_small_enemy','ping_flying_enemy',
+            'ping_medium_enemy','ping_large_enemy','ping_giant_enemy'}) do
+            source[key]=true
+        end
         source.message_language=language
         for key,value in pairs(type(templates)=='table' and templates or {}) do
             if key=='welcome_message' or key=='ping_message' or key=='summon_message'
@@ -1950,8 +1958,12 @@ local function build_chat_automation(env)
         local group,teammate=language=='en' and 'Squad' or '小队',language=='en' and 'Teammate' or '队友'
         local name = anonymous and group or identity and plain(identity.name,96) or teammate
         local short = anonymous and group or identity and plain(identity.short,16) or teammate
+        local has_player_name = not anonymous and identity ~= nil and name ~= ''
         if name=='' then name=teammate end
         if short=='' then short=teammate end
+        if has_player_name and not (name:sub(1,1)=='[' and name:sub(-1)==']') then
+            name='['..name..']'
+        end
         if color_player_names and not anonymous and identity and type(identity.color)=='string'
             and (#identity.color==6 or #identity.color==8) and identity.color:match('^%x+$') then
             local color=identity.color:upper()
@@ -6744,6 +6756,10 @@ end
 
 local function request_panel_open()
     if PANEL.open then return true end
+    if not focused() then
+        panel_context_report('blocked', 'game window is not focused')
+        return false
+    end
     if M.frames < 600 then panel_context_report('blocked', 'startup') return false end
     local available, world_state = world_context_sample(true)
     if not available then
@@ -6781,17 +6797,29 @@ end)()
 -- here with `local function`: world_ready above calls it, and a `local` introduced
 -- after its reader leaves the reader holding nil.
 panel_clear = function(discard_world_gui)
-    if not discard_world_gui and sr and PANEL.gui and PANEL.world then
+    if sr and PANEL.gui and PANEL.world then
+        local owner_live = false
         local ok, owner = false, nil
         if sr.Application and type(sr.Application.main_world) == 'function' then
             ok, owner = pcall(sr.Application.main_world)
         end
-        -- The GUI belongs to main_world. A guarded native destroy is still unsafe
-        -- when that world has already been replaced or became unavailable, so only
-        -- call into World while the owner identity is freshly confirmed.
         if ok and owner == PANEL.world then
-            pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui)
+            owner_live = true
+        elseif sr.Application and type(sr.Application.worlds) == 'function' then
+            -- During a scene transition, the old main world can remain live as a
+            -- non-main world. Match Armory's membership check before destroying;
+            -- if the owner has left the live set, discard without native access.
+            local worlds_ok, worlds = pcall(sr.Application.worlds)
+            if worlds_ok and type(worlds) == 'table' then
+                local count = #worlds
+                if count > 0 and count <= 256 then
+                    for i = 1, count do
+                        if worlds[i] == PANEL.world then owner_live = true; break end
+                    end
+                end
+            end
         end
+        if owner_live then pcall(sr.World.destroy_gui, PANEL.world, PANEL.gui) end
     end
     FONT.resolved, FONT.gui = false, nil
     PANEL.gui, PANEL.draw_guis = nil, nil
@@ -8198,9 +8226,10 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     field('cooldown',say('独立冷却（秒）：空 = 全局；0 = 每次新事件','RULE COOLDOWN: BLANK = GLOBAL; 0 = EVERY EVENT'),y)
     text(say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),486,y+78,12,C.YELLOW,474)
     text(say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),486,y+103,12,C.MUTED,474)
-    text(say('变量：{玩家名} / {缩写} / {编号}','TOKENS: PLAYER NAME / SHORT / SLOT'),486,755,14,C.TEXT,474)
-    text('{目标} / {类别} / {动作} / {位置}',486,786,14,C.TEXT,474)
-    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,828,12,C.MUTED,474)
+    text(say('玩家','PLAYER')..': {player_name} / {abbr} / {slot}',486,755,13,C.TEXT,474)
+    text(say('事件','EVENT')..': {target}/{stratagem} / {category} / {action}',486,781,12,C.TEXT,474)
+    text(say('任务/位置','MISSION / POSITION')..': {objective} / {objective_type} / {position}',486,807,12,C.TEXT,474)
+    text(say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),486,833,12,C.MUTED,474)
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,870,474,false)
     if p.hint then text(status_text and status_text(p.hint) or p.hint,486,919,12,C.YELLOW,474) end
 end
@@ -8764,9 +8793,9 @@ local function draw_panel()
         text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
         text(M.language.status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
         text(M.language.status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
-        text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: {category} / {target} / {position} / {action}'), IX, y + 62, 12, C.MUTED, IW)
-        text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 84, 12, C.MUTED, IW)
-        text(caption('{玩家名} / {缩写} / {编号}', '{player_name} / {short} / {number}'), IX, y + 106, 12, C.MUTED, IW)
+        text(caption('事件：{target}/{stratagem} / {category} / {action}', 'EVENT: {target}/{stratagem} / {category} / {action}'), IX, y + 62, 12, C.MUTED, IW)
+        text(caption('任务/位置：{objective} / {objective_type} / {position}', 'MISSION / POSITION: {objective} / {objective_type} / {position}'), IX, y + 84, 12, C.MUTED, IW)
+        text(caption('玩家：{玩家名}/{player_name} / {缩写}/{abbr} / {编号}/{slot}', 'PLAYER: {player_name} / {abbr} / {slot}'), IX, y + 106, 11, C.MUTED, IW)
         if PANEL.hint then text(M.language.status(PANEL.hint), IX, y + 128, 11, C.YELLOW, IW) end
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
@@ -8795,7 +8824,7 @@ local function draw_panel()
         y = y + 44
         text(PANEL.hint and M.language.status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
              IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW)
-        text(caption('欢迎语可用 {玩家名}、{缩写}、{编号}', 'WELCOME: {player_name} / {short} / {number}'), IX, y + 38, 11, C.DIM, IW)
+        text(caption('欢迎/定时：{玩家名}/{player_name} / {缩写}/{abbr} / {编号}/{slot}', 'PLAYER: {player_name} / {abbr} / {slot}'), IX, y + 38, 10, C.DIM, IW)
     else
     field('name', caption('事件名称', 'EVENT NAME'), draft.name, y)
     y = y + 62
@@ -8822,6 +8851,7 @@ local function draw_panel()
                      'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), IX, y + 32, 11, C.MUTED, IW)
         text(caption('重复 / 倒计时：5–86400 秒', 'REPEAT / COUNTDOWN: 5-86400 S'), IX, y + 52, 12, C.MUTED, IW)
         text(caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), IX, y + 72, 12, C.MUTED, IW)
+        text(caption('玩家：{玩家名}/{player_name} / {缩写}/{abbr} / {编号}/{slot}', 'PLAYER: {player_name} / {abbr} / {slot}'), IX, y + 92, 10, C.DIM, IW)
     end
     -- The right column uses the same row controls as the settings form.
     IX, IW = RX, RIW
@@ -8909,6 +8939,12 @@ local function panel_frame()
     -- Sample K even while the panel is unavailable. A key held across startup or a
     -- world transition must not become a fresh toggle when the gate opens.
     local toggle = key_pressed(0x4B)
+    local is_focused = focused()
+    if not is_focused then
+        if PANEL.open then set_panel_open(false)
+        else panel_input.release(); release_cursor() end
+        return
+    end
     local world_context_ok, world_context_state = panel_context_guard.world_sample(false)
     if not world_context_ok then
         panel_context_guard.report('unknown', world_context_state)
@@ -8962,7 +8998,6 @@ local function panel_frame()
         return
     end
 
-    local is_focused = focused()
     local queued_edit_action
     if PANEL.editing and PANEL.input_edit_field then
         local pending, overflow = panel_input.drain()

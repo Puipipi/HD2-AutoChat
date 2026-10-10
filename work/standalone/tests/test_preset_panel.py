@@ -362,25 +362,35 @@ class PresetPanelTests(unittest.TestCase):
         self.assertEqual('X', saved.name,
                          'the queued character must reach the edited name before save')
 
-    def test_pending_native_ring_text_survives_focus_release(self):
+    def test_focus_loss_cancels_preset_name_draft_and_releases_panel_ownership(self):
         lua, h, mod = self.fresh()
         p = mod.debug_panel()
-        p.editing, p.edit_field, p.edit_text = True, 'preset:name', ''
+        library = mod.debug_preset_library()
+        saved, _, preset_id = library.save('Saved preset name', 'host')
+        self.assertTrue(saved)
+        gui_id = p.gui['id']
+        self.assertTrue(h.gui_is_live(gui_id))
+        self.assertTrue(mod.debug_cursor_state()['taken'])
+        p.editing, p.edit_field, p.edit_text = True, 'preset:name', 'Unconfirmed rename'
         p.input_edit_field = 'preset:name'
-        panel_input = mod.debug_panel_input()
-        lua.execute("""queued = true
-            local input = ...
-            local old_status = input.status
-            input.status = function() local value=old_status();value.broken=false;return value end
-            input.drain = function()
-                if queued then queued=false; return {{message=0x0102,wparam=0x59,lparam=1}}, false end
-                return {}, false
-            end""", panel_input)
+
         h.own_pid = 31337
         lua.eval('update()')
-        self.assertEqual('Y', p.edit_text,
-                         'drain happens before focus-loss release, preserving the final character')
-        self.assertTrue(p.editing, 'focus loss keeps the current field draft available for resume or explicit cancel')
+
+        self.assertFalse(p.open, 'losing game focus closes the panel')
+        self.assertFalse(p.editing, 'the unconfirmed preset rename is cancelled on forced close')
+        entries = library.list('host')
+        saved_entry = next(entries[i] for i in range(1, len(entries) + 1)
+                           if entries[i].id == preset_id)
+        self.assertEqual('Saved preset name', saved_entry.name,
+                         'forced close must leave the saved preset unchanged')
+        self.assertEqual(3, len(entries), 'closing a draft must not create another preset')
+        self.assertFalse(h.gui_is_live(gui_id), 'focus loss destroys the panel GUI')
+        self.assertEqual(0, h.live_guis)
+        self.assertFalse(mod.debug_cursor_state()['taken'])
+        self.assertEqual('none', h.user32_clip_text())
+        self.assertFalse(mod.debug_panel_input().status()['editing'],
+                         'text input bridge must be released with the panel')
 
     def test_missing_library_is_empty_and_can_be_saved(self):
         lua, h = fresh_image(font_ids=True)

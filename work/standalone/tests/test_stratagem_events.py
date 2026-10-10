@@ -229,7 +229,7 @@ class StratagemEventsTests(unittest.TestCase):
                 self.f.put(RECORDS+0x1c0+0x10,'<QQQ',1_000_000_000,1_038_217_899,1_009_717_899)
                 self.assertEqual(self.reader.poll(1)[0],1)
                 self.assertTrue(controller.poll(1)[0])
-                self.assertEqual(sent,['\nAlice'+('正在开始' if row['action']=='use' else '召唤了')+row['label']])
+                self.assertEqual(sent,['\n[Alice]'+('正在开始' if row['action']=='use' else '召唤了')+row['label']])
                 self.reader.poll(2);controller.poll(2);self.assertEqual(len(sent),1)
 
     def test_corrupt_record_count_or_wrong_runtime_call_type_is_ignored(self):

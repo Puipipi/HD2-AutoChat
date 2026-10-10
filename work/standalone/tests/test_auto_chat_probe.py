@@ -378,6 +378,7 @@ function harness.install()
     -- own before honouring the hotkey), so the mock must provide it or the mod
     -- stops at "missing kernel32 symbol".
     harness.own_pid = harness.own_pid or 4242
+    harness.foreground_pid = harness.own_pid
     function kernel.GetCurrentProcessId() return harness.own_pid end
     harness.disable_qpc_frequency = function()
         kernel.QueryPerformanceFrequency = nil
@@ -403,6 +404,7 @@ function harness.install()
     local held_keys = {}
     harness.user32 = {
         set_key = function(vk, down) held_keys[vk] = down and true or false end,
+        set_foreground_pid = function(pid) harness.foreground_pid = pid end,
         cursor_visible = function() return cursor_visible end,
         show_count = function() return cursor_show_count end,
         clip = function() return clip_rect end,
@@ -494,7 +496,7 @@ function harness.install()
         function lib.GetForegroundWindow() return 'WINDOW' end
         function lib.GetWindowThreadProcessId(win, out)
             -- Focused by default, so the hotkey is live unless a test says otherwise.
-            unwrap(out)[0] = harness.own_pid or 4242
+            unwrap(out)[0] = harness.foreground_pid or harness.own_pid or 4242
             return 1
         end
         function lib.GetCursorPos(point)
@@ -525,6 +527,8 @@ function harness.install()
     -- disappears or just stops being updated.
     harness.gui_created, harness.gui_destroyed = 0, 0
     harness.live_guis = 0
+    local live_gui_ids = {}
+    harness.gui_is_live = function(id) return live_gui_ids[id] == true end
     harness.main_world = 'WORLD_MAIN'
     harness.worlds_reads = 0
     _G.stingray = {
@@ -586,11 +590,15 @@ function harness.install()
             create_screen_gui = function(world, ...)
                 harness.gui_created = harness.gui_created + 1
                 harness.live_guis = harness.live_guis + 1
+                live_gui_ids[harness.gui_created] = true
                 return {world = world, id = harness.gui_created}
             end,
             destroy_gui = function(world, gui)
                 harness.gui_destroyed = harness.gui_destroyed + 1
-                harness.live_guis = harness.live_guis - 1
+                if gui and live_gui_ids[gui.id] then
+                    live_gui_ids[gui.id] = nil
+                    harness.live_guis = harness.live_guis - 1
+                end
             end,
         },
         Window = {
@@ -1441,7 +1449,7 @@ class AutoChatProbeTest(unittest.TestCase):
         self.assertEqual(0, len(host_profile.rules))
         ok, client_profile = automation.validate_profile(client[1].payload)
         self.assertTrue(ok)
-        self.assertEqual(("en", "local", False),
+        self.assertEqual(("en", "local", True),
                          (client_profile[b"values"][b"message_language"], client_profile[b"values"][b"output"],
                           client_profile[b"values"][b"welcome"]))
         ok, chinese = automation.validate_profile(host[2].payload)

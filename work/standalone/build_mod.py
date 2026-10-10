@@ -61,7 +61,7 @@ Path(OUT).mkdir(parents=True, exist_ok=True)
 
 src = io.open(MOD_SOURCE, encoding="utf-8").read()
 DOCS = [os.path.join(W, "..", "..", "docs", name)
-        for name in ("PLUGIN-API.md", "INTERFACE-DEMO.md")]
+        for name in ("PLUGIN-API.md", "INTERFACE-DEMO.md", "PLAYER-TEMPLATES.md")]
 if any(not os.path.isfile(path) for path in DOCS):
     raise SystemExit("FAIL required plugin documentation is missing")
 if os.path.isfile(ICON):
