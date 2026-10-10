@@ -92,7 +92,7 @@ class ScheduledTasksTest(unittest.TestCase):
         """)
         mod.add_task('template','once','5','{玩家名} {缩写} {编号}',1000)
         mod.debug_run_tasks(1005)
-        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'Alice A1 1')
+        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'\nAlice A1 1')
 
     def test_named_preset_roundtrips_behavior_and_role_task_definitions(self):
         lua, _, mod = self.fresh()
@@ -178,7 +178,7 @@ class ScheduledTasksTest(unittest.TestCase):
                          (restored.mode,restored.seconds,restored.message))
         mod.debug_run_tasks(5005)
         self.assertEqual(1,h.call_count())
-        self.assertEqual('saved behavior message\0',h.last_call()['arg3_text'])
+        self.assertEqual('\nsaved behavior message\0',h.last_call()['arg3_text'])
 
     def test_applying_client_preset_while_host_is_active_only_replaces_client_tasks(self):
         _,_,mod=self.fresh();library=mod.debug_preset_library()
@@ -278,9 +278,9 @@ class ScheduledTasksTest(unittest.TestCase):
         mod.debug_run_tasks(1029)
         self.assertEqual(0, h.call_count())
         mod.debug_run_tasks(1030)
-        self.assertEqual("first\0", h.last_call()["arg3_text"])
+        self.assertEqual("\nfirst\0", h.last_call()["arg3_text"])
         mod.debug_run_tasks(1045)
-        self.assertEqual("second\0", h.last_call()["arg3_text"])
+        self.assertEqual("\nsecond\0", h.last_call()["arg3_text"])
         self.assertTrue(once["done"])
         mod.debug_run_tasks(1046)
         self.assertEqual(2, h.call_count())
@@ -296,11 +296,11 @@ class ScheduledTasksTest(unittest.TestCase):
         self.assertTrue(automation.set("ping_sender_color", True, "host")[0])
         colored = mod.add_task("Colored", "once", "5", "Hi {玩家名}", 1000, "host")
         mod.debug_run_tasks(1005)
-        self.assertEqual("Hi <c=FF81ACFE>Alice<c=FFFFFFFF>\0", h.last_call()["arg3_text"])
+        self.assertEqual("\nHi <c=FF81ACFE>Alice<c=FFFFFFFF>\0", h.last_call()["arg3_text"])
         self.assertTrue(automation.set("ping_sender_color", False, "host")[0])
         plain = mod.add_task("Plain", "once", "5", "Hi {名字}", 1010, "host")
         mod.debug_run_tasks(1015)
-        self.assertEqual("Hi Alice\0", h.last_call()["arg3_text"])
+        self.assertEqual("\nHi Alice\0", h.last_call()["arg3_text"])
         self.assertTrue(colored["done"] and plain["done"])
 
     def test_daily_runs_once_per_local_calendar_day(self):

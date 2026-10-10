@@ -6,6 +6,29 @@ from test_ping_events import PingEventsTests
 
 
 class PingIntegrationTest(unittest.TestCase):
+    def test_generic_stratagem_marker_keeps_catalog_bilingual_names(self):
+        reader=PingEventsTests();reader.setUp();reader.target('B0F1B354BA1D38D8')
+        reader.localized[689074879]='战略配备';reader.poll(0)
+        reader.mark(kind=20,localization_key=689074879);reader.header(0,1);reader.poll(1)
+        event=reader.events[0][0]
+        self.assertIsNone(event['target_names']['native_name'])
+
+        lua,h=fresh_image();mod=h.load(SOURCE)
+        catalog=mod.debug_stratagem_catalog()
+        lua.execute('''local c=...
+            local row={id=2265180087,rule_id=2265180087,group='other',
+                display_name='CQC-1 唯一真旗',display_name_en='CQC-1 One True Flag',
+                target_names={zh='CQC-1 唯一真旗',en='CQC-1 One True Flag'}}
+            c.lookup=function() return nil end
+            c.resolve_resource=function() return row end''',catalog)
+        names=event['target_names']
+        host_event=lua.table_from({'category':'stratagem','resource':event['resource'],
+            'localization_key':event['localization_key'],'target_names':lua.table_from({
+                'zh':names['zh'],'en':names['en'],'native_name':names['native_name']})})
+        mod.debug_enrich_stratagem_event(host_event,1)
+        self.assertEqual(host_event['target_names']['zh'],'CQC-1 唯一真旗')
+        self.assertEqual(host_event['target_names']['en'],'CQC-1 One True Flag')
+
     def test_confirmed_drop_pod_target_survives_host_formatting_and_native_send(self):
         # First produce the observed generic-name event through the real ping
         # classifier, then pass its event record through the host policy/sender.
@@ -45,7 +68,7 @@ class PingIntegrationTest(unittest.TestCase):
         self.assertEqual(automation.state.pings[1].text, '坠落舱')
         self.assertTrue(automation.poll(1)[0])
         self.assertEqual(h.call_count(), 1)
-        self.assertEqual(h.last_call().arg3_text.rstrip('\0'), '坠落舱')
+        self.assertEqual(h.last_call().arg3_text.rstrip('\0'), '\n坠落舱')
         self.assertNotIn('特殊地点', h.last_call().arg3_text)
 
     def native_lookup(self):

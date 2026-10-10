@@ -22,6 +22,8 @@ class MissionCatalogTests(unittest.TestCase):
                     self.assertEqual(f"{resource_hash(row['path']):016X}",row['resource'])
                 self.assertIn('SpottableComponentData',row['components'])
                 self.assertNotIn('AiEnemyComponentData',row['components'])
+                self.assertTrue(row.get('label_en'))
+                self.assertFalse(any('\u4e00' <= char <= '\u9fff' for char in row['label_en']))
         self.assertNotIn('B0F1B354BA1D38D8',seen,'CQC-1 flag weapon is not the mission flagpole')
         self.assertNotIn('14368DC8784220B0',seen,'a weapon terminal component alone is not a task site')
         self.assertNotIn('C6A87C428FD3C7A3',seen,'a Hellbomb terminal is still stratagem equipment')

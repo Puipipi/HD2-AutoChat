@@ -59,7 +59,7 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(self.module[b'phrase'](b'tab.special_targets'), b'SPECIAL TARGETS')
         self.assertEqual(self.module[b'phrase'](b'toggle.mission_items'), b'MISSION ITEM ALERTS')
         self.assertEqual(self.module[b'stock_template']('标记了{目标}（{类别}）'.encode()),
-                         'Marked {目标} ({类别})'.encode())
+                         'Marked {target}'.encode())
         custom = '自定义：{目标}，队员提醒'.encode()
         self.assertEqual(self.module[b'stock_template'](custom), custom)
         self.assertEqual(self.module[b'text']('中文'.encode(), b'ENGLISH'), b'ENGLISH')
@@ -67,7 +67,11 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(self.module[b'phrase'](b'category.poi'), '特殊目标'.encode())
         self.assertEqual(self.module[b'phrase'](b'label.cooldown'), '冷却（秒）'.encode())
         self.assertEqual(self.module[b'stock_template']('Marked {目标} ({类别})'.encode()),
-                         '标记了{目标}（{类别}）'.encode())
+                         '标记了{目标}'.encode())
+        custom = 'Marked {target} ({name})'.encode()
+        self.assertEqual(self.module[b'stock_template'](custom,b'en'), custom)
+        self.assertEqual(self.module[b'stock_template']('{玩家名} called in {目标}'.encode(),b'zh'),
+                         '{玩家名}召唤了{目标}'.encode())
         self.assertEqual(self.module[b'stock_template'](b'HELLO FROM AUTOCHAT'),
                          '自动聊天测试消息'.encode())
 

@@ -27,7 +27,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Escape Pod"
     },
     {
       "resource": "01A88312C8889D5F",
@@ -39,7 +40,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Turret Control Terminal"
     },
     {
       "resource": "051DA4B57216A005",
@@ -51,7 +53,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "06D3C4720E642FC1",
@@ -62,7 +65,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Egg Cluster"
     },
     {
       "resource": "0722B3A72ADE6CB1",
@@ -73,7 +77,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "TCS Main Tower"
     },
     {
       "resource": "073270650F859DD0",
@@ -87,7 +92,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Chemical Weapons Backpack"
     },
     {
       "resource": "0801B6B3C5D12EBC",
@@ -99,7 +105,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Ground-Based All-Terrain Excavator"
     },
     {
       "resource": "095686275A113614",
@@ -110,7 +117,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Shrieker Nest"
     },
     {
       "resource": "0A12D5A29CDF2D40",
@@ -121,7 +129,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Extraction Beacon"
     },
     {
       "resource": "0DC9084E50C051F3",
@@ -135,7 +144,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Platinum Bar"
     },
     {
       "resource": "0DF874E208040D2F",
@@ -146,7 +156,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "0E88F182E83A4275",
@@ -158,7 +169,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "0F1A0189B327C5CB",
@@ -172,7 +184,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SSSD"
     },
     {
       "resource": "10E44156F08786EF",
@@ -183,7 +196,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bio-Processor"
     },
     {
       "resource": "1262CD07B196AAC3",
@@ -195,7 +209,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "1312B769F47256D9",
@@ -207,7 +222,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "SEAF Anti-Air Missile Site"
     },
     {
       "resource": "142637570A721CB9",
@@ -218,7 +234,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Orbital Cannon Ammo Supply"
     },
     {
       "resource": "15031543894C3F3C",
@@ -229,7 +246,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "TCS Spore Spewer"
     },
     {
       "resource": "1556FE9780D5D52D",
@@ -242,7 +260,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "15E2A2B11BA78C5A",
@@ -255,7 +274,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "162256BD224F6265",
@@ -267,7 +287,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Refueling Station Terminal"
     },
     {
       "resource": "16D7BA33ED511664",
@@ -279,7 +300,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Control Tower Terminal"
     },
     {
       "resource": "1A3B52A4D3F166F7",
@@ -291,7 +313,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Illuminate City Cannon Terminal"
     },
     {
       "resource": "1B633762874A709A",
@@ -302,7 +325,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Capital Defense Facility"
     },
     {
       "resource": "1C2360811101BCCE",
@@ -313,7 +337,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Cooling Pipe"
     },
     {
       "resource": "1D72EBD1A6916E67",
@@ -324,7 +349,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Assembly Facility Crank"
     },
     {
       "resource": "22CC0ED4CEB9CB68",
@@ -335,7 +361,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Fabricator"
     },
     {
       "resource": "23C85E970FB46685",
@@ -346,7 +373,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Stratagem Jammer"
     },
     {
       "resource": "245F7D8792CD23E5",
@@ -358,7 +386,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Military Communications Delivery Point"
     },
     {
       "resource": "24ACA2B4D15D2E2F",
@@ -369,7 +398,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Generator Unit"
     },
     {
       "resource": "25C5B9818EF934E3",
@@ -381,7 +411,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "2670E0047B2EB409",
@@ -393,7 +424,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Detector Tower"
     },
     {
       "resource": "2778F620A6E414AF",
@@ -404,7 +436,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate Weather Device Core"
     },
     {
       "resource": "2862C5AFC2E837BA",
@@ -416,7 +449,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "29D0A1DFB5FD811F",
@@ -430,7 +464,8 @@
         "SpottableComponentData",
         "ObjectiveShuttleControllerComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "2B581BBB45DA1225",
@@ -442,7 +477,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Fuel Extraction Terminal"
     },
     {
       "resource": "2B5D3186EE3A4A84",
@@ -455,7 +491,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mutated Eggs"
     },
     {
       "resource": "2D3BC1683A54298D",
@@ -470,7 +507,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Intelligence Package"
     },
     {
       "resource": "317B2C0E4D10E293",
@@ -482,7 +520,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Turret Control Data Drop-off"
     },
     {
       "resource": "319388D1D8ACB8F3",
@@ -494,7 +533,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "TCS Mission Terminal"
     },
     {
       "resource": "3231BD912357A9E1",
@@ -506,7 +546,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "33F2BCDAE3A12592",
@@ -519,7 +560,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SSSD"
     },
     {
       "resource": "346C42FD9C915904",
@@ -531,7 +573,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Orbital Cannon Terminal"
     },
     {
       "resource": "36C5E772F8A3B9D3",
@@ -545,7 +588,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SSSD"
     },
     {
       "resource": "36CC8EAD2BB18D78",
@@ -556,7 +600,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "372481E910C05A76",
@@ -570,7 +615,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Tactical Camera"
     },
     {
       "resource": "37EB67CB7ACE7410",
@@ -581,7 +627,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Energy Core Station"
     },
     {
       "resource": "3A28A51BAA029E1A",
@@ -592,7 +639,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Oil Extraction Drill"
     },
     {
       "resource": "3A2CEF12ED32A088",
@@ -603,7 +651,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "3CE56937E0BD28BD",
@@ -614,7 +663,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Factory Sector Gate"
     },
     {
       "resource": "3DE2415EA33B6897",
@@ -627,7 +677,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Black Box"
     },
     {
       "resource": "3E099DDF97ACF85F",
@@ -642,7 +693,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Sample Box"
     },
     {
       "resource": "3E993C23A25E6B88",
@@ -656,7 +708,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Automaton Mission Data"
     },
     {
       "resource": "3F2C34C69CFC94B2",
@@ -669,7 +722,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "3F70E3503A3293F9",
@@ -680,7 +734,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Pelican Fuel Transport"
     },
     {
       "resource": "3F8734AEC15B82AD",
@@ -691,7 +746,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Pelican"
     },
     {
       "resource": "4012166966A9E6E9",
@@ -704,7 +760,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SEAF Artillery Shells"
     },
     {
       "resource": "4232EE48E2CFD24E",
@@ -715,7 +772,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Fabricator"
     },
     {
       "resource": "423FF97D57AB04F5",
@@ -727,7 +785,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Ground-Based All-Terrain Excavator"
     },
     {
       "resource": "424036E9F7DE9A1E",
@@ -738,7 +797,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Cooling Valve"
     },
     {
       "resource": "42786DC1DD1EACAD",
@@ -749,7 +809,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Nuclear Missile"
     },
     {
       "resource": "43EC60F66E7E046B",
@@ -762,7 +823,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Chemical Weapons Backpack"
     },
     {
       "resource": "44748FFC63F78A72",
@@ -775,7 +837,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Hive Breaker Drill"
     },
     {
       "resource": "459DD5EB8C68C63F",
@@ -786,7 +849,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Factory Sector Entrance"
     },
     {
       "resource": "460576BBDCF770D0",
@@ -798,7 +862,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Armory Generator"
     },
     {
       "resource": "46918A7483D70F3E",
@@ -811,7 +876,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "4747668D063EEC06",
@@ -824,7 +890,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "4776A1CF3F19A13B",
@@ -835,7 +902,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Stalker Nest"
     },
     {
       "resource": "480445A33039CE5E",
@@ -846,7 +914,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Egg Cluster"
     },
     {
       "resource": "4A3E722B5A865E38",
@@ -861,7 +930,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Black Box"
     },
     {
       "resource": "4C182656063F121A",
@@ -873,7 +943,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Control Tower Data Drop-off"
     },
     {
       "resource": "4FB8EB356AC8553E",
@@ -884,7 +955,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Fabricator"
     },
     {
       "resource": "5158E582FBEB26BD",
@@ -895,7 +967,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Fabricator"
     },
     {
       "resource": "516E4FA1D2AE46AE",
@@ -907,7 +980,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "52D52230745B66A0",
@@ -919,7 +993,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "534000F7801EA508",
@@ -930,7 +1005,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Data Collection Drop-off"
     },
     {
       "resource": "542A14BA4D755F4E",
@@ -942,7 +1018,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Radar Station Terminal"
     },
     {
       "resource": "54B66A0D35FDF785",
@@ -954,7 +1031,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Organic Matter Extraction Terminal"
     },
     {
       "resource": "5684D928C9AB00D1",
@@ -967,7 +1045,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Launch Codes"
     },
     {
       "resource": "5726276FED2241B3",
@@ -980,7 +1059,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Orbital Cannon Ammunition"
     },
     {
       "resource": "57DB57121F3E7ED2",
@@ -991,7 +1071,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illegal Broadcast Tower"
     },
     {
       "resource": "5852B7D2F865966C",
@@ -1002,7 +1083,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Oil Extractor"
     },
     {
       "resource": "5A14BF4098BF4259",
@@ -1014,7 +1096,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "5CF84155E60C6E4D",
@@ -1026,7 +1109,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mechanical Wormhole"
     },
     {
       "resource": "60544E51EE260967",
@@ -1039,7 +1123,8 @@
         "ObjectiveCarryDeliveryComponentData",
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate City Cannon"
     },
     {
       "resource": "62D2C45A8B9703CC",
@@ -1050,7 +1135,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Relay Tower"
     },
     {
       "resource": "646F5AEBDFF603CB",
@@ -1062,7 +1148,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Black Box Drop-off"
     },
     {
       "resource": "68053EAE33FFA084",
@@ -1073,7 +1160,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate Tech Hub Core"
     },
     {
       "resource": "682871578A4E98EB",
@@ -1084,7 +1172,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Airbase Control Tower"
     },
     {
       "resource": "6838D8C197CC9C78",
@@ -1096,7 +1185,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Orbital Cannon"
     },
     {
       "resource": "6845B56D77E61B9F",
@@ -1108,7 +1198,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Military Communications Terminal"
     },
     {
       "resource": "688949109126ECE4",
@@ -1120,7 +1211,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mechanical Wormhole"
     },
     {
       "resource": "68BFAC3C8A03BB83",
@@ -1132,7 +1224,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Stratagem Jammer Terminal"
     },
     {
       "resource": "6B7EE87FB2EC6455",
@@ -1146,7 +1239,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "6C62E2E25E084083",
@@ -1160,7 +1254,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SEAF Artillery Shells"
     },
     {
       "resource": "6DB870D59730EE07",
@@ -1171,7 +1266,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Medium Cooling Pipe"
     },
     {
       "resource": "6DC9F65AF69783BD",
@@ -1182,7 +1278,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Oil Valve"
     },
     {
       "resource": "6E499C5C95B019FC",
@@ -1193,7 +1290,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Command Bunker"
     },
     {
       "resource": "6FDCD0D7F8EAF267",
@@ -1204,7 +1302,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "TCS Pylon"
     },
     {
       "resource": "705B0136A9A9D73A",
@@ -1217,7 +1316,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Warhead"
     },
     {
       "resource": "75BE82ED8592A6B3",
@@ -1228,7 +1328,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Pelican Transport"
     },
     {
       "resource": "766E7B3BDF79452F",
@@ -1240,7 +1341,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "7B0F8449CA9D2DA0",
@@ -1251,7 +1353,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Pelican Transport"
     },
     {
       "resource": "7BDAA1BB44C3EE1C",
@@ -1262,7 +1365,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Terminid Stratagem Jammer"
     },
     {
       "resource": "7C81DE10F0023D08",
@@ -1276,7 +1380,8 @@
         "SpottableComponentData",
         "ObjectiveSecureAreaComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Flag"
     },
     {
       "resource": "7CA1B74B22C2EB9C",
@@ -1289,7 +1394,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "7E4876D0DBF9C981",
@@ -1301,7 +1407,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Relay Tower Terminal"
     },
     {
       "resource": "7E4C6B45BCC45C3F",
@@ -1312,7 +1419,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "867FFD3B4EA22E05",
@@ -1323,7 +1431,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Assembly Facility Cooling Pipe"
     },
     {
       "resource": "888536AE851DCA05",
@@ -1334,7 +1443,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Data Upload Device"
     },
     {
       "resource": "888EAAFD58C03C75",
@@ -1346,7 +1456,8 @@
       "components": [
         "ObjectiveDeliverableVehicleComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mission Cargo Truck"
     },
     {
       "resource": "8901F188DB366B4B",
@@ -1358,7 +1469,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "8A50B60B22186B9B",
@@ -1369,7 +1481,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Hive World Oil Valve"
     },
     {
       "resource": "8AD7A3118BD48D1C",
@@ -1383,7 +1496,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Black Box"
     },
     {
       "resource": "8C31B749759CBD61",
@@ -1394,7 +1508,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "8F7D4D9C196018C8",
@@ -1408,7 +1523,8 @@
         "SpottableComponentData",
         "ObjectiveSecureAreaComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Flag"
     },
     {
       "resource": "90001FEAC563D6A1",
@@ -1421,7 +1537,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Briefcase"
     },
     {
       "resource": "91209E5AF7A9660B",
@@ -1433,7 +1550,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveShuttleControllerComponentData"
-      ]
+      ],
+      "label_en": "Organic Matter Extraction Hose"
     },
     {
       "resource": "913B7D337E61EE4C",
@@ -1445,7 +1563,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Bio-Processor Terminal"
     },
     {
       "resource": "925158186B8FD952",
@@ -1456,7 +1575,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Relay Tower Alignment Switch"
     },
     {
       "resource": "95D717E4AA9ED443",
@@ -1467,7 +1587,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate City Cannon Crank"
     },
     {
       "resource": "973A2984F0CA6A30",
@@ -1479,7 +1600,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Automaton Communications Terminal"
     },
     {
       "resource": "97DD3178E9F0AB70",
@@ -1490,7 +1612,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "9A0D640BF4ABB03B",
@@ -1502,7 +1625,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "9A1F728716DA05B5",
@@ -1515,7 +1639,8 @@
         "SpottableComponentData",
         "ObjectiveSecureAreaComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Super Earth Flagpole"
     },
     {
       "resource": "9A6A60CF4BAD9FA5",
@@ -1527,7 +1652,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Defense Mission Terminal"
     },
     {
       "resource": "9B58C95349D051F9",
@@ -1539,7 +1665,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "9B75A86003C2A1F4",
@@ -1551,7 +1678,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Oil Extraction Mission Terminal"
     },
     {
       "resource": "9BFC8FCD68B09F28",
@@ -1563,7 +1691,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "SEAF Artillery"
     },
     {
       "resource": "9D3A7E11095E3355",
@@ -1577,7 +1706,8 @@
         "SpottableComponentData",
         "ObjectiveSecureAreaComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Flag"
     },
     {
       "resource": "9D8632A79C2D9789",
@@ -1588,7 +1718,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "9E0E5E86A44C62A1",
@@ -1601,7 +1732,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Automaton Mission Data"
     },
     {
       "resource": "9EA89CEEA6F8E766",
@@ -1614,7 +1746,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Larva Storage"
     },
     {
       "resource": "A09A19371FECD6A3",
@@ -1626,7 +1759,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "TCS Mission Terminal"
     },
     {
       "resource": "A0EA22BD370D4D72",
@@ -1637,7 +1771,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Civilian Evacuation Gate"
     },
     {
       "resource": "A1A7B76B29088843",
@@ -1648,7 +1783,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Fabricator"
     },
     {
       "resource": "A1BDB3A13E3633DD",
@@ -1660,7 +1796,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "SEAF Anti-Air Missile Site"
     },
     {
       "resource": "A1E90D748B3D8AAA",
@@ -1672,7 +1809,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "A21F08920052C27E",
@@ -1683,7 +1821,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Power Station"
     },
     {
       "resource": "A3D5F183F8A2B768",
@@ -1696,7 +1835,8 @@
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData",
         "ObjectiveShellRackComponentData"
-      ]
+      ],
+      "label_en": "SEAF Artillery Loader"
     },
     {
       "resource": "A531053415EB57DA",
@@ -1708,7 +1848,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "A7381B87F3A3B455",
@@ -1723,7 +1864,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SSSD"
     },
     {
       "resource": "A8AE6952B375EF6C",
@@ -1734,7 +1876,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Gunship Fabricator"
     },
     {
       "resource": "A8B999A49716BF41",
@@ -1745,7 +1888,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate Portal"
     },
     {
       "resource": "AA28CAF964D05500",
@@ -1756,7 +1900,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Spore Spewer"
     },
     {
       "resource": "AC6E5FA7DB7FE621",
@@ -1769,7 +1914,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "ACC611541CD839DB",
@@ -1781,7 +1927,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Extraction Beacon"
     },
     {
       "resource": "AEAEF7A1851E6C9D",
@@ -1793,7 +1940,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Anti-Air Site"
     },
     {
       "resource": "AFC719AF96F10DC3",
@@ -1804,7 +1952,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Infested Tower"
     },
     {
       "resource": "B127552416CE512E",
@@ -1817,7 +1966,8 @@
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "B19C942FFD41C4A5",
@@ -1828,7 +1978,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Defense Mission Silo"
     },
     {
       "resource": "B1D938C07E30C5DB",
@@ -1839,7 +1990,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "ICBM Silo"
     },
     {
       "resource": "B27FE88BC708A680",
@@ -1851,7 +2003,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "B31073E494A0643A",
@@ -1864,7 +2017,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Aquifer Drill"
     },
     {
       "resource": "B44F8D33E16202FB",
@@ -1876,7 +2030,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Refinery Terminal"
     },
     {
       "resource": "B50DBC63A02C0D3B",
@@ -1889,7 +2044,8 @@
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "B663751EB459D242",
@@ -1902,7 +2058,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Illuminate Artifact"
     },
     {
       "resource": "B6A181ADCF547AEB",
@@ -1913,7 +2070,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "B6FE4BD12C248286",
@@ -1924,7 +2082,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Assembly Facility Clamp"
     },
     {
       "resource": "B7C9C0D0C39AA349",
@@ -1936,7 +2095,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Black Box Recovery Terminal"
     },
     {
       "resource": "B8A49F22D83D52CF",
@@ -1947,7 +2107,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "ICBM Silo Lock"
     },
     {
       "resource": "BA80E8D1331D8489",
@@ -1959,7 +2120,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Power Restoration Terminal"
     },
     {
       "resource": "BADBA9174CAEE9FF",
@@ -1971,7 +2133,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "ICBM Launch Terminal"
     },
     {
       "resource": "BAF9DBD86B22270A",
@@ -1982,7 +2145,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Overseer Ship"
     },
     {
       "resource": "BB2570AFA4C767D8",
@@ -1994,7 +2158,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Data Upload Drop-off"
     },
     {
       "resource": "BB2984B9B83EBFD1",
@@ -2005,7 +2170,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate Harvesting Facility"
     },
     {
       "resource": "BC2AF8548C6D5E06",
@@ -2016,7 +2182,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "BD20741E0225BD33",
@@ -2028,7 +2195,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Organic Assembly Facility Terminal"
     },
     {
       "resource": "BF908A82B8E787AC",
@@ -2039,7 +2207,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "TCS Support Structure"
     },
     {
       "resource": "C02C2623B6359BB3",
@@ -2053,7 +2222,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "C066DCFAA61E740C",
@@ -2066,7 +2236,8 @@
         "ObjectiveWidgetPriorityComponentData",
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Data Collection Terminal"
     },
     {
       "resource": "C2F0CC038E724374",
@@ -2078,7 +2249,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "SEAF Artillery Terminal"
     },
     {
       "resource": "C3D9B291BD97B935",
@@ -2089,7 +2261,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "TCS Support Structure"
     },
     {
       "resource": "C71C0C7B2E688B9B",
@@ -2102,7 +2275,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Classified Data"
     },
     {
       "resource": "C8F9A2233048B836",
@@ -2116,7 +2290,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "CB036409F28330E7",
@@ -2128,7 +2303,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "D0444F56A7D86E2B",
@@ -2139,7 +2315,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Generator"
     },
     {
       "resource": "D3CEB59066593FBD",
@@ -2151,7 +2328,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Factory Mission Terminal"
     },
     {
       "resource": "D4A349DAAE850283",
@@ -2162,7 +2340,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illuminate City Cannon Lock"
     },
     {
       "resource": "D564F4E9E3A98599",
@@ -2174,7 +2353,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Fuel Refill Terminal"
     },
     {
       "resource": "D666AA61D804D311",
@@ -2186,7 +2366,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "D6A1019CF530FA1D",
@@ -2198,7 +2379,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Relay Tower Control Terminal"
     },
     {
       "resource": "D84FFC32A6E640A8",
@@ -2209,7 +2391,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Transport Ship"
     },
     {
       "resource": "D86B3F92DD4AAEDC",
@@ -2221,7 +2404,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Civilian Evacuation Main Terminal"
     },
     {
       "resource": "D88547FF02B212E8",
@@ -2232,7 +2416,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Factory"
     },
     {
       "resource": "D888E2EC286A4B0D",
@@ -2244,7 +2429,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "D8A28BFB827392BE",
@@ -2258,7 +2444,8 @@
         "SpottableComponentData",
         "ObjectiveDynamicLinkComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Fusion Battery"
     },
     {
       "resource": "DB59777F0ABAF6AF",
@@ -2272,7 +2459,8 @@
         "SpottableComponentData",
         "ObjectiveShuttleControllerComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Cargo Container"
     },
     {
       "resource": "DC19126D15692D04",
@@ -2286,7 +2474,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "DC901B71A3A73B9A",
@@ -2297,7 +2486,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Spore Lung"
     },
     {
       "resource": "DEF983C174B8E083",
@@ -2309,7 +2499,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Hive World Fuel Extraction Terminal"
     },
     {
       "resource": "DF3C4F91E298BFA4",
@@ -2322,7 +2513,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Drill"
     },
     {
       "resource": "DF657367D712CD8E",
@@ -2333,7 +2525,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "ICBM Silo"
     },
     {
       "resource": "DFA99372CEFBF84D",
@@ -2346,7 +2539,8 @@
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData",
         "ObjectiveDynamicLinkComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "E02E6BD34B606A85",
@@ -2357,7 +2551,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Spore Spewer"
     },
     {
       "resource": "E05784031312C43F",
@@ -2368,7 +2563,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Hive World Fuel Extraction Valve"
     },
     {
       "resource": "E09FCB5A280ACB1D",
@@ -2382,7 +2578,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "E2E6E77DCC99A1CB",
@@ -2393,7 +2590,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bio-Processor"
     },
     {
       "resource": "E41334ADBEAF0D12",
@@ -2405,7 +2603,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Radar Mission Terminal"
     },
     {
       "resource": "E48C901A7175F638",
@@ -2416,7 +2615,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Research Station Data Uplink"
     },
     {
       "resource": "E4BE3FDF0C857B7F",
@@ -2430,7 +2630,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "E73F6B5A100B7230",
@@ -2441,7 +2642,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mobile Radar"
     },
     {
       "resource": "E98D623E013A113B",
@@ -2453,7 +2655,8 @@
       "components": [
         "ObjectiveCarryDeliveryComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "E9929CB8800E1C8F",
@@ -2464,7 +2667,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Hive World Pipe Purge Valve"
     },
     {
       "resource": "EAE962D85C0C2D4A",
@@ -2475,7 +2679,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Oil Extraction Drill"
     },
     {
       "resource": "EECB5C13AE48637B",
@@ -2487,7 +2692,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Data Upload Main Terminal"
     },
     {
       "resource": "EF3A4136B21592CB",
@@ -2498,7 +2704,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Pelican"
     },
     {
       "resource": "F08AE61266335A40",
@@ -2509,7 +2716,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Illegal Research Station"
     },
     {
       "resource": "F0B98FB953B13960",
@@ -2520,7 +2728,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Fabricator"
     },
     {
       "resource": "F1ADE19F87015997",
@@ -2532,7 +2741,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Mission Terminal"
     },
     {
       "resource": "F1C4856CC0EAF603",
@@ -2544,7 +2754,8 @@
       "components": [
         "SpottableComponentData",
         "InteractableObjectiveTerminalComponentData"
-      ]
+      ],
+      "label_en": "Anti-Air Missile Launch Terminal"
     },
     {
       "resource": "F41432892465C5FD",
@@ -2558,7 +2769,8 @@
         "WieldableComponentData",
         "SpottableComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "SSSD"
     },
     {
       "resource": "F45D1A033E848901",
@@ -2569,7 +2781,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Large Cooling Pipe"
     },
     {
       "resource": "F598598C47617605",
@@ -2583,7 +2796,8 @@
         "SpottableComponentData",
         "ObjectiveShellComponentData",
         "ObjectiveCarryComponentData"
-      ]
+      ],
+      "label_en": "Mission Item"
     },
     {
       "resource": "F78BF0FF5C62140D",
@@ -2594,7 +2808,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Bug Hole"
     },
     {
       "resource": "F8E53685C00D926A",
@@ -2605,7 +2820,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Mission Delivery Point"
     },
     {
       "resource": "FB0AF9C18AAEFEF2",
@@ -2616,7 +2832,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Crashed Harvester"
     },
     {
       "resource": "FBD932EAC8E28E0B",
@@ -2627,7 +2844,8 @@
       "specific": true,
       "components": [
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Main Power Station"
     },
     {
       "resource": "FF5CC825B9571052",
@@ -2639,7 +2857,8 @@
       "components": [
         "WieldableComponentData",
         "SpottableComponentData"
-      ]
+      ],
+      "label_en": "Automaton Mortar Site"
     },
     {
       "resource": "FF660C3FD24531A0",
@@ -2651,7 +2870,8 @@
       "components": [
         "SpottableComponentData",
         "ObjectiveShuttleControllerComponentData"
-      ]
+      ],
+      "label_en": "Fuel Extraction Hose"
     }
   ]
 }

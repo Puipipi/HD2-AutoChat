@@ -8,8 +8,8 @@ local function build_chat_automation(env)
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
-        ping_message = 'Marked {目标} ({类别})', summon_message = '{玩家名} called in {目标}',
-        task_stratagem_message = '{玩家名} started {目标}', output = 'squad',
+        ping_message = 'Marked {target}', summon_message = '{player_name} called in {target}',
+        task_stratagem_message = '{player_name} started {target}', output = 'squad',
         quick_timer_enabled = false, quick_timer_interval = 30,
         quick_timer_message = 'HELLO FROM AUTOCHAT'}
     local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
@@ -189,7 +189,7 @@ local function build_chat_automation(env)
         end
     end
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
-        options.ping_message = '标记了{目标}（{类别}）'
+        options.ping_message = '标记了{目标}'
     end
     profiles = {host=copy(options), client=copy(options)}
     profiles.client.welcome, profiles.client.output = false, 'local'
@@ -497,6 +497,15 @@ local function build_chat_automation(env)
         if expected_role and role ~= expected_role then return false, '身份已变化，取消旧预设消息' end
         local output = output_override or options.output
         if output ~= 'local' and output ~= 'squad' then return false, '输出方式无效' end
+        local invalid_text = output == 'local' and 'empty or invalid text' or 'empty text'
+        if type(text) ~= 'string' or #text == 0 then return false, invalid_text end
+        while true do
+            if text:sub(1, 2) == '\r\n' then text = text:sub(3)
+            elseif text:sub(1, 1) == '\n' then text = text:sub(2)
+            else break end
+        end
+        if #text == 0 then return false, invalid_text end
+        text = '\n' .. text
         if output == 'local' then
             local ok, why = attempt(env.send_local, text)
             return ok == true, why or '本地显示入口不可用'
@@ -656,7 +665,9 @@ local function build_chat_automation(env)
         local slot = not anonymous and identity and identity.color_index
         local number = type(slot)=='number' and slot%1==0 and slot>=0 and slot<=3 and tostring(slot+1) or '?'
         local values = {['{玩家名}']=name,['{名字}']=name,['{触发者}']=name,
-            ['{缩写}']=short,['{编号}']=number}
+            ['{player}']=name,['{player_name}']=name,['{name}']=name,
+            ['{缩写}']=short,['{short}']=short,['{abbr}']=short,
+            ['{编号}']=number,['{slot}']=number,['{number}']=number}
         if type(extra)=='table' then
             for key,value in pairs(extra) do
                 if values[key]==nil and type(key)=='string' and type(value)=='string' then
@@ -666,7 +677,7 @@ local function build_chat_automation(env)
         end
         -- Function replacement keeps '%' and nested braces in player names literal.
         local formatted=template:gsub('{[^{}]+}',function(key)return values[key] or key end)
-        return color_player_names and clip_color_markup(formatted,512) or clipped(formatted,512)
+        return color_player_names and clip_color_markup(formatted,511) or clipped(formatted,511)
     end
     local function bucket(peer, snapshot)
         local key = peer or snapshot and snapshot.mine
@@ -930,11 +941,23 @@ local function build_chat_automation(env)
         local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label,message_language)
         local summoned = event.action == 'summon'
         local executing = event.action == 'use'
-        local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and api.phrase('action.summon','召唤',message_language) or executing and api.phrase('action.start','开始',message_language) or api.phrase('action.mark','标记',message_language),
-            ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
-            ['{任务类型}']=objective_type or label,
-            ['{位置}']=position_text(event,message_language)}
+        local objective_name=event.objective_name
+        if type(event.objective_names)=='table' then
+            local selected=event.objective_names[message_language]
+            if type(selected)=='string' and selected~='' then objective_name=selected end
+        end
+        local action_text=summoned and api.phrase('action.summon','召唤',message_language)
+            or executing and api.phrase('action.start','开始',message_language)
+            or api.phrase('action.mark','标记',message_language)
+        local replacements = {['{类别}']=label,['{category}']=label,
+            ['{目标}']=plain(target,200),['{target}']=plain(target,200),['{stratagem}']=plain(target,200),['{战备}']=plain(target,200),
+            ['{动作}']=action_text,['{action}']=action_text,
+            ['{任务名}']=plain(type(objective_name)=='string' and objective_name or target,200),
+            ['{objective}']=plain(type(objective_name)=='string' and objective_name or target,200),
+            ['{task}']=plain(type(objective_name)=='string' and objective_name or target,200),
+            ['{任务类型}']=objective_type or label,['{objective_type}']=objective_type or label,
+            ['{task_type}']=objective_type or label,['{位置}']=position_text(event,message_language),
+            ['{position}']=position_text(event,message_language)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
         template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
         template=api.stock_template(template,message_language)
@@ -949,8 +972,8 @@ local function build_chat_automation(env)
             end
             prefix = prefix .. ' '
         end
-        text = prefix .. (options.ping_sender_color and clip_color_markup(text, math.max(0, 512 - #prefix))
-            or clipped(text, math.max(0, 512 - #prefix)))
+        text = prefix .. (options.ping_sender_color and clip_color_markup(text, math.max(0, 511 - #prefix))
+            or clipped(text, math.max(0, 511 - #prefix)))
         state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, rule_id=rule_id, cooldown=rule.cooldown, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}

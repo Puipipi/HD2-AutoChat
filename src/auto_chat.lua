@@ -861,12 +861,11 @@ M.build_language = function(env)
     }
     local stock={
         ['欢迎加入小队！']='Welcome to the squad!',
-        ['标记了{目标}（{类别}）']='Marked {目标} ({类别})',
-        ['{玩家名}召唤了{目标}']='{玩家名} called in {目标}',
-        ['{玩家名}正在开始{目标}']='{玩家名} started {目标}',
+        ['标记了{目标}']='Marked {target}',
+        ['{玩家名}召唤了{目标}']='{player_name} called in {target}',
+        ['{玩家名}正在开始{目标}']='{player_name} started {target}',
         ['自动聊天测试消息']='HELLO FROM AUTOCHAT',
-        -- Exact legacy stock text only; custom text is returned unchanged.
-        ['队友标记了{类别}，请注意！']='A teammate marked {类别}.',
+        -- Exact canonical UI copy; legacy message presets are handled below.
     }
     local stock_en={}
     for zh,en in pairs(stock) do stock_en[en]=en end
@@ -1033,6 +1032,22 @@ M.build_language = function(env)
     end
     function M.stock_template(value, locale)
         if type(value)~='string' then return value end
+        -- Migrate only exact shipped message templates in settings and presets;
+        -- user-written parenthetical text remains unchanged.
+        local old_marker={
+            ['队友标记了{类别}，请注意！']={zh='标记了{目标}',en='Marked {target}'},
+            ['标记了{目标}（{类别}）']={zh='标记了{目标}',en='Marked {target}'},
+            ['Marked {目标} ({类别})']={zh='标记了{目标}',en='Marked {target}'},
+            ['Marked {target} ({category})']={zh='标记了{目标}',en='Marked {target}'},
+            ['{玩家名} called in {目标}']={zh='{玩家名}召唤了{目标}',en='{player_name} called in {target}'},
+            ['{玩家名} started {目标}']={zh='{玩家名}正在开始{目标}',en='{player_name} started {target}'},
+        }
+        local replacement=old_marker[value]
+        if replacement then
+            if locale=='zh' then return replacement.zh end
+            if locale=='en' then return replacement.en end
+            value=replacement[state.locale] or replacement.en
+        end
         if locale=='zh' or locale=='en' then return value end
         local selected=state.locale
         if selected=='zh' then
@@ -1289,8 +1304,8 @@ local function build_chat_automation(env)
         ping_sender_prefix = true, ping_sender_color = true, ping_medium_enemy = true,
         ping_large_enemy = true, ping_giant_enemy = true, ping_summon = true,
         ping_small_enemy = false, ping_flying_enemy = true,
-        ping_message = 'Marked {目标} ({类别})', summon_message = '{玩家名} called in {目标}',
-        task_stratagem_message = '{玩家名} started {目标}', output = 'squad',
+        ping_message = 'Marked {target}', summon_message = '{player_name} called in {target}',
+        task_stratagem_message = '{player_name} started {target}', output = 'squad',
         quick_timer_enabled = false, quick_timer_interval = 30,
         quick_timer_message = 'HELLO FROM AUTOCHAT'}
     local keys = {'enabled', 'allow_solo', 'welcome', 'welcome_message',
@@ -1470,7 +1485,7 @@ local function build_chat_automation(env)
         end
     end
     if (saved_version or 1) < 2 and options.ping_message == '队友标记了{类别}，请注意！' then
-        options.ping_message = '标记了{目标}（{类别}）'
+        options.ping_message = '标记了{目标}'
     end
     profiles = {host=copy(options), client=copy(options)}
     profiles.client.welcome, profiles.client.output = false, 'local'
@@ -1778,6 +1793,15 @@ local function build_chat_automation(env)
         if expected_role and role ~= expected_role then return false, '身份已变化，取消旧预设消息' end
         local output = output_override or options.output
         if output ~= 'local' and output ~= 'squad' then return false, '输出方式无效' end
+        local invalid_text = output == 'local' and 'empty or invalid text' or 'empty text'
+        if type(text) ~= 'string' or #text == 0 then return false, invalid_text end
+        while true do
+            if text:sub(1, 2) == '\r\n' then text = text:sub(3)
+            elseif text:sub(1, 1) == '\n' then text = text:sub(2)
+            else break end
+        end
+        if #text == 0 then return false, invalid_text end
+        text = '\n' .. text
         if output == 'local' then
             local ok, why = attempt(env.send_local, text)
             return ok == true, why or '本地显示入口不可用'
@@ -1937,7 +1961,9 @@ local function build_chat_automation(env)
         local slot = not anonymous and identity and identity.color_index
         local number = type(slot)=='number' and slot%1==0 and slot>=0 and slot<=3 and tostring(slot+1) or '?'
         local values = {['{玩家名}']=name,['{名字}']=name,['{触发者}']=name,
-            ['{缩写}']=short,['{编号}']=number}
+            ['{player}']=name,['{player_name}']=name,['{name}']=name,
+            ['{缩写}']=short,['{short}']=short,['{abbr}']=short,
+            ['{编号}']=number,['{slot}']=number,['{number}']=number}
         if type(extra)=='table' then
             for key,value in pairs(extra) do
                 if values[key]==nil and type(key)=='string' and type(value)=='string' then
@@ -1947,7 +1973,7 @@ local function build_chat_automation(env)
         end
         -- Function replacement keeps '%' and nested braces in player names literal.
         local formatted=template:gsub('{[^{}]+}',function(key)return values[key] or key end)
-        return color_player_names and clip_color_markup(formatted,512) or clipped(formatted,512)
+        return color_player_names and clip_color_markup(formatted,511) or clipped(formatted,511)
     end
     local function bucket(peer, snapshot)
         local key = peer or snapshot and snapshot.mine
@@ -2211,11 +2237,23 @@ local function build_chat_automation(env)
         local objective_type=api.phrase('objective.'..objective_kind,objective_types[objective_kind] or label,message_language)
         local summoned = event.action == 'summon'
         local executing = event.action == 'use'
-        local replacements = {['{类别}']=label, ['{目标}']=plain(target, 200),
-            ['{动作}']=summoned and api.phrase('action.summon','召唤',message_language) or executing and api.phrase('action.start','开始',message_language) or api.phrase('action.mark','标记',message_language),
-            ['{任务名}']=plain(type(event.objective_name)=='string' and event.objective_name or target,200),
-            ['{任务类型}']=objective_type or label,
-            ['{位置}']=position_text(event,message_language)}
+        local objective_name=event.objective_name
+        if type(event.objective_names)=='table' then
+            local selected=event.objective_names[message_language]
+            if type(selected)=='string' and selected~='' then objective_name=selected end
+        end
+        local action_text=summoned and api.phrase('action.summon','召唤',message_language)
+            or executing and api.phrase('action.start','开始',message_language)
+            or api.phrase('action.mark','标记',message_language)
+        local replacements = {['{类别}']=label,['{category}']=label,
+            ['{目标}']=plain(target,200),['{target}']=plain(target,200),['{stratagem}']=plain(target,200),['{战备}']=plain(target,200),
+            ['{动作}']=action_text,['{action}']=action_text,
+            ['{任务名}']=plain(type(objective_name)=='string' and objective_name or target,200),
+            ['{objective}']=plain(type(objective_name)=='string' and objective_name or target,200),
+            ['{task}']=plain(type(objective_name)=='string' and objective_name or target,200),
+            ['{任务类型}']=objective_type or label,['{objective_type}']=objective_type or label,
+            ['{task_type}']=objective_type or label,['{位置}']=position_text(event,message_language),
+            ['{position}']=position_text(event,message_language)}
         local template = executing and options.task_stratagem_message or summoned and options.summon_message or options.ping_message
         template=((summoned or executing) and rule.call_message or not (summoned or executing) and rule.mark_message) or template
         template=api.stock_template(template,message_language)
@@ -2230,8 +2268,8 @@ local function build_chat_automation(env)
             end
             prefix = prefix .. ' '
         end
-        text = prefix .. (options.ping_sender_color and clip_color_markup(text, math.max(0, 512 - #prefix))
-            or clipped(text, math.max(0, 512 - #prefix)))
+        text = prefix .. (options.ping_sender_color and clip_color_markup(text, math.max(0, 511 - #prefix))
+            or clipped(text, math.max(0, 511 - #prefix)))
         state.pings[#state.pings+1] = {key=event.key, category=event.category, action=event.action, rule_id=rule_id, cooldown=rule.cooldown, text=text, expires=now+15, retry=now,
             context=attempt(env.context), session=snapshot and snapshot.session, mine=snapshot and snapshot.mine,
             host=snapshot and snapshot.host, creator_id=event.creator_id, known_identity=identity ~= nil, role=state.active_role}
@@ -2687,7 +2725,7 @@ local function preset_atomic_write(path, data)
 end
 M.builtin_presets = (function()
     local stock=M.language.stock_templates()
-    local chinese={welcome_message='欢迎加入小队！',ping_message='标记了{目标}（{类别}）',
+    local chinese={welcome_message='欢迎加入小队！',ping_message='标记了{目标}',
         summon_message='{玩家名}召唤了{目标}',task_stratagem_message='{玩家名}正在开始{目标}',
         quick_timer_message='自动聊天测试消息'}
     local english={}
@@ -3005,76 +3043,76 @@ local STRATAGEM_NAMES_ZH = {
     [5185868] = "AX/TX-13 腐息",
     [12688472] = "MD-6 反步兵雷区",
     [14345846] = "M-105 盟友",
-    [45875024] = "B-100 便携式地狱火炸弹",
-    [65564476] = "提取燃料",
+    [45875024] = "B-100 便捷式地狱火炸弹",
+    [65564476] = "未知战备",
     [73468749] = "LIFT-860 悬浮背包",
     [101457192] = "装填高爆弹",
-    [115737856] = "撤离信标",
-    [153819019] = "战术榴弹发射器",
-    [255298804] = "医疗补给包",
+    [115737856] = "未知战备",
+    [153819019] = "GL-52 缓和使者",
+    [255298804] = "未知战备",
     [272480476] = "SH-51 定向护盾",
-    [295629711] = "战斗机甲",
+    [295629711] = "EXO-45 “爱国者”外骨骼装甲",
     [336693041] = "S-11 矛枪",
     [458198946] = "MG-43 机枪",
     [460870572] = "TD-110 风暴漩涡",
     [474724029] = "A/FLAM-40 火焰喷射哨戒炮",
     [485866824] = "AX/AR-23 护卫犬",
-    [509712523] = "紧急撤离信标",
+    [509712523] = "未知战备",
     [512147393] = "GL-28 弹链式榴弹发射器",
     [533318241] = "MG-206 重机枪",
     [563851843] = "破门型战斗机甲",
     [599201298] = "超级地球旗帜",
     [623391597] = "A/G-16 加特林哨戒炮",
     [644090457] = "MD-8 毒气地雷",
-    [650447969] = "地震探测器",
-    [681028671] = "数据接口",
-    [685210453] = "勘探钻机",
-    [705279885] = "移动通信中继站",
-    [716088572] = "紧急撤离信标",
-    [716273285] = "钻孔炸药",
+    [650447969] = "未知战备",
+    [681028671] = "未知战备",
+    [685210453] = "未知战备",
+    [705279885] = "便携式通信中继站",
+    [716088572] = "未知战备",
+    [716273285] = "未知战备",
     [717707279] = "A/MLS-4X 火箭哨戒炮",
     [762584056] = "E/AT-12 反坦克炮台",
-    [774795224] = "鲨鱼能量武器",
+    [774795224] = "未知战备",
     [854563507] = "A/AC-8 自动哨戒炮",
-    [863373678] = "训练：增援信标",
+    [863373678] = "未知战备",
     [867876502] = "重新补给",
     [871315230] = "撤离信标",
     [875551083] = "AC-8 机炮",
     [890972990] = "StA-X3 W.A.S.P.发射器",
-    [905054095] = "地毯式轰炸",
-    [913592461] = "毒素钻机",
-    [929878807] = "额外扫射攻击（未使用）",
+    [905054095] = "未知战备",
+    [913592461] = "未知战备",
+    [929878807] = "未知战备",
     [951988742] = "AX/LAS-5 漫游车",
     [960389145] = "A/LAS-98 激光哨戒炮",
     [970450596] = "轨道激光炮",
     [992079466] = "ARC-3 电弧发射器",
-    [1005987791] = "信号干扰器",
-    [1042447730] = "暗流体背包",
-    [1053576110] = "B-100 便携式地狱火炸弹",
+    [1005987791] = "未知战备",
+    [1042447730] = "未知战备",
+    [1053576110] = "B-100 便捷式地狱火炸弹",
     [1063322614] = "轨道120MM高爆弹火力网",
-    [1091253198] = "医疗补给包",
+    [1091253198] = "未知战备",
     [1125307795] = "AX/FLAM-75 热狗",
-    [1232978203] = "遥控炸药",
+    [1232978203] = "未知战备",
     [1238358532] = "“飞鹰”空袭",
     [1280711447] = "轨道电磁冲击波攻击",
-    [1290499887] = "黑曜石型战斗机甲",
-    [1295431756] = "重新补给",
+    [1290499887] = "EXO-49 “解放者”外骨骼装甲",
+    [1295431756] = "未知战备",
     [1298599997] = "GR-8 无后坐力炮",
     [1337271929] = "MS-11 单兵导弹发射井",
-    [1426041086] = "TCS 03 震击器",
+    [1426041086] = "未知战备",
     [1432571981] = "FLAM-40 火焰喷射器",
-    [1449420233] = "超级地球武装部队小队",
-    [1503060624] = "虫洞封堵装置",
+    [1449420233] = "未知战备",
+    [1503060624] = "未知战备",
     [1560416221] = "轨道空爆攻击",
-    [1567517764] = "MG-43 机枪",
+    [1567517764] = "未知战备",
     [1582497738] = "A/M-12 迫击哨戒炮",
-    [1606251952] = "货运集装箱",
+    [1606251952] = "未知战备",
     [1685231450] = "“飞鹰”烟雾攻击",
-    [1692135420] = "AX/ARC-3 K-9 电弧护卫犬",
-    [1695682779] = "轨道照明弹",
+    [1692135420] = "AX/ARC-3 K-9",
+    [1695682779] = "未知战备",
     [1753436707] = "LIFT-850 喷射背包",
     [1813634375] = "EAT-700 消耗性凝固汽油弹",
-    [1824787072] = "TX-41 灭菌器",
+    [1824787072] = "未知战备",
     [1907808218] = "B-1 补给背包",
     [1979913877] = "“飞鹰”110MM火箭巢",
     [2002187052] = "TD-220 堡垒MK XVI",
@@ -3084,23 +3122,23 @@ local STRATAGEM_NAMES_ZH = {
     [2185045091] = "LIFT-182 传送背包",
     [2186648412] = "战术摄像机",
     [2207713849] = "APW-1 反器材步枪",
-    [2229216190] = "医疗补给包",
-    [2230051894] = "训练：撤离",
+    [2229216190] = "未知战备",
+    [2230051894] = "未知战备",
     [2232989803] = "MLS-4X 突击兵",
     [2239174926] = "MD-17 反坦克地雷",
-    [2265180087] = "近战旗帜",
-    [2266266587] = "增援信标",
-    [2271469939] = "重型火焰喷射器",
+    [2265180087] = "CQC-1 唯一真旗",
+    [2266266587] = "未知战备",
+    [2271469939] = "B/FLAM-80 焚燃者",
     [2281932031] = "FX-12 防护罩生成中继器",
-    [2319566343] = "运送超级固态硬盘",
+    [2319566343] = "未知战备",
     [2402590523] = "A/ARC-3 特斯拉塔",
     [2480128092] = "E/GL-21 掷弹兵防卫墙",
-    [2587901119] = "战斗机甲",
-    [2625074523] = "激光脉冲炮",
+    [2587901119] = "未知战备",
+    [2625074523] = "LAS-99 类星体加农炮",
     [2636699686] = "M-103 补给型快速侦察载具",
-    [2663642538] = "核弹",
-    [2670122272] = "货运集装箱",
-    [2720892179] = "虫族震动装置",
+    [2663642538] = "未知战备",
+    [2670122272] = "未知战备",
+    [2720892179] = "未知战备",
     [2742141597] = "MD-I4 燃烧地雷",
     [2744472229] = "轨道炮攻击",
     [2808191861] = "“飞鹰”空袭支援",
@@ -3109,44 +3147,44 @@ local STRATAGEM_NAMES_ZH = {
     [2902516083] = "轨道凝固汽油弹火力网",
     [2919842659] = "E/MG-101 重机枪部署支架",
     [2934950455] = "EAT-411 荡平者",
-    [2985177386] = "超级地球武装部队大炮",
-    [3001049275] = "空对空导弹（未使用）",
+    [2985177386] = "未知战备",
+    [3001049275] = "未知战备",
     [3078242205] = "RS-422 磁轨炮",
     [3085503322] = "A/M-23 电磁冲击波迫击哨戒炮",
-    [3086305673] = "伐木者型战斗机甲",
+    [3086305673] = "EXO-51 “伐木者”外骨骼装甲",
     [3108516875] = "轨道380MM高爆弹火力网",
     [3183339606] = "A/GM-17 瓦斯迫击哨戒炮",
     [3193297673] = "轨道毒气攻击",
-    [3193487269] = "S.O.S.求救信标",
-    [3275255096] = "A/MLS-4X 火箭哨戒炮",
+    [3193487269] = "未知战备",
+    [3275255096] = "未知战备",
     [3279813377] = "轨道游走火力网",
     [3288352984] = "M-1000 重装机枪",
     [3300666223] = "上传数据",
-    [3316399568] = "LIFT-850 喷射背包",
+    [3316399568] = "未知战备",
     [3330450692] = "CQC-20 破门锤",
     [3343676429] = "GL-21 榴弹发射器",
     [3353508219] = "SH-20 防弹护盾背包",
     [3413606544] = "EAT-17 消耗性反坦克武器",
-    [3455841218] = "迷你机枪",
+    [3455841218] = "M-1000 重装机枪",
     [3523620028] = "轨道精准攻击",
-    [3572024208] = "链锯巨剑",
+    [3572024208] = "CQC-9 除叶工具",
     [3656370131] = "“飞鹰”集束炸弹",
     [3702563421] = "装填反坦克弹",
     [3713568312] = "轨道烟雾攻击",
     [3722314010] = "超级地球旗帜",
     [3748434442] = "B/MD C4背包",
     [3753216434] = "EAT-17 消耗性反坦克武器",
-    [3796132384] = "轨道烟雾游走火力网",
-    [3837064536] = "重新武装“飞鹰”",
+    [3796132384] = "未知战备",
+    [3837064536] = "未知战备",
     [3843705076] = "SH-32 防护罩生成包",
-    [3868299561] = "干扰陷阱",
+    [3868299561] = "未知战备",
     [3923676543] = "FAF-14 飞矛",
-    [3928947721] = "运送超级固态硬盘",
+    [3928947721] = "未知战备",
     [3935317067] = "M-102 炮手快速侦察载具",
     [3989310204] = "地狱火炸弹",
     [4119049995] = "“飞鹰”500KG炸弹",
-    [4152191751] = "化学武器",
-    [4177070437] = "呼叫超级驱逐舰",
+    [4152191751] = "TX-41 灭菌器",
+    [4177070437] = "未知战备",
     [4196275240] = "“飞鹰”毒气空袭",
     [4239785897] = "A/MG-43 哨戒机枪",
     [4261593827] = "PLAS-45 纪元",
@@ -3154,6 +3192,164 @@ local STRATAGEM_NAMES_ZH = {
 }
 -- Inline this fragment before build_stratagem_catalog and pass STRATAGEM_NAMES_ZH as env.names_zh.
 -- END STRATAGEM NAMES ZH
+-- BEGIN STRATAGEM NAMES EN
+-- Readable English labels for the current 149 stable StratagemInfo IDs.
+-- Curated against the local ID/debug-name snapshot and Chinese display map.
+-- This is not an exported official English localization table. Several mission,
+-- tutorial, reward, and unused records need in-game/native-string confirmation.
+M.STRATAGEM_NAMES_EN = {
+    [5185868] = 'AX/TX-13 Dog Breath',
+    [12688472] = 'MD-6 Anti-Personnel Minefield',
+    [14345846] = 'M-105 Stalwart',
+    [45875024] = 'B-100 Portable Hellbomb',
+    [65564476] = 'Unknown stratagem',
+    [73468749] = 'LIFT-860 Hover Pack',
+    [101457192] = 'Load High-Explosive Shells',
+    [115737856] = 'Unknown stratagem',
+    [153819019] = 'GL-52 De-Escalator',
+    [255298804] = 'Unknown stratagem',
+    [272480476] = 'SH-51 Directional Shield',
+    [295629711] = 'EXO-45 Patriot Exosuit',
+    [336693041] = 'S-11 Speargun',
+    [458198946] = 'MG-43 Machine Gun',
+    [460870572] = 'TD-110 Maelstrom',
+    [474724029] = 'A/FLAM-40 Flame Sentry',
+    [485866824] = 'AX/AR-23 Guard Dog',
+    [509712523] = 'Unknown stratagem',
+    [512147393] = 'GL-28 Belt-Fed Grenade Launcher',
+    [533318241] = 'MG-206 Heavy Machine Gun',
+    [563851843] = 'EXO-84 Breacher Exosuit',
+    [599201298] = 'Super Earth Flag',
+    [623391597] = 'A/G-16 Gatling Sentry',
+    [644090457] = 'MD-8 Gas Mines',
+    [650447969] = 'Seismic Probe',
+    [681028671] = 'Unknown stratagem',
+    [685210453] = 'Prospecting Drill',
+    [705279885] = 'Portable Comms Relay',
+    [716088572] = 'Unknown stratagem',
+    [716273285] = 'Unknown stratagem',
+    [717707279] = 'A/MLS-4X Rocket Sentry',
+    [762584056] = 'E/AT-12 Anti-Tank Emplacement',
+    [774795224] = 'Unknown stratagem',
+    [854563507] = 'A/AC-8 Autocannon Sentry',
+    [863373678] = 'Unknown stratagem',
+    [867876502] = 'Resupply',
+    [871315230] = 'Unknown stratagem',
+    [875551083] = 'AC-8 Autocannon',
+    [890972990] = 'StA-X3 W.A.S.P. Launcher',
+    [905054095] = 'Unknown stratagem',
+    [913592461] = 'Unknown stratagem',
+    [929878807] = 'Unknown stratagem',
+    [951988742] = 'AX/LAS-5 Rover',
+    [960389145] = 'A/LAS-98 Laser Sentry',
+    [970450596] = 'Orbital Laser',
+    [992079466] = 'ARC-3 Arc Thrower',
+    [1005987791] = 'Unknown stratagem',
+    [1042447730] = 'Unknown stratagem',
+    [1053576110] = 'B-100 Portable Hellbomb',
+    [1063322614] = 'Orbital 120mm HE Barrage',
+    [1091253198] = 'Unknown stratagem',
+    [1125307795] = 'AX/FLAM-75 Hot Dog',
+    [1232978203] = 'Unknown stratagem',
+    [1238358532] = 'Eagle Airstrike',
+    [1280711447] = 'Orbital EMS Strike',
+    [1290499887] = 'EXO-49 Emancipator Exosuit',
+    [1295431756] = 'Unknown stratagem',
+    [1298599997] = 'GR-8 Recoilless Rifle',
+    [1337271929] = 'MS-11 Solo Silo',
+    [1426041086] = 'Unknown stratagem',
+    [1432571981] = 'FLAM-40 Flamethrower',
+    [1449420233] = 'Unknown stratagem',
+    [1503060624] = 'Unknown stratagem',
+    [1560416221] = 'Orbital Airburst Strike',
+    [1567517764] = 'Unknown stratagem',
+    [1582497738] = 'A/M-12 Mortar Sentry',
+    [1606251952] = 'Cargo Container',
+    [1685231450] = 'Eagle Smoke Strike',
+    [1692135420] = 'AX/ARC-3 K-9',
+    [1695682779] = 'Orbital Illumination Flare',
+    [1753436707] = 'LIFT-850 Jump Pack',
+    [1813634375] = 'EAT-700 Expendable Napalm',
+    [1824787072] = 'Unknown stratagem',
+    [1907808218] = 'B-1 Supply Pack',
+    [1979913877] = 'Eagle 110mm Rocket Pods',
+    [2002187052] = 'TD-220 Bastion MK XVI',
+    [2007887745] = 'RL-77 Airburst Rocket Launcher',
+    [2040137691] = 'Eagle Napalm Airstrike',
+    [2084654169] = 'Orbital Gatling Barrage',
+    [2185045091] = 'LIFT-182 Warp Pack',
+    [2186648412] = 'Tactical Video Camera',
+    [2207713849] = 'APW-1 Anti-Materiel Rifle',
+    [2229216190] = 'Unknown stratagem',
+    [2230051894] = 'Unknown stratagem',
+    [2232989803] = 'MLS-4X Commando',
+    [2239174926] = 'MD-17 Anti-Tank Mines',
+    [2265180087] = 'CQC-1 One True Flag',
+    [2266266587] = 'Unknown stratagem',
+    [2271469939] = 'B/FLAM-80 Cremator',
+    [2281932031] = 'FX-12 Shield Generator Relay',
+    [2319566343] = 'SSSD Delivery',
+    [2402590523] = 'A/ARC-3 Tesla Tower',
+    [2480128092] = 'E/GL-21 Grenadier Battlement',
+    [2587901119] = 'Unknown stratagem',
+    [2625074523] = 'LAS-99 Quasar Cannon',
+    [2636699686] = 'M-103 Supply FRV',
+    [2663642538] = 'Unknown stratagem',
+    [2670122272] = 'Cargo Container',
+    [2720892179] = 'Unknown stratagem',
+    [2742141597] = 'MD-I4 Incendiary Mines',
+    [2744472229] = 'Orbital Railcannon Strike',
+    [2808191861] = 'Eagle Air Support',
+    [2822568285] = 'LAS-98 Laser Cannon',
+    [2846457047] = 'M-104 Incinerator FRV',
+    [2902516083] = 'Orbital Napalm Barrage',
+    [2919842659] = 'E/MG-101 HMG Emplacement',
+    [2934950455] = 'EAT-411 Leveller',
+    [2985177386] = 'SEAF Artillery',
+    [3001049275] = 'Unknown stratagem',
+    [3078242205] = 'RS-422 Railgun',
+    [3085503322] = 'A/M-23 EMS Mortar Sentry',
+    [3086305673] = 'EXO-51 Lumberer Exosuit',
+    [3108516875] = 'Orbital 380mm HE Barrage',
+    [3183339606] = 'A/GM-17 Gas Mortar Sentry',
+    [3193297673] = 'Orbital Gas Strike',
+    [3193487269] = 'SoS Beacon',
+    [3275255096] = 'Unknown stratagem',
+    [3279813377] = 'Orbital Walking Barrage',
+    [3288352984] = 'M-1000 Maxigun',
+    [3300666223] = 'Upload Data',
+    [3316399568] = 'Unknown stratagem',
+    [3330450692] = 'CQC-20 Breaching Hammer',
+    [3343676429] = 'GL-21 Grenade Launcher',
+    [3353508219] = 'SH-20 Ballistic Shield Backpack',
+    [3413606544] = 'EAT-17 Expendable Anti-Tank',
+    [3455841218] = 'M-1000 Maxigun',
+    [3523620028] = 'Orbital Precision Strike',
+    [3572024208] = 'CQC-9 Defoliation Tool',
+    [3656370131] = 'Eagle Cluster Bomb',
+    [3702563421] = 'Load Anti-Tank Shells',
+    [3713568312] = 'Orbital Smoke Strike',
+    [3722314010] = 'Super Earth Flag',
+    [3748434442] = 'B/MD C4 Pack',
+    [3753216434] = 'EAT-17 Expendable Anti-Tank',
+    [3796132384] = 'Smoke-Enhanced Walking Barrage',
+    [3837064536] = 'Eagle Rearm',
+    [3843705076] = 'SH-32 Shield Generator Pack',
+    [3868299561] = 'Unknown stratagem',
+    [3923676543] = 'FAF-14 Spear',
+    [3928947721] = 'SSSD Delivery',
+    [3935317067] = 'M-102 Gunner FRV',
+    [3989310204] = 'Unknown stratagem',
+    [4119049995] = 'Eagle 500kg Bomb',
+    [4152191751] = 'TX-41 Sterilizer',
+    [4177070437] = 'Call in Super Destroyer',
+    [4196275240] = 'Eagle Gas Airstrike',
+    [4239785897] = 'A/MG-43 Machine Gun Sentry',
+    [4261593827] = 'PLAS-45 Epoch',
+    [4264661046] = 'Load Shotgun Shells',
+}
+
+-- END STRATAGEM NAMES EN
 -- BEGIN STRATAGEM CATALOG
 -- Read-only StratagemInfo discovery for Steam build 25480438.
 -- env.base() must enforce the supported game.dll fingerprint. Extra pins prove
@@ -3161,6 +3357,7 @@ local STRATAGEM_NAMES_ZH = {
 -- No game calls, writes, asset loading, or static native-type identity mapping.
 local function build_stratagem_catalog(env)
     local names_zh=type(env.names_zh)=='table' and env.names_zh or {}
+    local names_en=type(env.names_en)=='table' and env.names_en or {}
     -- Current native payload -> HellpodRack.payloads.item -> EntityComponentMap
     -- identity graph. Provenance/collisions: docs/stratagem-resource-aliases.json.
     -- Shared variants are absent from this exact-ID index and handled separately
@@ -3283,10 +3480,17 @@ local function build_stratagem_catalog(env)
                     -- Use the already validated native debug string. Resolving every
                     -- localization key here calls into a game function during the
                     -- first update; discovery and rule identity do not need it.
+                    local name_zh=names_zh[id]
+                    if type(name_zh)~='string' or name_zh=='' then name_zh='未知战备' end
+                    local name_en=names_en[id]
+                    if type(name_en)~='string' or name_en=='' then name_en='Unknown stratagem' end
                     local display_name=names_zh[id]
-                    if type(display_name)~='string' or display_name=='' then display_name=debug_name end
+                    if type(display_name)~='string' or display_name=='' then display_name='战备 #'..tostring(id) end
+                    local display_name_en=names_en[id]
+                    if type(display_name_en)~='string' or display_name_en=='' then display_name_en='Stratagem #'..tostring(id) end
                     local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
-                        display_name=display_name,
+                        display_name=display_name,display_name_en=display_name_en,
+                        target_names={zh=name_zh,en=name_en},
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
                         cooldown=cd,payload_count=payload_count,resource_aliases={}}
@@ -3400,7 +3604,7 @@ local function build_stratagem_catalog(env)
 end
 -- END STRATAGEM CATALOG
 
-local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH})
+local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH,names_en=M.STRATAGEM_NAMES_EN})
 local catalog_scan_phase = 0
 function M.debug_stratagem_catalog()return stratagem_catalog end
 local function enrich_stratagem_event(event,now)
@@ -3411,9 +3615,40 @@ local function enrich_stratagem_event(event,now)
         or stratagem_catalog.resolve_name_key(event.localization_key)
     if row then
         event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group
-        event.display_name=M.language.is_chinese() and row.display_name or row.debug_name
-        event.target_names={zh=row.display_name or row.debug_name,en=row.debug_name or row.display_name}
-        event.display_name=M.language.is_chinese() and row.display_name or row.debug_name
+        local native=type(event.target_names)=='table' and event.target_names.native_name or nil
+        local names=type(row.target_names)=='table' and {zh=row.target_names.zh,en=row.target_names.en}
+            or {zh=row.display_name,en=row.display_name_en}
+        if type(native)=='string' and native~='' then
+            local lower=native:lower():match('^%s*(.-)%s*$')
+            local generic=lower=='特殊地点' or lower=='special location'
+                or lower=='敌方单位' or lower=='enemy unit' or lower=='任务交互物'
+                or lower=='objective terminal' or lower=='任务终端' or lower=='mission terminal'
+                or lower=='战略配备' or lower=='strategic asset' or lower=='stratagem'
+                or lower=='普通物资' or lower=='supplies'
+            local native_is_han=false
+            local native_is_ascii=true
+            local i=1
+            while i<=#native do
+                local a=native:byte(i)
+                if a>=0x80 then native_is_ascii=false end
+                if a>=0xE0 and a<=0xEF and i+2<=#native then
+                    local b,c=native:byte(i+1,i+2)
+                    if b>=0x80 and b<=0xBF and c>=0x80 and c<=0xBF then
+                        local code=(a-0xE0)*4096+(b-0x80)*64+(c-0x80)
+                        if (code>=0x3400 and code<=0x4DBF) or (code>=0x4E00 and code<=0x9FFF) then
+                            native_is_han=true
+                        end
+                        i=i+3
+                    else i=i+1 end
+                elseif a>=0xC2 and a<=0xDF and i+1<=#native then i=i+2
+                elseif a>=0xF0 and a<=0xF4 and i+3<=#native then i=i+4
+                else i=i+1 end
+            end
+            if not generic and native_is_han then names.zh=native
+            elseif not generic and native_is_ascii then names.en=native end
+        end
+        event.target_names=names
+        event.display_name=M.language.is_chinese() and row.display_name or row.display_name_en
     else
         local rule=stratagem_catalog.resolve_rule_resource(event.resource)
             or stratagem_catalog.resolve_rule_name_key(event.localization_key)
@@ -3551,226 +3786,226 @@ local EXCLUDED_SUPPLIES = {
 -- Generated by tools/generate_mission_targets.py from docs/mission-targets.json.
 -- Current Spottable membership + reviewed resource paths; main/side roles are not inferred.
 local MISSION_TARGETS = {
-    ['019F988FA225DD1C'] = {'building', '逃生舱', 0},
-    ['01A88312C8889D5F'] = {'building', '炮塔控制终端', 0},
-    ['051DA4B57216A005'] = {'building', '任务终端', 0},
-    ['06D3C4720E642FC1'] = {'building', '虫卵群', 0},
-    ['0722B3A72ADE6CB1'] = {'building', 'TCS 主塔', 0},
-    ['073270650F859DD0'] = {'building', '装有化学武器的背包', 3054644200},
-    ['0801B6B3C5D12EBC'] = {'building', '地面全地形采集钻机', 3023900891},
-    ['095686275A113614'] = {'building', '尖啸虫巢穴', 3496786382},
-    ['0A12D5A29CDF2D40'] = {'building', '撤离信标', 0},
-    ['0DC9084E50C051F3'] = {'building', '铂金条', 2492072473},
-    ['0DF874E208040D2F'] = {'building', '虫穴', 3277626454},
-    ['0E88F182E83A4275'] = {'building', '任务交互物', 0},
-    ['0F1A0189B327C5CB'] = {'building', '超级固态硬盘', 714952129},
-    ['10E44156F08786EF'] = {'building', '生物处理器', 0},
-    ['1262CD07B196AAC3'] = {'building', '任务交互物', 0},
-    ['1312B769F47256D9'] = {'building', 'SEAF 防空导弹阵地', 1563965062},
-    ['142637570A721CB9'] = {'building', '轨道炮弹药供给装置', 0},
-    ['15031543894C3F3C'] = {'building', 'TCS 孢子喷涌体', 3139947901},
-    ['1556FE9780D5D52D'] = {'building', '任务终端', 0},
-    ['15E2A2B11BA78C5A'] = {'building', '任务交互物', 0},
-    ['162256BD224F6265'] = {'building', '加注站终端', 0},
-    ['16D7BA33ED511664'] = {'building', '控制塔终端', 0},
-    ['1A3B52A4D3F166F7'] = {'building', '光能者城市巨炮终端', 0},
-    ['1B633762874A709A'] = {'building', '首都防御设施', 0},
-    ['1C2360811101BCCE'] = {'building', '冷却管道', 0},
-    ['1D72EBD1A6916E67'] = {'building', '装配设施曲柄', 0},
-    ['22CC0ED4CEB9CB68'] = {'building', '机器人制造厂', 3794527478},
-    ['23C85E970FB46685'] = {'building', '战备干扰器', 0},
-    ['245F7D8792CD23E5'] = {'building', '军事通信交付点', 0},
-    ['24ACA2B4D15D2E2F'] = {'building', '发电机组', 0},
-    ['25C5B9818EF934E3'] = {'building', '任务终端', 0},
-    ['2670E0047B2EB409'] = {'building', '探测塔', 0},
-    ['2778F620A6E414AF'] = {'building', '光能者气象装置核心', 0},
-    ['2862C5AFC2E837BA'] = {'building', '任务交互物', 0},
-    ['29D0A1DFB5FD811F'] = {'building', '任务交互物', 0},
-    ['2B581BBB45DA1225'] = {'building', '燃料提取终端', 0},
-    ['2B5D3186EE3A4A84'] = {'building', '变异虫卵', 555942570},
-    ['2D3BC1683A54298D'] = {'building', '情报包裹', 3717706265},
-    ['317B2C0E4D10E293'] = {'building', '炮塔控制数据交付点', 0},
-    ['319388D1D8ACB8F3'] = {'building', 'TCS 任务终端', 0},
-    ['3231BD912357A9E1'] = {'building', '任务终端', 0},
-    ['33F2BCDAE3A12592'] = {'building', '超级固态硬盘', 714952129},
-    ['346C42FD9C915904'] = {'building', '轨道炮终端', 0},
-    ['36C5E772F8A3B9D3'] = {'building', '超级固态硬盘', 714952129},
-    ['36CC8EAD2BB18D78'] = {'building', '虫穴', 3277626454},
-    ['372481E910C05A76'] = {'building', '战术摄像机', 2071327434},
-    ['37EB67CB7ACE7410'] = {'building', '能量核心站', 0},
-    ['3A28A51BAA029E1A'] = {'building', '抽油任务钻机', 3477736393},
-    ['3A2CEF12ED32A088'] = {'building', '虫穴', 3277626454},
-    ['3CE56937E0BD28BD'] = {'building', '工厂区域大门', 0},
-    ['3DE2415EA33B6897'] = {'building', '黑匣子', 4046999266},
-    ['3E099DDF97ACF85F'] = {'building', '样本箱', 1332022394},
-    ['3E993C23A25E6B88'] = {'building', '机器人任务数据', 714952129},
-    ['3F2C34C69CFC94B2'] = {'building', '任务终端', 0},
-    ['3F70E3503A3293F9'] = {'building', '鹈鹕燃料运输机', 0},
-    ['3F8734AEC15B82AD'] = {'building', '鹈鹕飞船', 0},
-    ['4012166966A9E6E9'] = {'building', 'SEAF 火炮弹药', 3660636186},
-    ['4232EE48E2CFD24E'] = {'building', '机器人制造厂', 644365486},
-    ['423FF97D57AB04F5'] = {'building', '地面全地形采集钻机', 3023900891},
-    ['424036E9F7DE9A1E'] = {'building', '冷却阀门', 0},
-    ['42786DC1DD1EACAD'] = {'building', '核导弹', 4280970126},
-    ['43EC60F66E7E046B'] = {'building', '装有化学武器的背包', 3054644200},
-    ['44748FFC63F78A72'] = {'building', '“虫窝破裂者”钻机', 1998289914},
-    ['459DD5EB8C68C63F'] = {'building', '工厂区域入口', 0},
-    ['460576BBDCF770D0'] = {'building', '军械库发电机', 0},
-    ['46918A7483D70F3E'] = {'building', '任务交互物', 2851008997},
-    ['4747668D063EEC06'] = {'building', '任务终端', 0},
-    ['4776A1CF3F19A13B'] = {'building', '潜行虫巢穴', 3277626454},
-    ['480445A33039CE5E'] = {'building', '虫卵群', 0},
-    ['4A3E722B5A865E38'] = {'building', '黑匣子', 3346432464},
-    ['4C182656063F121A'] = {'building', '控制塔数据交付点', 0},
-    ['4FB8EB356AC8553E'] = {'building', '机器人制造厂', 3794527478},
-    ['5158E582FBEB26BD'] = {'building', '机器人制造厂', 3794527478},
-    ['516E4FA1D2AE46AE'] = {'building', '任务终端', 0},
-    ['52D52230745B66A0'] = {'building', '任务终端', 0},
-    ['534000F7801EA508'] = {'building', '数据收集交付点', 0},
-    ['542A14BA4D755F4E'] = {'building', '雷达站终端', 0},
-    ['54B66A0D35FDF785'] = {'building', '有机物提取终端', 0},
-    ['5684D928C9AB00D1'] = {'building', '发射代码', 767789391},
-    ['5726276FED2241B3'] = {'building', '轨道炮弹药', 2928771667},
-    ['57DB57121F3E7ED2'] = {'building', '非法广播塔', 0},
-    ['5852B7D2F865966C'] = {'building', '采油机', 0},
-    ['5A14BF4098BF4259'] = {'building', '任务终端', 0},
-    ['5CF84155E60C6E4D'] = {'building', '机械虫洞', 3277626454},
-    ['60544E51EE260967'] = {'building', '光能者城市巨炮', 0},
-    ['62D2C45A8B9703CC'] = {'building', '中继塔', 1549126177},
-    ['646F5AEBDFF603CB'] = {'building', '黑匣子交付点', 0},
-    ['68053EAE33FFA084'] = {'building', '光能者科技枢纽中枢', 0},
-    ['682871578A4E98EB'] = {'building', '空军基地控制塔', 0},
-    ['6838D8C197CC9C78'] = {'building', '轨道炮', 0},
-    ['6845B56D77E61B9F'] = {'building', '军事通信终端', 0},
-    ['688949109126ECE4'] = {'building', '机械虫洞', 3277626454},
-    ['68BFAC3C8A03BB83'] = {'building', '战备干扰器终端', 0},
-    ['6B7EE87FB2EC6455'] = {'building', '任务交互物', 0},
-    ['6C62E2E25E084083'] = {'building', 'SEAF 火炮弹药', 0},
-    ['6DB870D59730EE07'] = {'building', '中型冷却管道', 0},
-    ['6DC9F65AF69783BD'] = {'building', '采油阀门', 0},
-    ['6E499C5C95B019FC'] = {'building', '指挥碉堡', 245997106},
-    ['6FDCD0D7F8EAF267'] = {'building', 'TCS 支柱', 0},
-    ['705B0136A9A9D73A'] = {'building', '任务弹头', 3660636186},
-    ['75BE82ED8592A6B3'] = {'building', '鹈鹕运输机', 0},
-    ['766E7B3BDF79452F'] = {'building', '任务终端', 0},
-    ['7B0F8449CA9D2DA0'] = {'building', '鹈鹕运输机', 0},
-    ['7BDAA1BB44C3EE1C'] = {'building', '虫族战备干扰器', 0},
-    ['7C81DE10F0023D08'] = {'building', '旗帜', 2728206271},
-    ['7CA1B74B22C2EB9C'] = {'building', '任务交互物', 3660636186},
-    ['7E4876D0DBF9C981'] = {'building', '中继塔终端', 0},
-    ['7E4C6B45BCC45C3F'] = {'building', '虫穴', 3277626454},
-    ['867FFD3B4EA22E05'] = {'building', '装配设施冷却管道', 0},
-    ['888536AE851DCA05'] = {'building', '数据上传交互装置', 0},
-    ['888EAAFD58C03C75'] = {'building', '任务货运车', 581608860},
-    ['8901F188DB366B4B'] = {'building', '虫穴', 3277626454},
-    ['8A50B60B22186B9B'] = {'building', '巢穴世界采油阀门', 0},
-    ['8AD7A3118BD48D1C'] = {'building', '黑匣子', 4046999266},
-    ['8C31B749759CBD61'] = {'building', '虫穴', 3277626454},
-    ['8F7D4D9C196018C8'] = {'building', '旗帜', 2728206271},
-    ['90001FEAC563D6A1'] = {'building', '公文包', 4194145910},
-    ['91209E5AF7A9660B'] = {'building', '有机物提取软管接口', 0},
-    ['913B7D337E61EE4C'] = {'building', '生物处理器终端', 0},
-    ['925158186B8FD952'] = {'building', '中继塔对准开关', 0},
-    ['95D717E4AA9ED443'] = {'building', '光能者城市巨炮曲柄', 0},
-    ['973A2984F0CA6A30'] = {'building', '机器人通信终端', 0},
-    ['97DD3178E9F0AB70'] = {'building', '虫穴', 3277626454},
-    ['9A0D640BF4ABB03B'] = {'building', '任务终端', 0},
-    ['9A1F728716DA05B5'] = {'building', '超级地球旗杆', 0},
-    ['9A6A60CF4BAD9FA5'] = {'building', '防御任务终端', 0},
-    ['9B58C95349D051F9'] = {'building', '虫穴', 3277626454},
-    ['9B75A86003C2A1F4'] = {'building', '采油任务终端', 0},
-    ['9BFC8FCD68B09F28'] = {'building', 'SEAF 火炮', 0},
-    ['9D3A7E11095E3355'] = {'building', '任务旗帜', 2728206271},
-    ['9D8632A79C2D9789'] = {'building', '虫穴', 3277626454},
-    ['9E0E5E86A44C62A1'] = {'building', '机器人任务数据', 714952129},
-    ['9EA89CEEA6F8E766'] = {'building', '幼虫储存器', 1492050893},
-    ['A09A19371FECD6A3'] = {'building', 'TCS 任务终端', 0},
-    ['A0EA22BD370D4D72'] = {'building', '平民撤离门', 0},
-    ['A1A7B76B29088843'] = {'building', '机器人制造厂', 3794527478},
-    ['A1BDB3A13E3633DD'] = {'building', 'SEAF 防空导弹阵地', 1563965062},
-    ['A1E90D748B3D8AAA'] = {'building', '任务终端', 0},
-    ['A21F08920052C27E'] = {'building', '发电站', 0},
-    ['A3D5F183F8A2B768'] = {'building', 'SEAF 火炮装填架', 0},
-    ['A531053415EB57DA'] = {'building', '任务终端', 0},
-    ['A7381B87F3A3B455'] = {'building', '超级固态硬盘', 714952129},
-    ['A8AE6952B375EF6C'] = {'building', '武装运输舰制造厂', 3794527478},
-    ['A8B999A49716BF41'] = {'building', '光能者传送门', 0},
-    ['AA28CAF964D05500'] = {'building', '孢子喷涌体', 3139947901},
-    ['AC6E5FA7DB7FE621'] = {'building', '任务终端', 0},
-    ['ACC611541CD839DB'] = {'building', '撤离信标', 0},
-    ['AEAEF7A1851E6C9D'] = {'building', '机器人防空炮阵地', 4042981686},
-    ['AFC719AF96F10DC3'] = {'building', '受感染高塔', 3896690221},
-    ['B127552416CE512E'] = {'building', '任务交互物', 0},
-    ['B19C942FFD41C4A5'] = {'building', '防御任务发射井', 0},
-    ['B1D938C07E30C5DB'] = {'building', '洲际导弹发射井', 0},
-    ['B27FE88BC708A680'] = {'building', '任务终端', 0},
-    ['B31073E494A0643A'] = {'building', '含水层钻机', 1436471677},
-    ['B44F8D33E16202FB'] = {'building', '精炼厂终端', 0},
-    ['B50DBC63A02C0D3B'] = {'building', '任务交互物', 0},
-    ['B663751EB459D242'] = {'building', '光能者古物', 3335887011},
-    ['B6A181ADCF547AEB'] = {'building', '虫穴', 3277626454},
-    ['B6FE4BD12C248286'] = {'building', '装配设施夹具', 0},
-    ['B7C9C0D0C39AA349'] = {'building', '黑匣子回收终端', 0},
-    ['B8A49F22D83D52CF'] = {'building', '洲际导弹发射井锁', 0},
-    ['BA80E8D1331D8489'] = {'building', '电力恢复终端', 0},
-    ['BADBA9174CAEE9FF'] = {'building', '洲际导弹发射终端', 0},
-    ['BAF9DBD86B22270A'] = {'building', '统御舰', 4134104203},
-    ['BB2570AFA4C767D8'] = {'building', '数据上传交付点', 0},
-    ['BB2984B9B83EBFD1'] = {'building', '光能者收割设施', 0},
-    ['BC2AF8548C6D5E06'] = {'building', '虫穴', 3277626454},
-    ['BD20741E0225BD33'] = {'building', '有机装配设施终端', 0},
-    ['BF908A82B8E787AC'] = {'building', 'TCS 支撑建筑', 0},
-    ['C02C2623B6359BB3'] = {'building', '任务交互物', 0},
-    ['C066DCFAA61E740C'] = {'building', '数据收集终端', 0},
-    ['C2F0CC038E724374'] = {'building', 'SEAF 火炮终端', 0},
-    ['C3D9B291BD97B935'] = {'building', 'TCS 支撑建筑', 0},
-    ['C71C0C7B2E688B9B'] = {'building', '机密数据', 3839214628},
-    ['C8F9A2233048B836'] = {'building', '任务交互物', 354671336},
-    ['CB036409F28330E7'] = {'building', '任务终端', 0},
-    ['D0444F56A7D86E2B'] = {'building', '发电机', 0},
-    ['D3CEB59066593FBD'] = {'building', '工厂任务终端', 0},
-    ['D4A349DAAE850283'] = {'building', '光能者城市巨炮锁', 0},
-    ['D564F4E9E3A98599'] = {'building', '燃料补给终端', 0},
-    ['D666AA61D804D311'] = {'building', '虫穴', 3277626454},
-    ['D6A1019CF530FA1D'] = {'building', '中继塔控制终端', 0},
-    ['D84FFC32A6E640A8'] = {'building', '机器人运输舰', 1485224906},
-    ['D86B3F92DD4AAEDC'] = {'building', '平民撤离主终端', 0},
-    ['D88547FF02B212E8'] = {'building', '机器人工厂', 0},
-    ['D888E2EC286A4B0D'] = {'building', '任务终端', 0},
-    ['D8A28BFB827392BE'] = {'building', '聚变电池', 280534572},
-    ['DB59777F0ABAF6AF'] = {'building', '任务货运集装箱', 0},
-    ['DC19126D15692D04'] = {'building', '任务交互物', 0},
-    ['DC901B71A3A73B9A'] = {'building', '孢肺', 989829386},
-    ['DEF983C174B8E083'] = {'building', '巢穴世界燃料提取终端', 0},
-    ['DF3C4F91E298BFA4'] = {'building', '任务钻机', 1998289914},
-    ['DF657367D712CD8E'] = {'building', '洲际导弹发射井', 0},
-    ['DFA99372CEFBF84D'] = {'building', '任务终端', 0},
-    ['E02E6BD34B606A85'] = {'building', '孢子喷涌体', 3139947901},
-    ['E05784031312C43F'] = {'building', '巢穴世界燃料提取阀门', 0},
-    ['E09FCB5A280ACB1D'] = {'building', '任务交互物', 0},
-    ['E2E6E77DCC99A1CB'] = {'building', '生物处理器', 0},
-    ['E41334ADBEAF0D12'] = {'building', '雷达任务终端', 0},
-    ['E48C901A7175F638'] = {'building', '科研站数据上传设施', 0},
-    ['E4BE3FDF0C857B7F'] = {'building', '任务交互物', 0},
-    ['E73F6B5A100B7230'] = {'building', '移动雷达', 0},
-    ['E98D623E013A113B'] = {'building', '任务交互物', 0},
-    ['E9929CB8800E1C8F'] = {'building', '巢穴世界管道疏通阀门', 0},
-    ['EAE962D85C0C2D4A'] = {'building', '抽油任务钻机', 3477736393},
-    ['EECB5C13AE48637B'] = {'building', '数据上传主终端', 0},
-    ['EF3A4136B21592CB'] = {'building', '鹈鹕飞船', 0},
-    ['F08AE61266335A40'] = {'building', '非法科研站', 0},
-    ['F0B98FB953B13960'] = {'building', '机器人制造厂', 3794527478},
-    ['F1ADE19F87015997'] = {'building', '任务终端', 0},
-    ['F1C4856CC0EAF603'] = {'building', '防空导弹发射终端', 0},
-    ['F41432892465C5FD'] = {'building', '超级固态硬盘', 714952129},
-    ['F45D1A033E848901'] = {'building', '大型冷却管道', 0},
-    ['F598598C47617605'] = {'building', '任务交互物', 0},
-    ['F78BF0FF5C62140D'] = {'building', '虫穴', 3277626454},
-    ['F8E53685C00D926A'] = {'building', '任务交付点', 0},
-    ['FB0AF9C18AAEFEF2'] = {'building', '坠毁的收割者', 0},
-    ['FBD932EAC8E28E0B'] = {'building', '主发电站', 0},
-    ['FF5CC825B9571052'] = {'building', '机器人迫击炮阵地', 2649067399},
-    ['FF660C3FD24531A0'] = {'building', '燃料提取软管接口', 0},
+    ['019F988FA225DD1C'] = {'building', '逃生舱', 0, 'Escape Pod'},
+    ['01A88312C8889D5F'] = {'building', '炮塔控制终端', 0, 'Turret Control Terminal'},
+    ['051DA4B57216A005'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['06D3C4720E642FC1'] = {'building', '虫卵群', 0, 'Egg Cluster'},
+    ['0722B3A72ADE6CB1'] = {'building', 'TCS 主塔', 0, 'TCS Main Tower'},
+    ['073270650F859DD0'] = {'building', '装有化学武器的背包', 3054644200, 'Chemical Weapons Backpack'},
+    ['0801B6B3C5D12EBC'] = {'building', '地面全地形采集钻机', 3023900891, 'Ground-Based All-Terrain Excavator'},
+    ['095686275A113614'] = {'building', '尖啸虫巢穴', 3496786382, 'Shrieker Nest'},
+    ['0A12D5A29CDF2D40'] = {'building', '撤离信标', 0, 'Extraction Beacon'},
+    ['0DC9084E50C051F3'] = {'building', '铂金条', 2492072473, 'Platinum Bar'},
+    ['0DF874E208040D2F'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['0E88F182E83A4275'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['0F1A0189B327C5CB'] = {'building', '超级固态硬盘', 714952129, 'SSSD'},
+    ['10E44156F08786EF'] = {'building', '生物处理器', 0, 'Bio-Processor'},
+    ['1262CD07B196AAC3'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['1312B769F47256D9'] = {'building', 'SEAF 防空导弹阵地', 1563965062, 'SEAF Anti-Air Missile Site'},
+    ['142637570A721CB9'] = {'building', '轨道炮弹药供给装置', 0, 'Orbital Cannon Ammo Supply'},
+    ['15031543894C3F3C'] = {'building', 'TCS 孢子喷涌体', 3139947901, 'TCS Spore Spewer'},
+    ['1556FE9780D5D52D'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['15E2A2B11BA78C5A'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['162256BD224F6265'] = {'building', '加注站终端', 0, 'Refueling Station Terminal'},
+    ['16D7BA33ED511664'] = {'building', '控制塔终端', 0, 'Control Tower Terminal'},
+    ['1A3B52A4D3F166F7'] = {'building', '光能者城市巨炮终端', 0, 'Illuminate City Cannon Terminal'},
+    ['1B633762874A709A'] = {'building', '首都防御设施', 0, 'Capital Defense Facility'},
+    ['1C2360811101BCCE'] = {'building', '冷却管道', 0, 'Cooling Pipe'},
+    ['1D72EBD1A6916E67'] = {'building', '装配设施曲柄', 0, 'Assembly Facility Crank'},
+    ['22CC0ED4CEB9CB68'] = {'building', '机器人制造厂', 3794527478, 'Automaton Fabricator'},
+    ['23C85E970FB46685'] = {'building', '战备干扰器', 0, 'Stratagem Jammer'},
+    ['245F7D8792CD23E5'] = {'building', '军事通信交付点', 0, 'Military Communications Delivery Point'},
+    ['24ACA2B4D15D2E2F'] = {'building', '发电机组', 0, 'Generator Unit'},
+    ['25C5B9818EF934E3'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['2670E0047B2EB409'] = {'building', '探测塔', 0, 'Detector Tower'},
+    ['2778F620A6E414AF'] = {'building', '光能者气象装置核心', 0, 'Illuminate Weather Device Core'},
+    ['2862C5AFC2E837BA'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['29D0A1DFB5FD811F'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['2B581BBB45DA1225'] = {'building', '燃料提取终端', 0, 'Fuel Extraction Terminal'},
+    ['2B5D3186EE3A4A84'] = {'building', '变异虫卵', 555942570, 'Mutated Eggs'},
+    ['2D3BC1683A54298D'] = {'building', '情报包裹', 3717706265, 'Intelligence Package'},
+    ['317B2C0E4D10E293'] = {'building', '炮塔控制数据交付点', 0, 'Turret Control Data Drop-off'},
+    ['319388D1D8ACB8F3'] = {'building', 'TCS 任务终端', 0, 'TCS Mission Terminal'},
+    ['3231BD912357A9E1'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['33F2BCDAE3A12592'] = {'building', '超级固态硬盘', 714952129, 'SSSD'},
+    ['346C42FD9C915904'] = {'building', '轨道炮终端', 0, 'Orbital Cannon Terminal'},
+    ['36C5E772F8A3B9D3'] = {'building', '超级固态硬盘', 714952129, 'SSSD'},
+    ['36CC8EAD2BB18D78'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['372481E910C05A76'] = {'building', '战术摄像机', 2071327434, 'Tactical Camera'},
+    ['37EB67CB7ACE7410'] = {'building', '能量核心站', 0, 'Energy Core Station'},
+    ['3A28A51BAA029E1A'] = {'building', '抽油任务钻机', 3477736393, 'Oil Extraction Drill'},
+    ['3A2CEF12ED32A088'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['3CE56937E0BD28BD'] = {'building', '工厂区域大门', 0, 'Factory Sector Gate'},
+    ['3DE2415EA33B6897'] = {'building', '黑匣子', 4046999266, 'Black Box'},
+    ['3E099DDF97ACF85F'] = {'building', '样本箱', 1332022394, 'Sample Box'},
+    ['3E993C23A25E6B88'] = {'building', '机器人任务数据', 714952129, 'Automaton Mission Data'},
+    ['3F2C34C69CFC94B2'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['3F70E3503A3293F9'] = {'building', '鹈鹕燃料运输机', 0, 'Pelican Fuel Transport'},
+    ['3F8734AEC15B82AD'] = {'building', '鹈鹕飞船', 0, 'Pelican'},
+    ['4012166966A9E6E9'] = {'building', 'SEAF 火炮弹药', 3660636186, 'SEAF Artillery Shells'},
+    ['4232EE48E2CFD24E'] = {'building', '机器人制造厂', 644365486, 'Automaton Fabricator'},
+    ['423FF97D57AB04F5'] = {'building', '地面全地形采集钻机', 3023900891, 'Ground-Based All-Terrain Excavator'},
+    ['424036E9F7DE9A1E'] = {'building', '冷却阀门', 0, 'Cooling Valve'},
+    ['42786DC1DD1EACAD'] = {'building', '核导弹', 4280970126, 'Nuclear Missile'},
+    ['43EC60F66E7E046B'] = {'building', '装有化学武器的背包', 3054644200, 'Chemical Weapons Backpack'},
+    ['44748FFC63F78A72'] = {'building', '“虫窝破裂者”钻机', 1998289914, 'Hive Breaker Drill'},
+    ['459DD5EB8C68C63F'] = {'building', '工厂区域入口', 0, 'Factory Sector Entrance'},
+    ['460576BBDCF770D0'] = {'building', '军械库发电机', 0, 'Armory Generator'},
+    ['46918A7483D70F3E'] = {'building', '任务交互物', 2851008997, 'Mission Item'},
+    ['4747668D063EEC06'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['4776A1CF3F19A13B'] = {'building', '潜行虫巢穴', 3277626454, 'Stalker Nest'},
+    ['480445A33039CE5E'] = {'building', '虫卵群', 0, 'Egg Cluster'},
+    ['4A3E722B5A865E38'] = {'building', '黑匣子', 3346432464, 'Black Box'},
+    ['4C182656063F121A'] = {'building', '控制塔数据交付点', 0, 'Control Tower Data Drop-off'},
+    ['4FB8EB356AC8553E'] = {'building', '机器人制造厂', 3794527478, 'Automaton Fabricator'},
+    ['5158E582FBEB26BD'] = {'building', '机器人制造厂', 3794527478, 'Automaton Fabricator'},
+    ['516E4FA1D2AE46AE'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['52D52230745B66A0'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['534000F7801EA508'] = {'building', '数据收集交付点', 0, 'Data Collection Drop-off'},
+    ['542A14BA4D755F4E'] = {'building', '雷达站终端', 0, 'Radar Station Terminal'},
+    ['54B66A0D35FDF785'] = {'building', '有机物提取终端', 0, 'Organic Matter Extraction Terminal'},
+    ['5684D928C9AB00D1'] = {'building', '发射代码', 767789391, 'Launch Codes'},
+    ['5726276FED2241B3'] = {'building', '轨道炮弹药', 2928771667, 'Orbital Cannon Ammunition'},
+    ['57DB57121F3E7ED2'] = {'building', '非法广播塔', 0, 'Illegal Broadcast Tower'},
+    ['5852B7D2F865966C'] = {'building', '采油机', 0, 'Oil Extractor'},
+    ['5A14BF4098BF4259'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['5CF84155E60C6E4D'] = {'building', '机械虫洞', 3277626454, 'Mechanical Wormhole'},
+    ['60544E51EE260967'] = {'building', '光能者城市巨炮', 0, 'Illuminate City Cannon'},
+    ['62D2C45A8B9703CC'] = {'building', '中继塔', 1549126177, 'Relay Tower'},
+    ['646F5AEBDFF603CB'] = {'building', '黑匣子交付点', 0, 'Black Box Drop-off'},
+    ['68053EAE33FFA084'] = {'building', '光能者科技枢纽中枢', 0, 'Illuminate Tech Hub Core'},
+    ['682871578A4E98EB'] = {'building', '空军基地控制塔', 0, 'Airbase Control Tower'},
+    ['6838D8C197CC9C78'] = {'building', '轨道炮', 0, 'Orbital Cannon'},
+    ['6845B56D77E61B9F'] = {'building', '军事通信终端', 0, 'Military Communications Terminal'},
+    ['688949109126ECE4'] = {'building', '机械虫洞', 3277626454, 'Mechanical Wormhole'},
+    ['68BFAC3C8A03BB83'] = {'building', '战备干扰器终端', 0, 'Stratagem Jammer Terminal'},
+    ['6B7EE87FB2EC6455'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['6C62E2E25E084083'] = {'building', 'SEAF 火炮弹药', 0, 'SEAF Artillery Shells'},
+    ['6DB870D59730EE07'] = {'building', '中型冷却管道', 0, 'Medium Cooling Pipe'},
+    ['6DC9F65AF69783BD'] = {'building', '采油阀门', 0, 'Oil Valve'},
+    ['6E499C5C95B019FC'] = {'building', '指挥碉堡', 245997106, 'Command Bunker'},
+    ['6FDCD0D7F8EAF267'] = {'building', 'TCS 支柱', 0, 'TCS Pylon'},
+    ['705B0136A9A9D73A'] = {'building', '任务弹头', 3660636186, 'Mission Warhead'},
+    ['75BE82ED8592A6B3'] = {'building', '鹈鹕运输机', 0, 'Pelican Transport'},
+    ['766E7B3BDF79452F'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['7B0F8449CA9D2DA0'] = {'building', '鹈鹕运输机', 0, 'Pelican Transport'},
+    ['7BDAA1BB44C3EE1C'] = {'building', '虫族战备干扰器', 0, 'Terminid Stratagem Jammer'},
+    ['7C81DE10F0023D08'] = {'building', '旗帜', 2728206271, 'Flag'},
+    ['7CA1B74B22C2EB9C'] = {'building', '任务交互物', 3660636186, 'Mission Item'},
+    ['7E4876D0DBF9C981'] = {'building', '中继塔终端', 0, 'Relay Tower Terminal'},
+    ['7E4C6B45BCC45C3F'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['867FFD3B4EA22E05'] = {'building', '装配设施冷却管道', 0, 'Assembly Facility Cooling Pipe'},
+    ['888536AE851DCA05'] = {'building', '数据上传交互装置', 0, 'Data Upload Device'},
+    ['888EAAFD58C03C75'] = {'building', '任务货运车', 581608860, 'Mission Cargo Truck'},
+    ['8901F188DB366B4B'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['8A50B60B22186B9B'] = {'building', '巢穴世界采油阀门', 0, 'Hive World Oil Valve'},
+    ['8AD7A3118BD48D1C'] = {'building', '黑匣子', 4046999266, 'Black Box'},
+    ['8C31B749759CBD61'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['8F7D4D9C196018C8'] = {'building', '旗帜', 2728206271, 'Flag'},
+    ['90001FEAC563D6A1'] = {'building', '公文包', 4194145910, 'Briefcase'},
+    ['91209E5AF7A9660B'] = {'building', '有机物提取软管接口', 0, 'Organic Matter Extraction Hose'},
+    ['913B7D337E61EE4C'] = {'building', '生物处理器终端', 0, 'Bio-Processor Terminal'},
+    ['925158186B8FD952'] = {'building', '中继塔对准开关', 0, 'Relay Tower Alignment Switch'},
+    ['95D717E4AA9ED443'] = {'building', '光能者城市巨炮曲柄', 0, 'Illuminate City Cannon Crank'},
+    ['973A2984F0CA6A30'] = {'building', '机器人通信终端', 0, 'Automaton Communications Terminal'},
+    ['97DD3178E9F0AB70'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['9A0D640BF4ABB03B'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['9A1F728716DA05B5'] = {'building', '超级地球旗杆', 0, 'Super Earth Flagpole'},
+    ['9A6A60CF4BAD9FA5'] = {'building', '防御任务终端', 0, 'Defense Mission Terminal'},
+    ['9B58C95349D051F9'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['9B75A86003C2A1F4'] = {'building', '采油任务终端', 0, 'Oil Extraction Mission Terminal'},
+    ['9BFC8FCD68B09F28'] = {'building', 'SEAF 火炮', 0, 'SEAF Artillery'},
+    ['9D3A7E11095E3355'] = {'building', '任务旗帜', 2728206271, 'Mission Flag'},
+    ['9D8632A79C2D9789'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['9E0E5E86A44C62A1'] = {'building', '机器人任务数据', 714952129, 'Automaton Mission Data'},
+    ['9EA89CEEA6F8E766'] = {'building', '幼虫储存器', 1492050893, 'Larva Storage'},
+    ['A09A19371FECD6A3'] = {'building', 'TCS 任务终端', 0, 'TCS Mission Terminal'},
+    ['A0EA22BD370D4D72'] = {'building', '平民撤离门', 0, 'Civilian Evacuation Gate'},
+    ['A1A7B76B29088843'] = {'building', '机器人制造厂', 3794527478, 'Automaton Fabricator'},
+    ['A1BDB3A13E3633DD'] = {'building', 'SEAF 防空导弹阵地', 1563965062, 'SEAF Anti-Air Missile Site'},
+    ['A1E90D748B3D8AAA'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['A21F08920052C27E'] = {'building', '发电站', 0, 'Power Station'},
+    ['A3D5F183F8A2B768'] = {'building', 'SEAF 火炮装填架', 0, 'SEAF Artillery Loader'},
+    ['A531053415EB57DA'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['A7381B87F3A3B455'] = {'building', '超级固态硬盘', 714952129, 'SSSD'},
+    ['A8AE6952B375EF6C'] = {'building', '武装运输舰制造厂', 3794527478, 'Gunship Fabricator'},
+    ['A8B999A49716BF41'] = {'building', '光能者传送门', 0, 'Illuminate Portal'},
+    ['AA28CAF964D05500'] = {'building', '孢子喷涌体', 3139947901, 'Spore Spewer'},
+    ['AC6E5FA7DB7FE621'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['ACC611541CD839DB'] = {'building', '撤离信标', 0, 'Extraction Beacon'},
+    ['AEAEF7A1851E6C9D'] = {'building', '机器人防空炮阵地', 4042981686, 'Automaton Anti-Air Site'},
+    ['AFC719AF96F10DC3'] = {'building', '受感染高塔', 3896690221, 'Infested Tower'},
+    ['B127552416CE512E'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['B19C942FFD41C4A5'] = {'building', '防御任务发射井', 0, 'Defense Mission Silo'},
+    ['B1D938C07E30C5DB'] = {'building', '洲际导弹发射井', 0, 'ICBM Silo'},
+    ['B27FE88BC708A680'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['B31073E494A0643A'] = {'building', '含水层钻机', 1436471677, 'Aquifer Drill'},
+    ['B44F8D33E16202FB'] = {'building', '精炼厂终端', 0, 'Refinery Terminal'},
+    ['B50DBC63A02C0D3B'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['B663751EB459D242'] = {'building', '光能者古物', 3335887011, 'Illuminate Artifact'},
+    ['B6A181ADCF547AEB'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['B6FE4BD12C248286'] = {'building', '装配设施夹具', 0, 'Assembly Facility Clamp'},
+    ['B7C9C0D0C39AA349'] = {'building', '黑匣子回收终端', 0, 'Black Box Recovery Terminal'},
+    ['B8A49F22D83D52CF'] = {'building', '洲际导弹发射井锁', 0, 'ICBM Silo Lock'},
+    ['BA80E8D1331D8489'] = {'building', '电力恢复终端', 0, 'Power Restoration Terminal'},
+    ['BADBA9174CAEE9FF'] = {'building', '洲际导弹发射终端', 0, 'ICBM Launch Terminal'},
+    ['BAF9DBD86B22270A'] = {'building', '统御舰', 4134104203, 'Overseer Ship'},
+    ['BB2570AFA4C767D8'] = {'building', '数据上传交付点', 0, 'Data Upload Drop-off'},
+    ['BB2984B9B83EBFD1'] = {'building', '光能者收割设施', 0, 'Illuminate Harvesting Facility'},
+    ['BC2AF8548C6D5E06'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['BD20741E0225BD33'] = {'building', '有机装配设施终端', 0, 'Organic Assembly Facility Terminal'},
+    ['BF908A82B8E787AC'] = {'building', 'TCS 支撑建筑', 0, 'TCS Support Structure'},
+    ['C02C2623B6359BB3'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['C066DCFAA61E740C'] = {'building', '数据收集终端', 0, 'Data Collection Terminal'},
+    ['C2F0CC038E724374'] = {'building', 'SEAF 火炮终端', 0, 'SEAF Artillery Terminal'},
+    ['C3D9B291BD97B935'] = {'building', 'TCS 支撑建筑', 0, 'TCS Support Structure'},
+    ['C71C0C7B2E688B9B'] = {'building', '机密数据', 3839214628, 'Classified Data'},
+    ['C8F9A2233048B836'] = {'building', '任务交互物', 354671336, 'Mission Item'},
+    ['CB036409F28330E7'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['D0444F56A7D86E2B'] = {'building', '发电机', 0, 'Generator'},
+    ['D3CEB59066593FBD'] = {'building', '工厂任务终端', 0, 'Factory Mission Terminal'},
+    ['D4A349DAAE850283'] = {'building', '光能者城市巨炮锁', 0, 'Illuminate City Cannon Lock'},
+    ['D564F4E9E3A98599'] = {'building', '燃料补给终端', 0, 'Fuel Refill Terminal'},
+    ['D666AA61D804D311'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['D6A1019CF530FA1D'] = {'building', '中继塔控制终端', 0, 'Relay Tower Control Terminal'},
+    ['D84FFC32A6E640A8'] = {'building', '机器人运输舰', 1485224906, 'Automaton Transport Ship'},
+    ['D86B3F92DD4AAEDC'] = {'building', '平民撤离主终端', 0, 'Civilian Evacuation Main Terminal'},
+    ['D88547FF02B212E8'] = {'building', '机器人工厂', 0, 'Automaton Factory'},
+    ['D888E2EC286A4B0D'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['D8A28BFB827392BE'] = {'building', '聚变电池', 280534572, 'Fusion Battery'},
+    ['DB59777F0ABAF6AF'] = {'building', '任务货运集装箱', 0, 'Mission Cargo Container'},
+    ['DC19126D15692D04'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['DC901B71A3A73B9A'] = {'building', '孢肺', 989829386, 'Spore Lung'},
+    ['DEF983C174B8E083'] = {'building', '巢穴世界燃料提取终端', 0, 'Hive World Fuel Extraction Terminal'},
+    ['DF3C4F91E298BFA4'] = {'building', '任务钻机', 1998289914, 'Mission Drill'},
+    ['DF657367D712CD8E'] = {'building', '洲际导弹发射井', 0, 'ICBM Silo'},
+    ['DFA99372CEFBF84D'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['E02E6BD34B606A85'] = {'building', '孢子喷涌体', 3139947901, 'Spore Spewer'},
+    ['E05784031312C43F'] = {'building', '巢穴世界燃料提取阀门', 0, 'Hive World Fuel Extraction Valve'},
+    ['E09FCB5A280ACB1D'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['E2E6E77DCC99A1CB'] = {'building', '生物处理器', 0, 'Bio-Processor'},
+    ['E41334ADBEAF0D12'] = {'building', '雷达任务终端', 0, 'Radar Mission Terminal'},
+    ['E48C901A7175F638'] = {'building', '科研站数据上传设施', 0, 'Research Station Data Uplink'},
+    ['E4BE3FDF0C857B7F'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['E73F6B5A100B7230'] = {'building', '移动雷达', 0, 'Mobile Radar'},
+    ['E98D623E013A113B'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['E9929CB8800E1C8F'] = {'building', '巢穴世界管道疏通阀门', 0, 'Hive World Pipe Purge Valve'},
+    ['EAE962D85C0C2D4A'] = {'building', '抽油任务钻机', 3477736393, 'Oil Extraction Drill'},
+    ['EECB5C13AE48637B'] = {'building', '数据上传主终端', 0, 'Data Upload Main Terminal'},
+    ['EF3A4136B21592CB'] = {'building', '鹈鹕飞船', 0, 'Pelican'},
+    ['F08AE61266335A40'] = {'building', '非法科研站', 0, 'Illegal Research Station'},
+    ['F0B98FB953B13960'] = {'building', '机器人制造厂', 3794527478, 'Automaton Fabricator'},
+    ['F1ADE19F87015997'] = {'building', '任务终端', 0, 'Mission Terminal'},
+    ['F1C4856CC0EAF603'] = {'building', '防空导弹发射终端', 0, 'Anti-Air Missile Launch Terminal'},
+    ['F41432892465C5FD'] = {'building', '超级固态硬盘', 714952129, 'SSSD'},
+    ['F45D1A033E848901'] = {'building', '大型冷却管道', 0, 'Large Cooling Pipe'},
+    ['F598598C47617605'] = {'building', '任务交互物', 0, 'Mission Item'},
+    ['F78BF0FF5C62140D'] = {'building', '虫穴', 3277626454, 'Bug Hole'},
+    ['F8E53685C00D926A'] = {'building', '任务交付点', 0, 'Mission Delivery Point'},
+    ['FB0AF9C18AAEFEF2'] = {'building', '坠毁的收割者', 0, 'Crashed Harvester'},
+    ['FBD932EAC8E28E0B'] = {'building', '主发电站', 0, 'Main Power Station'},
+    ['FF5CC825B9571052'] = {'building', '机器人迫击炮阵地', 2649067399, 'Automaton Mortar Site'},
+    ['FF660C3FD24531A0'] = {'building', '燃料提取软管接口', 0, 'Fuel Extraction Hose'},
 }
 -- END MISSION TARGET CATALOG
 
@@ -3778,148 +4013,148 @@ local MISSION_TARGETS = {
 -- Generated offline by tools/generate_enemy_catalog.py from docs/enemy-catalog.json.
 -- Game 1.007.100, 2026-09-22; hostile + Spottable only; flight before size.
 local ENEMY_TARGETS = {
-    ['0002BA767DF856F3'] = {'small_enemy', '劫掠者', 2454424572},
-    ['0883366204E1CCC5'] = {'medium_enemy', '凝视者', 1661895142},
-    ['089833D2880D9E06'] = {'small_enemy', '机枪奇袭者（炽灼部队）', 586021653},
-    ['08E6FFC2474287BD'] = {'medium_enemy', '监视者 MK2', 3363066353},
-    ['09DFB04B2E578BC3'] = {'small_enemy', '激光装甲兵', 4039692928},
-    ['09FE0BE51A23396C'] = {'medium_enemy', '惑乱者（女）', 1371180916},
-    ['0AB7B92B131C228C'] = {'large_enemy', '爆裂强袭虫', 3903153972},
-    ['0ADC9F9173AD8E1D'] = {'small_enemy', '无票者（中型）', 4211847317},
-    ['10081ACEF6163EF6'] = {'medium_enemy', '酸液武斗虫', 3365898186},
-    ['137988CEA16458F7'] = {'large_enemy', '巨型碾压者', 613980508},
-    ['1448D494665D01A0'] = {'small_enemy', '凝视者 MK2', 2259733865},
-    ['1897BDD32105D2DC'] = {'large_enemy', '巨型炙焰者 MK2（炽灼部队）', 1775662925},
-    ['19E18B46EC55D94A'] = {'flying_enemy', '刺魟', 4160806915},
-    ['1A7FCDFF98C664B0'] = {'large_enemy', '强袭虫', 1299714559},
-    ['1B5B9AC4F96B36E5'] = {'small_enemy', '机械统帅（炽灼部队）', 621159586},
-    ['1E66EE1F6F7FD00E'] = {'large_enemy', '巨型抹煞者', 1560770730},
-    ['1F0A91729C0004E0'] = {'small_enemy', '孢裂追猎虫', 1210082392},
-    ['20B9C7734DAEAD65'] = {'large_enemy', '证真者', 3776682558},
-    ['215CE160A17BE4CD'] = {'small_enemy', '喷气机械统帅', 621159586},
-    ['257D805CAA7E10C0'] = {'small_enemy', '装甲兵 霰弹（废案）', 4039692928},
-    ['262351741C53FF0C'] = {'small_enemy', '凝视者 尖塔', 2259733865},
-    ['282EB766C1FFA6A1'] = {'flying_enemy', '炮艇', 1932062202},
-    ['2A12104F2853AE16'] = {'small_enemy', '火箭奇袭者', 3112705780},
-    ['2AD2E055DAD21F6E'] = {'flying_enemy', '入侵的穿梭舰', 3579113113},
-    ['2CF3488C4845F8BD'] = {'large_enemy', '机器人 加农炮塔', 478200978},
-    ['30CF04B2EC8C9BD4'] = {'small_enemy', '侦察奇袭者', 2319746535},
-    ['30F2DEE2333F227A'] = {'giant_enemy', '移动工厂 带干扰塔', 1153658728},
-    ['31BAE74D2F064D8D'] = {'large_enemy', '湮灭坦克 MK2', 3455009224},
-    ['32541FC4EC7C9CDC'] = {'medium_enemy', '武斗虫 MK3', 3564923972},
-    ['32CDEADA234FB8DF'] = {'large_enemy', '喷气巨型碾压者', 613980508},
-    ['34DFD23365472E9E'] = {'flying_enemy', '突入者', 3621116014},
-    ['36AA99CCE5E60146'] = {'medium_enemy', '胆汁喷涌虫', 717622970},
-    ['3AFF5FD7D5450B99'] = {'large_enemy', '巨兽级强袭虫', 1076678822},
-    ['3D0E03E2D574E1CA'] = {'small_enemy', '追猎虫 MK2', 3330362068},
-    ['3E0537D606438FEA'] = {'large_enemy', '巨型炙焰者', 1775662925},
-    ['4019623142351CB6'] = {'small_enemy', '装甲兵 MK3', 4039692928},
-    ['44458A2C52B002FB'] = {'small_enemy', '无票者（重型）', 4211847317},
-    ['453FE22C634EB30F'] = {'large_enemy', '御门者', 1870840792},
-    ['4E97FB073BDC7A4B'] = {'medium_enemy', '武斗虫 MK2（俘虏）', 3564923972},
-    ['51EEA86BF6997E4E'] = {'small_enemy', '食腐虫 MK2', 4212839382},
-    ['52018DEB9AB6827E'] = {'small_enemy', '喷气装甲兵（崩溃）', 4039692928},
-    ['53D8919D7B8ABD67'] = {'large_enemy', '湮灭坦克', 3455009224},
-    ['54E107DACF6929CB'] = {'medium_enemy', '狂暴者 MK2', 3201222154},
-    ['57EED0EAC346CD9D'] = {'medium_enemy', '蹂躏者 MK3（炽灼部队）', 1649987991},
-    ['58B2B86C11369241'] = {'medium_enemy', '燃烧机枪蹂躏者', 75849082},
-    ['5CA832447445C0BA'] = {'small_enemy', '追猎虫 MK3', 3330362068},
-    ['6021E22338333D88'] = {'medium_enemy', '抚育喷涌虫', 487985459},
-    ['604A794EC45BB820'] = {'flying_enemy', '崇高监视者', 2745056259},
-    ['611BA777783B08A2'] = {'large_enemy', '噪轰引擎 速射加农炮', 4066406510},
-    ['63DF3D07B7424588'] = {'large_enemy', '铁幕坦克', 3921592399},
-    ['64090088502435DD'] = {'flying_enemy', '尖啸虫', 793026793},
-    ['64BA5F030B114EC1'] = {'small_enemy', '奇袭者', 2000862158},
-    ['672F7DA17F3BA34A'] = {'small_enemy', '穿刺虫触手', 1046000873},
-    ['67DC32DCA4F02D33'] = {'large_enemy', '肉瘤体', 2880434041},
-    ['6B202392F4AB605E'] = {'large_enemy', '孢子强袭虫', 1939105083},
-    ['6DAB2EADF5D8B692'] = {'large_enemy', '巨型烈焰轰炸者', 2090691137},
-    ['728421351D440EBC'] = {'medium_enemy', '孢裂武斗虫', 2115960485},
-    ['72A83E49CED6DB3D'] = {'small_enemy', '胆汁吐沫虫', 444529084},
-    ['746A7F3BEDA32699'] = {'medium_enemy', '激进先锋（男）', 23741406},
-    ['74E2285C01DA4F71'] = {'flying_enemy', '增援穿梭舰', 3579113113},
-    ['78E1497571012C47'] = {'small_enemy', '无票者（轻型）', 4211847317},
-    ['7B48CACDBACB3881'] = {'small_enemy', '装甲兵 MK2', 4039692928},
-    ['7ECE5304F868F6B3'] = {'small_enemy', '装甲兵（无包裹）', 4039692928},
-    ['82A87AD8D595B2BA'] = {'small_enemy', '炙焰装甲兵', 2861014363},
-    ['843D18D4B5512B63'] = {'large_enemy', '移动工厂 连发加农炮', 478200978},
-    ['856E9710E45E760F'] = {'small_enemy', '特攻奇袭者', 1467464627},
-    ['883401AF2A98A5F6'] = {'small_enemy', '掠食追猎虫', 3029738043},
-    ['8FF0A839830A7692'] = {'small_enemy', '食腐虫', 4212839382},
-    ['905809A4C28D8A45'] = {'large_enemy', '粉碎者', 3922421925},
-    ['9076EEED17FCEE35'] = {'large_enemy', '强化侦察纵步者', 1871700431},
-    ['91EBD77931110AFC'] = {'medium_enemy', '重型蹂躏者 MK3', 1649987991},
-    ['960B48A421A3FAAA'] = {'flying_enemy', '蟑龙', 1378841226},
-    ['96110F9D6B010E02'] = {'large_enemy', '敌方单位', 478200978},
-    ['9647B00CC3A9D36F'] = {'medium_enemy', '火箭蹂躏者', 2365630221},
-    ['965EAE5A51ACDD4A'] = {'large_enemy', '猎杀器', 1405979473},
-    ['96BA14C9EBB49CE1'] = {'large_enemy', '巨型者', 790541304},
-    ['98152772A72F7838'] = {'flying_enemy', '运输船', 554367013},
-    ['9926876B2375A1BB'] = {'medium_enemy', '机器人 碉堡炮塔', 3921936527},
-    ['9A8A3AAE287B230C'] = {'small_enemy', '食腐虫 MK3', 4212839382},
-    ['9D8827FED763650E'] = {'medium_enemy', '惑乱者（男）', 1371180916},
-    ['9E2E17F2CCCCAFDD'] = {'giant_enemy', '吐酸泰坦', 2514244534},
-    ['9F57782F00E6ED20'] = {'small_enemy', '装甲兵（炽灼部队）', 4039692928},
-    ['A05BD1EC67B3AC4C'] = {'large_enemy', '巨兽级强袭虫 MK2', 1076678822},
-    ['A1F37BF2A40FBDE4'] = {'medium_enemy', '虫窝护卫', 626718113},
-    ['A35207C6F2150806'] = {'medium_enemy', '爆裂武斗虫', 953392591},
-    ['A381A11C07D3EB94'] = {'medium_enemy', '爆裂喷涌虫', 2270698456},
-    ['A4552F97033392F4'] = {'small_enemy', '喷气机枪奇袭者', 586021653},
-    ['A6A68D8AF177F3A1'] = {'medium_enemy', '狂暴者', 3201222154},
-    ['A71AAFD82C6EBC92'] = {'small_enemy', '机械统帅', 621159586},
-    ['AAB438596F5E8FD9'] = {'small_enemy', '猛扑虫', 908216632},
-    ['ABDB2E2A0479D8CA'] = {'large_enemy', '机器人 加农炮塔 MK2', 478200978},
-    ['AC60E78435098C9D'] = {'flying_enemy', '守望者', 886803190},
-    ['AE57FCDB49F74E98'] = {'small_enemy', '装甲兵 MK2（机枪版）', 4039692928},
-    ['AE63E525853D7044'] = {'medium_enemy', '蹂躏者 MK3', 1649987991},
-    ['AF0F9B3A163787A5'] = {'small_enemy', '喷气装甲兵', 4039692928},
-    ['B056F8FC74ABA02D'] = {'small_enemy', '激光炮装甲兵（废案）', 4039692928},
-    ['B2A6FA1E4284C7E6'] = {'medium_enemy', '狂暴武斗虫', 3564923972},
-    ['B4ED319B39F5457B'] = {'small_enemy', '机枪奇袭者', 586021653},
-    ['B5DBC0C240C921AD'] = {'medium_enemy', '狂暴者 MK3（炽灼部队）', 3201222154},
-    ['B92435FBF60F0748'] = {'medium_enemy', '重型蹂躏者 MK2', 398976798},
-    ['BC242702FB46B7E7'] = {'large_enemy', '噪轰引擎', 4066406510},
-    ['BE39E313A1E46BB9'] = {'medium_enemy', '武斗虫 MK2', 3564923972},
-    ['BE743B2FAA3A6E26'] = {'medium_enemy', '喷气蹂躏者', 1649987991},
-    ['C626D2BB495A202D'] = {'medium_enemy', '蹂躏者', 1649987991},
-    ['C6449FFD9EA3779C'] = {'large_enemy', '碎裂坦克', 2577770154},
-    ['C9BCCCB0A54A82A4'] = {'medium_enemy', '火箭蹂躏者 MK3 （炽灼部队）', 2365630221},
-    ['CBB1BA3366009C3A'] = {'medium_enemy', '激进先锋（女）', 23741406},
-    ['CC188F0C80505C6C'] = {'medium_enemy', '悲怜体', 2118086817},
-    ['CC7022FDD172089B'] = {'medium_enemy', '抚育喷涌虫 MK2', 487985459},
-    ['CCAE5264ACD591B7'] = {'medium_enemy', '胆汁喷涌虫 MK2', 717622970},
-    ['CD28A27A79BE53D5'] = {'medium_enemy', '指挥碉堡 碉堡重机枪', 3921936527},
-    ['D1E990BAF22D5A52'] = {'large_enemy', '掠食追踪虫', 4106686024},
-    ['D37E8D120D2836E3'] = {'giant_enemy', '移动工厂', 1153658728},
-    ['D465D9C7F77A07CB'] = {'giant_enemy', '霸王虫', 3929716830},
-    ['D522FD4748D443A5'] = {'large_enemy', '虫族指挥官', 3077749065},
-    ['D5792F6856B06BA4'] = {'medium_enemy', '喷气狂暴者', 3201222154},
-    ['D63FCBFF0851B7AF'] = {'large_enemy', '猎杀器 MK2', 1405979473},
-    ['D8CBC4A807A6D035'] = {'small_enemy', '乱斗者', 1974334302},
-    ['D9511E9F6BD62E3F'] = {'small_enemy', '追猎虫', 3330362068},
-    ['DA40BB347C7447F2'] = {'medium_enemy', '监视者', 1899936906},
-    ['DB90077E76FAA025'] = {'flying_enemy', '敌方单位', 554367013},
-    ['DB964631BE1CF501'] = {'small_enemy', '孢裂食腐虫', 2842755544},
-    ['DCF8E74212FBEE3B'] = {'large_enemy', '穿刺虫', 1046000873},
-    ['DFBACBD977A948DC'] = {'small_enemy', '食腐虫 MK2（俘虏）', 4212839382},
-    ['E0353177F1329573'] = {'medium_enemy', '烈火蹂躏者', 3498181594},
-    ['E44EC9F9B3FE1D2A'] = {'large_enemy', '喷气巨型炙焰者', 1775662925},
-    ['E683D2CA5618D74A'] = {'small_enemy', '奇袭者（炽灼部队）', 2000862158},
-    ['E8F19A0AA958E46D'] = {'medium_enemy', '新月监视者', 3877563222},
-    ['EACEE39FA017B495'] = {'medium_enemy', '武斗虫', 3564923972},
-    ['EF04CB84D097A497'] = {'giant_enemy', '孢裂泰坦', 2514244534},
-    ['EF570293245A17C2'] = {'large_enemy', '战争纵步者', 523260929},
-    ['F0B26FA9258128D3'] = {'flying_enemy', '敌方单位', 793026793},
-    ['F1610AC48CDC5240'] = {'medium_enemy', '监视者（无包裹模型）', 1899936906},
-    ['F22D027B37BEF107'] = {'giant_enemy', '利维坦', 3097344451},
-    ['F540CA9D9D4A422E'] = {'large_enemy', '追踪虫', 2387277009},
-    ['F66D0BAD8693779A'] = {'medium_enemy', '火箭蹂躏者 MK2', 2365630221},
-    ['F79CD8BB654397DF'] = {'large_enemy', '阿尔法指挥官', 570845236},
-    ['F8131632AA867107'] = {'large_enemy', '侦察纵步者', 20706814},
-    ['F8B5A81A86D5D4EB'] = {'medium_enemy', '重型蹂躏者', 398976798},
-    ['FB9937035D652C43'] = {'small_enemy', '装甲兵', 4039692928},
-    ['FC8DEC78BE8AB47D'] = {'medium_enemy', '蹂躏者 MK2 移动工厂生产', 1649987991},
-    ['FD5247653C897803'] = {'large_enemy', '敌方单位', 1076678822},
+    ['0002BA767DF856F3'] = {'small_enemy', '劫掠者', 2454424572, 'Marauder'},
+    ['0883366204E1CCC5'] = {'medium_enemy', '凝视者', 1661895142, 'Gazer'},
+    ['089833D2880D9E06'] = {'small_enemy', '机枪奇袭者（炽灼部队）', 586021653, 'Incendiary MG Raider'},
+    ['08E6FFC2474287BD'] = {'medium_enemy', '监视者 MK2', 3363066353, 'Overseer MK2'},
+    ['09DFB04B2E578BC3'] = {'small_enemy', '激光装甲兵', 4039692928, 'Incendiary Rocket Trooper'},
+    ['09FE0BE51A23396C'] = {'medium_enemy', '惑乱者（女）', 1371180916, 'Female Agiator'},
+    ['0AB7B92B131C228C'] = {'large_enemy', '爆裂强袭虫', 3903153972, 'Rupture Charger'},
+    ['0ADC9F9173AD8E1D'] = {'small_enemy', '无票者（中型）', 4211847317, 'Voteless Medium'},
+    ['10081ACEF6163EF6'] = {'medium_enemy', '酸液武斗虫', 3365898186, 'Bile Warrior'},
+    ['137988CEA16458F7'] = {'large_enemy', '巨型碾压者', 613980508, 'Hulk Bruiser'},
+    ['1448D494665D01A0'] = {'small_enemy', '凝视者 MK2', 2259733865, 'Gazer MK2'},
+    ['1897BDD32105D2DC'] = {'large_enemy', '巨型炙焰者 MK2（炽灼部队）', 1775662925, 'Hulk Scorcher MK2'},
+    ['19E18B46EC55D94A'] = {'flying_enemy', '刺魟', 4160806915, 'Stingray'},
+    ['1A7FCDFF98C664B0'] = {'large_enemy', '强袭虫', 1299714559, 'Charger'},
+    ['1B5B9AC4F96B36E5'] = {'small_enemy', '机械统帅（炽灼部队）', 621159586, 'Incendiary Commissar'},
+    ['1E66EE1F6F7FD00E'] = {'large_enemy', '巨型抹煞者', 1560770730, 'Hulk Obliterator'},
+    ['1F0A91729C0004E0'] = {'small_enemy', '孢裂追猎虫', 1210082392, 'Spore Burst Hunter'},
+    ['20B9C7734DAEAD65'] = {'large_enemy', '证真者', 3776682558, 'Veracitor'},
+    ['215CE160A17BE4CD'] = {'small_enemy', '喷气机械统帅', 621159586, 'Jet Brigade Commissar'},
+    ['257D805CAA7E10C0'] = {'small_enemy', '装甲兵 霰弹（废案）', 4039692928, 'Shotgun Trooper'},
+    ['262351741C53FF0C'] = {'small_enemy', '凝视者 尖塔', 2259733865, 'Gazer Spire'},
+    ['282EB766C1FFA6A1'] = {'flying_enemy', '炮艇', 1932062202, 'Gunship'},
+    ['2A12104F2853AE16'] = {'small_enemy', '火箭奇袭者', 3112705780, 'Rocket Raider'},
+    ['2AD2E055DAD21F6E'] = {'flying_enemy', '入侵的穿梭舰', 3579113113, 'Warp Ship Invasion'},
+    ['2CF3488C4845F8BD'] = {'large_enemy', '机器人 加农炮塔', 478200978, 'Cannon Turret'},
+    ['30CF04B2EC8C9BD4'] = {'small_enemy', '侦察奇袭者', 2319746535, 'Scout Raider'},
+    ['30F2DEE2333F227A'] = {'giant_enemy', '移动工厂 带干扰塔', 1153658728, 'Jammer Factory Strider'},
+    ['31BAE74D2F064D8D'] = {'large_enemy', '湮灭坦克 MK2', 3455009224, 'Annihilator Tank MK2'},
+    ['32541FC4EC7C9CDC'] = {'medium_enemy', '武斗虫 MK3', 3564923972, 'Warrior MK3'},
+    ['32CDEADA234FB8DF'] = {'large_enemy', '喷气巨型碾压者', 613980508, 'Jet Brigade Hulk Bruiser'},
+    ['34DFD23365472E9E'] = {'flying_enemy', '突入者', 3621116014, 'Obtruder'},
+    ['36AA99CCE5E60146'] = {'medium_enemy', '胆汁喷涌虫', 717622970, 'Bile Spewer'},
+    ['3AFF5FD7D5450B99'] = {'large_enemy', '巨兽级强袭虫', 1076678822, 'Charger Behemoth'},
+    ['3D0E03E2D574E1CA'] = {'small_enemy', '追猎虫 MK2', 3330362068, 'Hunter MK2'},
+    ['3E0537D606438FEA'] = {'large_enemy', '巨型炙焰者', 1775662925, 'Hulk Scorcher'},
+    ['4019623142351CB6'] = {'small_enemy', '装甲兵 MK3', 4039692928, 'Trooper MK3'},
+    ['44458A2C52B002FB'] = {'small_enemy', '无票者（重型）', 4211847317, 'Voteless Heavy'},
+    ['453FE22C634EB30F'] = {'large_enemy', '御门者', 1870840792, 'Gatekeeper'},
+    ['4E97FB073BDC7A4B'] = {'medium_enemy', '武斗虫 MK2（俘虏）', 3564923972, 'Warrior MK2 (Captive)'},
+    ['51EEA86BF6997E4E'] = {'small_enemy', '食腐虫 MK2', 4212839382, 'Scavenger MK2'},
+    ['52018DEB9AB6827E'] = {'small_enemy', '喷气装甲兵（崩溃）', 4039692928, 'Jet Brigade Trooper'},
+    ['53D8919D7B8ABD67'] = {'large_enemy', '湮灭坦克', 3455009224, 'Annihilator Tank'},
+    ['54E107DACF6929CB'] = {'medium_enemy', '狂暴者 MK2', 3201222154, 'Berserker MK2'},
+    ['57EED0EAC346CD9D'] = {'medium_enemy', '蹂躏者 MK3（炽灼部队）', 1649987991, 'Incendiary Devastator'},
+    ['58B2B86C11369241'] = {'medium_enemy', '燃烧机枪蹂躏者', 75849082, 'Incendiary MG Devastator'},
+    ['5CA832447445C0BA'] = {'small_enemy', '追猎虫 MK3', 3330362068, 'Hunter MK3'},
+    ['6021E22338333D88'] = {'medium_enemy', '抚育喷涌虫', 487985459, 'Nursing Spewer'},
+    ['604A794EC45BB820'] = {'flying_enemy', '崇高监视者', 2745056259, 'Elevated Overseer'},
+    ['611BA777783B08A2'] = {'large_enemy', '噪轰引擎 速射加农炮', 4066406510, 'Vox Engine Cannon Turret'},
+    ['63DF3D07B7424588'] = {'large_enemy', '铁幕坦克', 3921592399, 'Barrager Tank'},
+    ['64090088502435DD'] = {'flying_enemy', '尖啸虫', 793026793, 'Shrieker'},
+    ['64BA5F030B114EC1'] = {'small_enemy', '奇袭者', 2000862158, 'Raider'},
+    ['672F7DA17F3BA34A'] = {'small_enemy', '穿刺虫触手', 1046000873, 'Tentacle'},
+    ['67DC32DCA4F02D33'] = {'large_enemy', '肉瘤体', 2880434041, 'Fleshmob'},
+    ['6B202392F4AB605E'] = {'large_enemy', '孢子强袭虫', 1939105083, 'Spore Charger'},
+    ['6DAB2EADF5D8B692'] = {'large_enemy', '巨型烈焰轰炸者', 2090691137, 'Hulk Firebomber'},
+    ['728421351D440EBC'] = {'medium_enemy', '孢裂武斗虫', 2115960485, 'Spore Burst Warrior'},
+    ['72A83E49CED6DB3D'] = {'small_enemy', '胆汁吐沫虫', 444529084, 'Bile Spitter'},
+    ['746A7F3BEDA32699'] = {'medium_enemy', '激进先锋（男）', 23741406, 'Male Radical'},
+    ['74E2285C01DA4F71'] = {'flying_enemy', '增援穿梭舰', 3579113113, 'Warp Ship'},
+    ['78E1497571012C47'] = {'small_enemy', '无票者（轻型）', 4211847317, 'Voteless Light'},
+    ['7B48CACDBACB3881'] = {'small_enemy', '装甲兵 MK2', 4039692928, 'Trooper MK2'},
+    ['7ECE5304F868F6B3'] = {'small_enemy', '装甲兵（无包裹）', 4039692928, 'Trooper'},
+    ['82A87AD8D595B2BA'] = {'small_enemy', '炙焰装甲兵', 2861014363, 'Pyro Trooper'},
+    ['843D18D4B5512B63'] = {'large_enemy', '移动工厂 连发加农炮', 478200978, 'Factory Strider Cannon Turret'},
+    ['856E9710E45E760F'] = {'small_enemy', '特攻奇袭者', 1467464627, 'Jet Brigade Raider'},
+    ['883401AF2A98A5F6'] = {'small_enemy', '掠食追猎虫', 3029738043, 'Predator Hunter'},
+    ['8FF0A839830A7692'] = {'small_enemy', '食腐虫', 4212839382, 'Scavenger'},
+    ['905809A4C28D8A45'] = {'large_enemy', '粉碎者', 3922421925, 'Crusher'},
+    ['9076EEED17FCEE35'] = {'large_enemy', '强化侦察纵步者', 1871700431, 'Reinforced Scout Strider'},
+    ['91EBD77931110AFC'] = {'medium_enemy', '重型蹂躏者 MK3', 1649987991, 'Heavy Devastator MK3'},
+    ['960B48A421A3FAAA'] = {'flying_enemy', '蟑龙', 1378841226, 'Dragonroach'},
+    ['96110F9D6B010E02'] = {'large_enemy', '敌方单位', 478200978, 'Enemy unit'},
+    ['9647B00CC3A9D36F'] = {'medium_enemy', '火箭蹂躏者', 2365630221, 'Rocket Devastator'},
+    ['965EAE5A51ACDD4A'] = {'large_enemy', '猎杀器', 1405979473, 'Harvester'},
+    ['96BA14C9EBB49CE1'] = {'large_enemy', '巨型者', 790541304, 'Hulk'},
+    ['98152772A72F7838'] = {'flying_enemy', '运输船', 554367013, 'Dropship'},
+    ['9926876B2375A1BB'] = {'medium_enemy', '机器人 碉堡炮塔', 3921936527, 'Bunker Turret'},
+    ['9A8A3AAE287B230C'] = {'small_enemy', '食腐虫 MK3', 4212839382, 'Scavenger MK3'},
+    ['9D8827FED763650E'] = {'medium_enemy', '惑乱者（男）', 1371180916, 'Male Agitator'},
+    ['9E2E17F2CCCCAFDD'] = {'giant_enemy', '吐酸泰坦', 2514244534, 'Bile Titan'},
+    ['9F57782F00E6ED20'] = {'small_enemy', '装甲兵（炽灼部队）', 4039692928, 'Incendiary Trooper'},
+    ['A05BD1EC67B3AC4C'] = {'large_enemy', '巨兽级强袭虫 MK2', 1076678822, 'Charger Behemoth MK2'},
+    ['A1F37BF2A40FBDE4'] = {'medium_enemy', '虫窝护卫', 626718113, 'Hive Guard'},
+    ['A35207C6F2150806'] = {'medium_enemy', '爆裂武斗虫', 953392591, 'Rupture Warrior'},
+    ['A381A11C07D3EB94'] = {'medium_enemy', '爆裂喷涌虫', 2270698456, 'Rupture Spewer'},
+    ['A4552F97033392F4'] = {'small_enemy', '喷气机枪奇袭者', 586021653, 'Jet Brigade MG Raider'},
+    ['A6A68D8AF177F3A1'] = {'medium_enemy', '狂暴者', 3201222154, 'Berserker'},
+    ['A71AAFD82C6EBC92'] = {'small_enemy', '机械统帅', 621159586, 'Commissar'},
+    ['AAB438596F5E8FD9'] = {'small_enemy', '猛扑虫', 908216632, 'Pouncer'},
+    ['ABDB2E2A0479D8CA'] = {'large_enemy', '机器人 加农炮塔 MK2', 478200978, 'Cannon Turret MK2'},
+    ['AC60E78435098C9D'] = {'flying_enemy', '守望者', 886803190, 'Watcher'},
+    ['AE57FCDB49F74E98'] = {'small_enemy', '装甲兵 MK2（机枪版）', 4039692928, 'Trooper MK2 MG'},
+    ['AE63E525853D7044'] = {'medium_enemy', '蹂躏者 MK3', 1649987991, 'Devastator MK3'},
+    ['AF0F9B3A163787A5'] = {'small_enemy', '喷气装甲兵', 4039692928, 'Jet Brigade Trooper'},
+    ['B056F8FC74ABA02D'] = {'small_enemy', '激光炮装甲兵（废案）', 4039692928, 'Cannon Trooper'},
+    ['B2A6FA1E4284C7E6'] = {'medium_enemy', '狂暴武斗虫', 3564923972, 'Warrior'},
+    ['B4ED319B39F5457B'] = {'small_enemy', '机枪奇袭者', 586021653, 'MG Raider'},
+    ['B5DBC0C240C921AD'] = {'medium_enemy', '狂暴者 MK3（炽灼部队）', 3201222154, 'Incendiary Berserker'},
+    ['B92435FBF60F0748'] = {'medium_enemy', '重型蹂躏者 MK2', 398976798, 'Heavy Devastator MK2'},
+    ['BC242702FB46B7E7'] = {'large_enemy', '噪轰引擎', 4066406510, 'Vox Engine'},
+    ['BE39E313A1E46BB9'] = {'medium_enemy', '武斗虫 MK2', 3564923972, 'Warrior MK2'},
+    ['BE743B2FAA3A6E26'] = {'medium_enemy', '喷气蹂躏者', 1649987991, 'Jet Brigade Devastator'},
+    ['C626D2BB495A202D'] = {'medium_enemy', '蹂躏者', 1649987991, 'Devastator'},
+    ['C6449FFD9EA3779C'] = {'large_enemy', '碎裂坦克', 2577770154, 'Shredder Tank'},
+    ['C9BCCCB0A54A82A4'] = {'medium_enemy', '火箭蹂躏者 MK3 （炽灼部队）', 2365630221, 'Incendiary Rocket Devastator'},
+    ['CBB1BA3366009C3A'] = {'medium_enemy', '激进先锋（女）', 23741406, 'Female Radical'},
+    ['CC188F0C80505C6C'] = {'medium_enemy', '悲怜体', 2118086817, 'Wretch'},
+    ['CC7022FDD172089B'] = {'medium_enemy', '抚育喷涌虫 MK2', 487985459, 'Nursing Spewer MK2'},
+    ['CCAE5264ACD591B7'] = {'medium_enemy', '胆汁喷涌虫 MK2', 717622970, 'Bile Spewer MK2'},
+    ['CD28A27A79BE53D5'] = {'medium_enemy', '指挥碉堡 碉堡重机枪', 3921936527, 'Command Bunker HMG'},
+    ['D1E990BAF22D5A52'] = {'large_enemy', '掠食追踪虫', 4106686024, 'Predator Stalker'},
+    ['D37E8D120D2836E3'] = {'giant_enemy', '移动工厂', 1153658728, 'Factory Strider'},
+    ['D465D9C7F77A07CB'] = {'giant_enemy', '霸王虫', 3929716830, 'Hivelord'},
+    ['D522FD4748D443A5'] = {'large_enemy', '虫族指挥官', 3077749065, 'Brood Commander'},
+    ['D5792F6856B06BA4'] = {'medium_enemy', '喷气狂暴者', 3201222154, 'Jet Brigade Berserker'},
+    ['D63FCBFF0851B7AF'] = {'large_enemy', '猎杀器 MK2', 1405979473, 'Harvester MK2'},
+    ['D8CBC4A807A6D035'] = {'small_enemy', '乱斗者', 1974334302, 'Brawler'},
+    ['D9511E9F6BD62E3F'] = {'small_enemy', '追猎虫', 3330362068, 'Hunter'},
+    ['DA40BB347C7447F2'] = {'medium_enemy', '监视者', 1899936906, 'Overseer'},
+    ['DB90077E76FAA025'] = {'flying_enemy', '敌方单位', 554367013, 'Enemy unit'},
+    ['DB964631BE1CF501'] = {'small_enemy', '孢裂食腐虫', 2842755544, 'Spore Burst Scavenger'},
+    ['DCF8E74212FBEE3B'] = {'large_enemy', '穿刺虫', 1046000873, 'Impaler'},
+    ['DFBACBD977A948DC'] = {'small_enemy', '食腐虫 MK2（俘虏）', 4212839382, 'Scavenger MK2 (Captive)'},
+    ['E0353177F1329573'] = {'medium_enemy', '烈火蹂躏者', 3498181594, 'Conflagration Devastator'},
+    ['E44EC9F9B3FE1D2A'] = {'large_enemy', '喷气巨型炙焰者', 1775662925, 'Jet Brigade Hulk Scorcher'},
+    ['E683D2CA5618D74A'] = {'small_enemy', '奇袭者（炽灼部队）', 2000862158, 'Incendiary Raider'},
+    ['E8F19A0AA958E46D'] = {'medium_enemy', '新月监视者', 3877563222, 'Crescent Overseer'},
+    ['EACEE39FA017B495'] = {'medium_enemy', '武斗虫', 3564923972, 'Warrior'},
+    ['EF04CB84D097A497'] = {'giant_enemy', '孢裂泰坦', 2514244534, 'Spore Burst Bile Titan'},
+    ['EF570293245A17C2'] = {'large_enemy', '战争纵步者', 523260929, 'War Strider'},
+    ['F0B26FA9258128D3'] = {'flying_enemy', '敌方单位', 793026793, 'Enemy unit'},
+    ['F1610AC48CDC5240'] = {'medium_enemy', '监视者（无包裹模型）', 1899936906, 'Overseer'},
+    ['F22D027B37BEF107'] = {'giant_enemy', '利维坦', 3097344451, 'Leviathan'},
+    ['F540CA9D9D4A422E'] = {'large_enemy', '追踪虫', 2387277009, 'Stalker'},
+    ['F66D0BAD8693779A'] = {'medium_enemy', '火箭蹂躏者 MK2', 2365630221, 'Rocket Devastator MK2'},
+    ['F79CD8BB654397DF'] = {'large_enemy', '阿尔法指挥官', 570845236, 'Alpha Commander'},
+    ['F8131632AA867107'] = {'large_enemy', '侦察纵步者', 20706814, 'Scout Strider'},
+    ['F8B5A81A86D5D4EB'] = {'medium_enemy', '重型蹂躏者', 398976798, 'Heavy Devastator'},
+    ['FB9937035D652C43'] = {'small_enemy', '装甲兵', 4039692928, 'Trooper'},
+    ['FC8DEC78BE8AB47D'] = {'medium_enemy', '蹂躏者 MK2 移动工厂生产', 1649987991, 'Devastator MK2 Spawn'},
+    ['FD5247653C897803'] = {'large_enemy', '敌方单位', 1076678822, 'Enemy unit'},
 }
 -- END ENEMY TARGET CATALOG
 
@@ -3985,6 +4220,8 @@ local function build_ping_events(env)
         ambiguous_shells = {['6C62E2E25E084083']=true, ['C8F9A2233048B836']=true},
         generic_native_names = {['特殊地点']=true, ['special location']=true,
             ['敌方单位']=true, ['enemy unit']=true, ['任务交互物']=true, ['objective terminal']=true,
+            ['任务终端']=true, ['mission terminal']=true,
+            ['战略配备']=true, ['strategic asset']=true, ['stratagem']=true,
             ['普通物资']=true, ['supplies']=true},
         exact_supply_names = {
             ['弹药']=true, ['弹药盒']=true, ['针剂']=true, ['针剂盒']=true,
@@ -4012,6 +4249,43 @@ local function build_ping_events(env)
             return row.name_en or row.name_zh
         end
         return row.name_zh or row.name_en
+    end
+    local function has_cjk(value)
+        if type(value)~='string' then return false end
+        for i=1,#value-2 do
+            local a,b,c=value:byte(i,i+2)
+            if a and b and c and a>=0xE0 and a<=0xEF and b>=0x80 and b<=0xBF
+                and c>=0x80 and c<=0xBF then
+                local code=(a-0xE0)*4096+(b-0x80)*64+(c-0x80)
+                if (code>=0x3400 and code<=0x4DBF) or (code>=0x4E00 and code<=0x9FFF) then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+    local function ascii_name(value)
+        return type(value)=='string' and value~='' and not value:find('[\128-\255]')
+    end
+    local function target_names(info,native,zh_fallback,en_fallback)
+        local zh=info and info[2] or zh_fallback
+        local en=info and info[4] or nil
+        if not en and info and ascii_name(info[2]) then en=info[2] end
+        if type(en)~='string' or en=='' then en=en_fallback end
+        if has_cjk(native) then zh=native
+        elseif ascii_name(native) then en=native end
+        return {zh=zh or zh_fallback,en=en or en_fallback,native_name=native}
+    end
+    local function merge_native(names,native)
+        names=type(names)=='table' and names or {}
+        if has_cjk(native) then names.zh=native
+        elseif ascii_name(native) then names.en=native end
+        names.native_name=native
+        return names
+    end
+    local supply_names={}
+    for _,row in pairs(classification.supply_targets) do
+        supply_names[row.name_zh]=row;supply_names[row.name_en:lower()]=row
     end
     local function report_drop(reason, entry, resource)
         if not env.diagnostic then return end
@@ -4273,11 +4547,15 @@ local function build_ping_events(env)
                 for _, value in pairs(entry.position) do
                     if value ~= value or math.abs(value)>1000000 then return nil end
                 end
-                local event = {category='map',target=localized_name(entry.localization_key) or '地图标记',position=entry.position,
+                local map_name=localized_name(entry.localization_key) or '地图标记'
+                local event = {category='map',target=map_name,
+                    target_names=target_names(nil,map_name,'地图标记','Map marker'),position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
                     source='tactical_map',localization_key=entry.localization_key}
                 -- Captured replicated MapMarkerType 6 is the extraction pin.
-                if entry.map_type == 6 then event.target = '撤离区' end
+                if entry.map_type == 6 then
+                    event.target='撤离区';event.target_names={zh='撤离区',en='Extraction zone'}
+                end
                 if entry.map_type == 1 then
                     if entry.target_network >= 0x7fff then return nil,'retry' end
                     local index = lookup(root+0xf22ec8,entry.target_network,2048)
@@ -4290,6 +4568,24 @@ local function build_ping_events(env)
                     for key,value in pairs(objective) do event[key]=value end
                     event.target_id = entity
                     event.source = 'map_objective'
+                    local target_resource=hex64(identity,0)
+                    local mission_target=MISSION_TARGETS[target_resource]
+                    local enemy_target=ENEMY_TARGETS[target_resource]
+                    local known_target=mission_target or enemy_target
+                    if known_target then
+                        local native=objective.objective_name
+                        if not native or generic_name(native,objective.localization_key) then
+                            native=localized_name(known_target[3])
+                            if generic_name(native,known_target[3]) then native=nil end
+                        end
+                        event.target_names=target_names(known_target,native,
+                            mission_target and '任务目标' or '敌方单位',
+                            mission_target and 'Mission objective' or 'Enemy unit')
+                        event.objective_names=event.target_names
+                    else
+                        event.target_names=target_names(nil,objective.objective_name,'任务目标','Mission objective')
+                        event.objective_names=event.target_names
+                    end
                 end
                 return event
             end
@@ -4306,7 +4602,11 @@ local function build_ping_events(env)
                 or entry.kind==20 and 'stratagem' or nil
             if native_category == 'building' and (entry.target_id==0 or entry.target_id==0xffffffff)
                 and exact_supply_name(localized) then
+                local known_supply=supply_names[localized] or supply_names[localized:lower()]
+                local names=known_supply and {zh=known_supply.name_zh,en=known_supply.name_en}
+                    or {zh='普通物资',en='Supplies'}
                 return {category='supplies',target=localized,position=entry.position,
+                    target_names=merge_native(names,localized),
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,action=action,source='native_marker'}
             end
@@ -4316,7 +4616,10 @@ local function build_ping_events(env)
                     report_drop('missing_target_or_generic_name', entry)
                     return nil
                 end
-                return {category=native_category,target=localized,position=entry.position,
+                local zh_fallback=native_category=='stratagem' and '未知战备' or '未知目标'
+                local en_fallback=native_category=='stratagem' and 'Unknown stratagem' or 'Unknown target'
+                return {category=native_category,target=localized,
+                    target_names=target_names(nil,localized,zh_fallback,en_fallback),position=entry.position,
                     creator_id=entry.creator_id,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,action=action,
                     source=summoned and 'stratagem_call' or 'native_marker'}
@@ -4334,7 +4637,8 @@ local function build_ping_events(env)
                 if read(address, 24) ~= identity then return nil, 'retry' end
                 local known_supply=classification.supply_targets[resource]
                 return {category='supplies',target=localized,target_id=entry.target_id,
-                    target_names=known_supply and {zh=known_supply.name_zh,en=known_supply.name_en} or nil,
+                    target_names=known_supply and merge_native({zh=known_supply.name_zh,en=known_supply.name_en},localized)
+                        or target_names(nil,localized,'普通物资','Supplies'),
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4349,7 +4653,8 @@ local function build_ping_events(env)
                 end
                 if read(address, 24) ~= identity then return nil, 'retry' end
                 return {category='supplies',target=label,target_id=entry.target_id,
-                    target_names=supply and {zh=supply.name_zh,en=supply.name_en} or nil,
+                    target_names=supply and merge_native({zh=supply.name_zh,en=supply.name_en},localized)
+                        or target_names(nil,localized,'普通物资','Supplies'),
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4369,10 +4674,13 @@ local function build_ping_events(env)
             local info = mission or enemy or PING_TARGETS[resource]
             if special then
                 if read(address, 24) ~= identity then return nil, 'retry' end
-                local target = localized and not generic_name(localized, entry.localization_key)
-                    and localized or selected_name(special)
+                local native=localized and not generic_name(localized, entry.localization_key)
+                    and localized or nil
+                local target = native or selected_name(special)
+                local special_names=target_names({[2]=special.name_zh,[4]=special.name_en},native,
+                    '特殊目标','Special target')
                 return {category='building',target=target,target_id=entry.target_id,
-                    target_names={zh=special.name_zh,en=special.name_en},
+                    target_names=special_names,
                     creator_id=entry.creator_id,resource=resource,kind=entry.kind,slot=entry.slot,
                     localization_key=entry.localization_key,position=entry.position,action=action,
                     source=summoned and 'stratagem_call' or 'target'}
@@ -4387,8 +4695,10 @@ local function build_ping_events(env)
             -- Mission sites and enemies can share generic marker keys. Resolve
             -- the catalog's actual Encyclopedia name before its reviewed fallback;
             -- keep specific native marker text when it is available.
-            if (mission or enemy) and (not localized or GENERIC_MISSION_NAMES[entry.localization_key]) then
-                label = localized_name(info[3]) or info[2]
+            if (mission or enemy) and (not localized or generic_name(localized,entry.localization_key)) then
+                local encyclopedia_name=localized_name(info[3])
+                label=encyclopedia_name and not generic_name(encyclopedia_name,info[3])
+                    and encyclopedia_name or info[2]
             end
             if info and native_category and not mission and not enemy
                 and generic_name(localized, entry.localization_key) then
@@ -4398,8 +4708,21 @@ local function build_ping_events(env)
                 and not GENERIC_MISSION_NAMES[entry.localization_key] then
                 label = info[2] .. ' / ' .. localized
             end
+            local native_name=localized and not generic_name(localized,entry.localization_key)
+                and localized or nil
+            if not native_name and (mission or enemy) then
+                local encyclopedia_name=localized_name(info[3])
+                if encyclopedia_name and not generic_name(encyclopedia_name,info[3]) then
+                    native_name=encyclopedia_name
+                end
+            end
+            local zh_fallback=native_category=='stratagem' and '未知战备' or '任务目标'
+            local en_fallback=native_category=='stratagem' and 'Unknown stratagem'
+                or mission and 'Mission objective' or enemy and 'Enemy unit' or 'Mission target'
+            local target_names=target_names(info,native_name,zh_fallback,en_fallback)
             return {category = info and info[1] or native_category,
                 target = label, target_id = entry.target_id,
+                target_names=target_names,objective_names=mission and target_names or nil,
                 creator_id = entry.creator_id, resource = resource, kind = entry.kind, slot = entry.slot,
                 localization_key=entry.localization_key, position=entry.position, action=action,
                 source=summoned and 'stratagem_call' or 'target'}
@@ -5753,8 +6076,8 @@ M.batch_rule_ids = function()
         local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
             or (filter=='other' and row.group=='other' and row.family~='mission')
             or (filter~='mission' and filter~='other' and row.group==filter)
-        local display=M.language.is_chinese() and (row.display_name or row.name or row.debug_name)
-            or (row.debug_name or row.name or row.display_name)
+        local display=M.language.is_chinese() and (row.display_name or ('战备 #'..tostring(row.id)))
+            or (row.display_name_en or ('Stratagem #'..tostring(row.id)))
         if matches_filter and (query=='' or tostring(display or ''):lower():find(query,1,true)
             or tostring(row.id):find(query,1,true)
             or tostring(row.debug_name or row.name or ''):lower():find(query,1,true)) then
@@ -7016,7 +7339,7 @@ REGISTRY = build_plugin_registry({
         if output == 'inherit' then output = profile.output end
         if output == 'public' then output = 'squad' end
         if output ~= 'local' and output ~= 'squad' then return false, 'invalid output policy' end
-        local sent, reason = automation.send(automation.format(text,creator_id), role, output)
+        local sent, reason = automation.send(automation.format(text,creator_id,nil,false,false,profile.message_language), role, output)
         if sent and not independent then automation.record(now,creator_id) end
         return sent, reason
     end,
@@ -8441,9 +8764,9 @@ local function draw_panel()
         text(caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), IX, y, 12, C.YELLOW, IW)
         text(M.language.status(M.ping_status or '等待标记数据'), IX, y + 22, 12, C.MUTED, IW)
         text(M.language.status(M.task_stratagem_status or '等待任务战备数据'), IX, y + 40, 12, C.MUTED, IW)
-        text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: CATEGORY / TARGET / POSITION / ACTION'), IX, y + 62, 12, C.MUTED, IW)
+        text(caption('变量：{类别} / {目标} / {位置} / {动作}', 'TOKENS: {category} / {target} / {position} / {action}'), IX, y + 62, 12, C.MUTED, IW)
         text(caption('{任务名} / {任务类型}（地图任务）', 'OBJECTIVE NAME / OBJECTIVE TYPE'), IX, y + 84, 12, C.MUTED, IW)
-        text(caption('{玩家名} / {缩写} / {编号}', 'PLAYER NAME / SHORT / SLOT'), IX, y + 106, 12, C.MUTED, IW)
+        text(caption('{玩家名} / {缩写} / {编号}', '{player_name} / {short} / {number}'), IX, y + 106, 12, C.MUTED, IW)
         if PANEL.hint then text(M.language.status(PANEL.hint), IX, y + 128, 11, C.YELLOW, IW) end
     elseif PANEL.settings_view == 'automation' and M.options then
         local opts = automation.profile(PANEL.profile or 'host')
@@ -8472,7 +8795,7 @@ local function draw_panel()
         y = y + 44
         text(PANEL.hint and M.language.status(PANEL.hint) or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
              IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW)
-        text(caption('欢迎语可用 {玩家名}、{缩写}、{编号}', 'WELCOME: {玩家名} / {缩写} / {编号}'), IX, y + 38, 11, C.DIM, IW)
+        text(caption('欢迎语可用 {玩家名}、{缩写}、{编号}', 'WELCOME: {player_name} / {short} / {number}'), IX, y + 38, 11, C.DIM, IW)
     else
     field('name', caption('事件名称', 'EVENT NAME'), draft.name, y)
     y = y + 62
@@ -9563,7 +9886,7 @@ One user-sampled Super Earth cache resource uses the exact-hash fallback label "
 默认不预置零冷却规则；需要时可逐项配置。
 战备可搜索、逐项开关、分别设置召唤/落地标记模板，红蓝绿一键开关。
 图标只显示游戏已加载材质；同名且呼叫方式一致的奖励等变体共用规则。
-语言按游戏设置自动切换。当前149项战备有简体中文展示名，未知ID退回内部英文名；扫描不批量调用游戏本地化函数。六种已核实的SEAF炮弹走现有任务建筑提醒。一个经用户实机样本核对的Super Earth cache资源在泛名称时回退显示“坠落舱”；这不是官方本地化，也不覆盖其他cache资源。广播塔顶端标记沿用既有路径；用户确认塔底泛型点不需适配。游戏内IME输入仍待实机验收。
+界面语言按游戏设置切换；战备消息名称按预设的消息语言选择，与界面语言相互独立。当前稳定目录149个战备ID具有双语映射，未核实名称使用通用可读fallback；未知运行时ID的消息不暴露内部代码。扫描不批量调用游戏本地化函数。六种已核实的SEAF炮弹走现有任务建筑提醒。一个经用户实机样本核对的Super Earth cache资源在泛名称时回退显示“坠落舱”；这不是官方本地化，也不覆盖其他cache资源。广播塔顶端标记沿用既有路径；用户确认塔底泛型点不需适配。游戏内IME输入仍待实机验收。
 不能确定具体变体时不冒认ID；连同名规则也无法确定时使用默认提醒。
 飞行优先于体型；小型默认关闭；当前142条可标记敌对资源，12条飞行。
 新增战备在兼容布局下自动发现；新敌人及游戏二进制更新仍需校验。

@@ -243,3 +243,16 @@ class AlertPanelTests(unittest.TestCase):
             ok,why=a.push_ping(event,1002);assert(ok,why or a.state.status)
             assert(a.state.pings[2].text=='PRIMARY OBJECTIVE',a.state.pings[2].text)
         ''')
+
+    def test_non_han_non_ascii_native_name_does_not_replace_english_catalog_name(self):
+        lua,h,m=self.fixture()
+        lua.execute('''local c=m.debug_stratagem_catalog()
+            c.lookup=function() return {id=4119049995,rule_id=4119049995,group='red',
+                display_name='静态中文名',display_name_en='Static “English” Name',
+                target_names={zh='静态中文名',en='Static “English” Name'}} end
+            local event={category='stratagem',stratagem_id=4119049995,
+                target_names={native_name='せんりゃく'}}
+            m.debug_enrich_stratagem_event(event,1000)
+            assert(event.target_names.zh=='静态中文名')
+            assert(event.target_names.en=='Static “English” Name')
+        ''')

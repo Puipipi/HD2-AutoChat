@@ -231,6 +231,35 @@ class PingEventsTests(unittest.TestCase):
         self.assertEqual(self.events[0][0]['target'],'超级地球旗杆')
         self.assertEqual(self.events[0][0]['action'],'mark')
 
+    def test_generic_native_marker_does_not_override_reviewed_resource_names(self):
+        self.target('57DB57121F3E7ED2')
+        self.localized[3585962803]='特殊地点'
+        self.poll(0);self.mark(kind=18,localization_key=3585962803);self.header(0,1);self.poll(1)
+        names=self.events[0][0]['target_names']
+        self.assertEqual(names['zh'],'非法广播塔')
+        self.assertEqual(names['en'],'Illegal Broadcast Tower')
+        self.assertIsNone(names['native_name'])
+
+    def test_curated_english_punctuation_is_not_replaced_by_fallback(self):
+        source=SOURCE.read_text(encoding='utf-8').replace(
+            'Illegal Broadcast Tower','Illegal “Broadcast” Tower',1)
+        constructor=self.lua.execute(source+'\nreturn build_ping_events')
+        special_builder=self.lua.execute(SPECIAL_TARGETS.read_text(encoding='utf-8'))
+        adapter=constructor(self.lua.table_from({
+            'base':lambda:self.base,'read':self.read,'emit':self.emit,
+            'session':lambda:self.session,'localize':lambda key:self.localized.get(int(key)),
+            'special_targets':special_builder(),'language':lambda:'zh'}))
+        self.target('57DB57121F3E7ED2');self.localized[3585962803]='特殊地点'
+        adapter.poll(0);self.mark(kind=18,localization_key=3585962803);self.header(0,1)
+        adapter.poll(1)
+        self.assertEqual(self.events[-1][0]['target_names']['en'],'Illegal “Broadcast” Tower')
+
+        self.setUp();self.target('B0F1B354BA1D38D8')
+        self.localized[689074879]='战略配备'
+        self.poll(0);self.mark(kind=20,localization_key=689074879);self.header(0,1);self.poll(1)
+        names=self.events[0][0]['target_names']
+        self.assertIsNone(names['native_name'])
+
     def test_common_mission_sites_use_resource_names_instead_of_generic_location(self):
         cases=[('57DB57121F3E7ED2','非法广播塔'),('542A14BA4D755F4E','雷达站终端'),
                ('9BFC8FCD68B09F28','SEAF 火炮'),('A1BDB3A13E3633DD','SEAF 防空导弹阵地'),
@@ -294,6 +323,8 @@ class PingEventsTests(unittest.TestCase):
         self.target('57DB57121F3E7ED2');self.localized[987]='正在关停非法广播';self.poll(0)
         self.mark(kind=18,localization_key=987);self.header(0,1);self.poll(1)
         self.assertEqual(self.events[0][0]['target'],'正在关停非法广播')
+        self.assertEqual(self.events[0][0]['target_names']['zh'],'正在关停非法广播')
+        self.assertEqual(self.events[0][0]['target_names']['en'],'Illegal Broadcast Tower')
 
     def test_reviewed_mission_catalog_is_recognized_without_a_specific_native_marker_name(self):
         catalog=json.loads((SOURCE.parents[1]/'docs/mission-targets.json').read_text(encoding='utf-8'))
@@ -507,7 +538,20 @@ class PingEventsTests(unittest.TestCase):
         self.actors(); self.objective(override='获取发射代码'); self.poll(0)
         self.map_pin(kind=1, network=12); self.poll(1)
         self.assertEqual(self.events[0][0]['target'], '获取发射代码')
+        self.assertEqual(self.events[0][0]['objective_names']['zh'], '获取发射代码')
+        self.assertTrue(self.events[0][0]['objective_names']['en'])
         self.assertEqual(self.events[0][0]['localization_key'], 456)
+
+    def test_runtime_objective_name_wins_over_generic_encyclopedia_name(self):
+        self.actors();self.objective(override='获取发射代码')
+        self.descriptor(3,4001,'5684D928C9AB00D1',12)
+        self.localized[767789391]='任务终端'
+        self.poll(0);self.map_pin(kind=1,network=12);self.poll(1)
+        event=self.events[0][0]
+        self.assertEqual(event['target'],'获取发射代码')
+        self.assertEqual(event['target_names']['zh'],'获取发射代码')
+        self.assertEqual(event['objective_names']['zh'],'获取发射代码')
+        self.assertEqual(event['target_names']['en'],'Launch Codes')
 
     def test_objective_name_pending_does_not_consume_pin(self):
         self.actors(); self.objective(); del self.localized[123]; self.poll(0)
@@ -654,6 +698,8 @@ class PingEventsTests(unittest.TestCase):
         self.poll(0); self.mark(localization_key=689074879); self.header(0, 1); self.poll(1)
         self.assertEqual(len(self.events), 1)
         self.assertEqual(self.events[0][0]['target'], '尖啸虫')
+        self.assertEqual(self.events[0][0]['target_names']['zh'], '尖啸虫')
+        self.assertEqual(self.events[0][0]['target_names']['en'], 'Shrieker')
         self.assertEqual(self.events[0][0]['category'], 'flying_enemy')
 
     def test_specific_native_enemy_name_takes_priority_over_catalog_name_key(self):
@@ -943,6 +989,7 @@ class PingEventsTests(unittest.TestCase):
                         send=function(text) return send(text) end})
                 ''', lambda text: (sent.append(text) or True))
                 automation.set('ping', True); automation.set('scope', 'host')
+                automation.set('message_language', 'zh')
                 automation.set('ping_sender_prefix', False); automation.set('ping_message', '{目标}')
                 constructor = self.lua.execute(SOURCE.read_text(encoding='utf-8') + '\nreturn build_ping_events')
                 self.adapter = constructor(self.lua.table_from({'base': lambda: BASE, 'read': self.read,
@@ -955,8 +1002,8 @@ class PingEventsTests(unittest.TestCase):
                 else:
                     self.mark(creator=1001, kind=kind); self.header(0, 1)
                 self.assertEqual(self.poll(1)[0], 1)
-                self.assertTrue(automation.poll(1)[0]); self.assertEqual(sent, [label])
-                self.poll(2); automation.poll(2); self.assertEqual(sent, [label])
+                self.assertTrue(automation.poll(1)[0]); self.assertEqual(sent, ['\n'+label])
+                self.poll(2); automation.poll(2); self.assertEqual(sent, ['\n'+label])
 
     def test_resupply_mark_and_call_in_pass_rule_gate_queue_and_zero_cooldown_send(self):
         chat_source = SOURCE.with_name('chat_automation.lua').read_text(encoding='utf-8')
@@ -1011,7 +1058,7 @@ class PingEventsTests(unittest.TestCase):
                     else:
                         self.assertEqual(observed, 1)
                         self.assertTrue(automation.poll(1)[0])
-                        self.assertEqual(sent, [expected])
+                        self.assertEqual(sent, ['\n'+expected])
                         self.assertTrue(any(row[0] == category and row[1] == action
                                             and row[3] == 'queued' for row in diagnostics))
                         self.assertTrue(any(row[0] == category and row[1] == action

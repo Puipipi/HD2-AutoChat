@@ -42,12 +42,11 @@ local function build_language(env)
     }
     local stock={
         ['欢迎加入小队！']='Welcome to the squad!',
-        ['标记了{目标}（{类别}）']='Marked {目标} ({类别})',
-        ['{玩家名}召唤了{目标}']='{玩家名} called in {目标}',
-        ['{玩家名}正在开始{目标}']='{玩家名} started {目标}',
+        ['标记了{目标}']='Marked {target}',
+        ['{玩家名}召唤了{目标}']='{player_name} called in {target}',
+        ['{玩家名}正在开始{目标}']='{player_name} started {target}',
         ['自动聊天测试消息']='HELLO FROM AUTOCHAT',
-        -- Exact legacy stock text only; custom text is returned unchanged.
-        ['队友标记了{类别}，请注意！']='A teammate marked {类别}.',
+        -- Exact canonical UI copy; legacy message presets are handled below.
     }
     local stock_en={}
     for zh,en in pairs(stock) do stock_en[en]=en end
@@ -214,6 +213,22 @@ local function build_language(env)
     end
     function M.stock_template(value, locale)
         if type(value)~='string' then return value end
+        -- Migrate only exact shipped message templates in settings and presets;
+        -- user-written parenthetical text remains unchanged.
+        local old_marker={
+            ['队友标记了{类别}，请注意！']={zh='标记了{目标}',en='Marked {target}'},
+            ['标记了{目标}（{类别}）']={zh='标记了{目标}',en='Marked {target}'},
+            ['Marked {目标} ({类别})']={zh='标记了{目标}',en='Marked {target}'},
+            ['Marked {target} ({category})']={zh='标记了{目标}',en='Marked {target}'},
+            ['{玩家名} called in {目标}']={zh='{玩家名}召唤了{目标}',en='{player_name} called in {target}'},
+            ['{玩家名} started {目标}']={zh='{玩家名}正在开始{目标}',en='{player_name} started {target}'},
+        }
+        local replacement=old_marker[value]
+        if replacement then
+            if locale=='zh' then return replacement.zh end
+            if locale=='en' then return replacement.en end
+            value=replacement[state.locale] or replacement.en
+        end
         if locale=='zh' or locale=='en' then return value end
         local selected=state.locale
         if selected=='zh' then

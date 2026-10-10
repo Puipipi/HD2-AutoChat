@@ -4,6 +4,7 @@
 -- No game calls, writes, asset loading, or static native-type identity mapping.
 local function build_stratagem_catalog(env)
     local names_zh=type(env.names_zh)=='table' and env.names_zh or {}
+    local names_en=type(env.names_en)=='table' and env.names_en or {}
     -- Current native payload -> HellpodRack.payloads.item -> EntityComponentMap
     -- identity graph. Provenance/collisions: docs/stratagem-resource-aliases.json.
     -- Shared variants are absent from this exact-ID index and handled separately
@@ -126,10 +127,17 @@ local function build_stratagem_catalog(env)
                     -- Use the already validated native debug string. Resolving every
                     -- localization key here calls into a game function during the
                     -- first update; discovery and rule identity do not need it.
+                    local name_zh=names_zh[id]
+                    if type(name_zh)~='string' or name_zh=='' then name_zh='未知战备' end
+                    local name_en=names_en[id]
+                    if type(name_en)~='string' or name_en=='' then name_en='Unknown stratagem' end
                     local display_name=names_zh[id]
-                    if type(display_name)~='string' or display_name=='' then display_name=debug_name end
+                    if type(display_name)~='string' or display_name=='' then display_name='战备 #'..tostring(id) end
+                    local display_name_en=names_en[id]
+                    if type(display_name_en)~='string' or display_name_en=='' then display_name_en='Stratagem #'..tostring(id) end
                     local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
-                        display_name=display_name,
+                        display_name=display_name,display_name_en=display_name_en,
+                        target_names={zh=name_zh,en=name_en},
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
                         cooldown=cd,payload_count=payload_count,resource_aliases={}}

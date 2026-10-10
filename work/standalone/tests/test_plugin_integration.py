@@ -28,7 +28,7 @@ class PluginIntegrationTests(unittest.TestCase):
             assert(test_api.send('aware','{玩家名}/{缩写}/{编号}','0110000100000023'))
         ''')
         self.assertEqual(h.call_count(),2)
-        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'Bob/B3/3')
+        self.assertEqual(h.last_call().arg3_text.rstrip('\0'),'\nBob/B3/3')
         lua.execute('''test_profiles['0110000100000022']=nil;table.remove(test_peers,2)
             assert(test_api.send('aware','departed','0110000100000022')==false)''')
         self.assertEqual(h.call_count(),2)
@@ -69,7 +69,7 @@ class PluginIntegrationTests(unittest.TestCase):
                 policy='independent',cooldown=10,cooldown_key='plugin-alert-2',output='public'}))
             assert(callback.send('different creator','0110000100000023',{
                 policy='independent',cooldown=10,cooldown_key='plugin-alert',output='public'}))
-            assert(callback.send('self alias',nil,{policy='independent',cooldown=10,
+            assert(callback.send('{player_name} alias',nil,{policy='independent',cooldown=10,
                 cooldown_key='self-alias',output='public'}))
             assert(callback.send('same self bucket','0110000100000001',{policy='independent',
                 cooldown=10,cooldown_key='self-alias',output='public'})==false)
@@ -86,7 +86,7 @@ class PluginIntegrationTests(unittest.TestCase):
         ''')
         self.assertEqual(h.call_count(), 5,
                          'only inherited and independent public sends should reach native squad send')
-        self.assertEqual(h.last_call().arg3_text.rstrip('\0'), 'self alias')
+        self.assertEqual(h.last_call().arg3_text.rstrip('\0'), '\nTeammate alias')
 
     def test_plugin_tab_draw_context_and_settings_follow_detected_locale(self):
         lua, h = fresh_image(); mod = h.load(SOURCE)
@@ -175,13 +175,13 @@ class PluginIntegrationTests(unittest.TestCase):
         self.click(lua, h, mod, 'plugin:auto_chat_demo:send')
         self.assertEqual(h.call_count(), 1)
         self.assertEqual(h.last_call().arg3_text.rstrip('\0'),
-                         'AutoChat API demo: custom message Beta',
+                     '\nAutoChat API demo: custom message Beta',
                          'the plugin-generated string must pass through AutoChat send')
         self.click(lua, h, mod, 'plugin:auto_chat_demo:sample')
         self.assertEqual(h.call_count(), 2,
                          'the demo’s own sample handler may send only through callback api.send')
         self.assertEqual(h.last_call().arg3_text.rstrip('\0'),
-                         'AutoChat API demo: local sample event #1 (Map marker)')
+                         '\nAutoChat API demo: local sample event #1 (Map marker)')
         self.assertTrue(mod.debug_automation().set('enabled', False)[0])
         self.click(lua, h, mod, 'plugin:auto_chat_demo:send')
         self.assertEqual(h.call_count(), 2, 'master switch applies to registered addons')

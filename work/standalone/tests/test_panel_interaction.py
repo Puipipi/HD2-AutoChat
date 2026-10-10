@@ -626,7 +626,7 @@ class ScheduledAvailabilityTest(unittest.TestCase):
         task = mod.add_task('Solo', 'once', '5', 'hello solo', 1000)
         mod.debug_run_tasks(1005)
         self.assertEqual(1, h.call_count(), 'solo is a valid chat session')
-        self.assertEqual('hello solo\0', h.last_call()['arg3_text'])
+        self.assertEqual('\nhello solo\0', h.last_call()['arg3_text'])
         self.assertTrue(task['done'])
 
     def test_unavailable_chat_does_not_consume_countdown_and_retries_later(self):

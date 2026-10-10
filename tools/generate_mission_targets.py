@@ -20,14 +20,15 @@ def render():
              'local MISSION_TARGETS = {']
     seen = set()
     for row in catalog['targets']:
-        resource, label, key = row['resource'], row['label'], row['name_key']
+        resource, label, label_en, key = row['resource'], row['label'], row['label_en'], row['name_key']
         assert re.fullmatch('[0-9A-F]{16}', resource) and resource not in seen
         assert 'SpottableComponentData' in row['components']
         assert 'AiEnemyComponentData' not in row['components']
         assert isinstance(key, int) and 0 <= key <= 0xffffffff
         assert label and not any(c in label for c in "'\\\r\n")
+        assert label_en and not any('\u4e00' <= c <= '\u9fff' for c in label_en)
         seen.add(resource)
-        lines.append(f"    ['{resource}'] = {{'building', '{label}', {key}}},")
+        lines.append(f"    ['{resource}'] = {{'building', '{label}', {key}, '{label_en}'}},")
     lines += ['}', '-- END MISSION TARGET CATALOG']
     return '\n'.join(lines)
 

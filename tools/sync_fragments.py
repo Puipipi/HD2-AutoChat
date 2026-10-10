@@ -12,6 +12,7 @@ FRAGMENTS = [('text_input', 'UNICODE TEXT INPUT'), ('panel_input', 'ARMORY INPUT
              ('marker_localization', 'MARKER LOCALIZATION'), ('special_targets', 'SPECIAL TARGETS'),
              ('ping_events', 'NATIVE PING EVENTS'),
              ('stratagem_events', 'STRATAGEM EVENTS'), ('stratagem_names_zh', 'STRATAGEM NAMES ZH'),
+             ('stratagem_names_en', 'STRATAGEM NAMES EN'),
              ('stratagem_catalog', 'STRATAGEM CATALOG'),
              ('alert_panel', 'ALERT PANEL'), ('preset_panel', 'PRESET PANEL')]
 
@@ -25,6 +26,9 @@ def main():
             fragment_source = fragment_source.replace('local function build_plugin_ui(',
                                                         'M.build_plugin_ui = function(', 1)
             fragment_source = re.sub(r'\nreturn build_plugin_ui$', '', fragment_source)
+        if fragment == 'stratagem_names_en':
+            fragment_source = fragment_source.replace('local STRATAGEM_NAMES_EN = {', 'M.STRATAGEM_NAMES_EN = {', 1)
+            fragment_source = re.sub(r'\nreturn STRATAGEM_NAMES_EN$', '', fragment_source)
         if fragment in ('language', 'game_language_reader', 'special_targets'):
             builder = 'build_' + fragment
             fragment_source = fragment_source.replace('local function ' + builder + '(', 'M.' + builder + ' = function(', 1)
@@ -46,7 +50,7 @@ def main():
         elif fragment == 'stratagem_catalog':
             anchor = '-- BEGIN NATIVE PING EVENTS'
             setup = '''
-            local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH})
+            local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH,names_en=M.STRATAGEM_NAMES_EN})
 function M.debug_stratagem_catalog()return stratagem_catalog end
 local function enrich_stratagem_event(event,now)
     if event.category~='stratagem' then return end
@@ -54,7 +58,7 @@ local function enrich_stratagem_event(event,now)
     local row=stratagem_catalog.lookup(event.stratagem_id)
         or stratagem_catalog.resolve_resource(event.resource)
         or stratagem_catalog.resolve_name_key(event.localization_key)
-    if row then event.stratagem_id=row.id;event.stratagem_group=row.group;event.display_name=M.language.is_chinese() and row.display_name or row.debug_name end
+    if row then event.stratagem_id=row.id;event.stratagem_group=row.group;event.target_names=row.target_names;event.display_name=M.language.is_chinese() and row.display_name or row.display_name_en end
 end
 '''
             source = source.replace(anchor, block + '\n' + setup + '\n' + anchor, 1)
@@ -65,6 +69,8 @@ end
         elif fragment in ('language', 'game_language_reader'):
             source = source.replace('-- BEGIN CHAT AUTOMATION', block + '\n-- BEGIN CHAT AUTOMATION', 1)
         elif fragment == 'stratagem_names_zh':
+            source = source.replace('-- BEGIN STRATAGEM CATALOG', block + '\n-- BEGIN STRATAGEM CATALOG', 1)
+        elif fragment == 'stratagem_names_en':
             source = source.replace('-- BEGIN STRATAGEM CATALOG', block + '\n-- BEGIN STRATAGEM CATALOG', 1)
         elif fragment == 'special_targets':
             source = source.replace('-- BEGIN NATIVE PING EVENTS',
@@ -79,9 +85,10 @@ end
             source = source.replace('automation = build_chat_automation({', block + '\n\nautomation = build_chat_automation({', 1)
         else:
             raise AssertionError('Missing fragment marker: ' + marker)
-    source = source.replace(
-        'local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at})',
-        'local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH})')
+    source = re.sub(
+        r'local stratagem_catalog=build_stratagem_catalog\(\{base=supported_game_base,read=read_at(?:,names_zh=STRATAGEM_NAMES_ZH)?(?:,names_en=STRATAGEM_NAMES_EN)?\}\)',
+        'local stratagem_catalog=build_stratagem_catalog({base=supported_game_base,read=read_at,names_zh=STRATAGEM_NAMES_ZH,names_en=M.STRATAGEM_NAMES_EN})',
+        source)
     source = source.replace('M.special_targets = build_special_targets()',
                             'M.special_targets = M.build_special_targets()')
     ping_env = source.find('local ping_events = build_ping_events({')
@@ -94,13 +101,59 @@ end
         if 'special_targets = M.special_targets,' not in ping_setup:
             ping_setup += wiring
         source = source[:ping_env] + ping_setup + source[ping_emit:]
-    event_line = 'event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group'
-    display_line = '        event.display_name=M.language.is_chinese() and row.display_name or row.debug_name'
-    source = re.sub(re.escape(event_line) + r'(?:\n\s*event\.display_name=[^\n]+)*',
-                    event_line + '\n' + display_line, source)
-    if event_line in source:
-        source = source.replace(event_line, event_line + '\n' + display_line, 1) if not re.search(
-            re.escape(event_line) + r'\n\s*event\.display_name=', source) else source
+    event_start = source.find('local function enrich_stratagem_event(event,now)')
+    event_end = source.find('function M.debug_enrich_stratagem_event', event_start)
+    if event_start >= 0 and event_end >= 0:
+        event_block = '''local function enrich_stratagem_event(event,now)
+    if event.category~='stratagem' then return end
+    stratagem_catalog.scan(now)
+    local row=stratagem_catalog.lookup(event.stratagem_id)
+        or stratagem_catalog.resolve_resource(event.resource)
+        or stratagem_catalog.resolve_name_key(event.localization_key)
+    if row then
+        event.stratagem_id=row.id;event.stratagem_rule_id=row.rule_id or row.id;event.stratagem_group=row.group
+        local native=type(event.target_names)=='table' and event.target_names.native_name or nil
+        local names=type(row.target_names)=='table' and {zh=row.target_names.zh,en=row.target_names.en}
+            or {zh=row.display_name,en=row.display_name_en}
+        if type(native)=='string' and native~='' then
+            local lower=native:lower():match('^%s*(.-)%s*$')
+            local generic=lower=='特殊地点' or lower=='special location'
+                or lower=='敌方单位' or lower=='enemy unit' or lower=='任务交互物'
+                or lower=='objective terminal' or lower=='任务终端' or lower=='mission terminal'
+                or lower=='战略配备' or lower=='strategic asset' or lower=='stratagem'
+                or lower=='普通物资' or lower=='supplies'
+            local native_is_han=false
+            local native_is_ascii=true
+            local i=1
+            while i<=#native do
+                local a=native:byte(i)
+                if a>=0x80 then native_is_ascii=false end
+                if a>=0xE0 and a<=0xEF and i+2<=#native then
+                    local b,c=native:byte(i+1,i+2)
+                    if b>=0x80 and b<=0xBF and c>=0x80 and c<=0xBF then
+                        local code=(a-0xE0)*4096+(b-0x80)*64+(c-0x80)
+                        if (code>=0x3400 and code<=0x4DBF) or (code>=0x4E00 and code<=0x9FFF) then
+                            native_is_han=true
+                        end
+                        i=i+3
+                    else i=i+1 end
+                elseif a>=0xC2 and a<=0xDF and i+1<=#native then i=i+2
+                elseif a>=0xF0 and a<=0xF4 and i+3<=#native then i=i+4
+                else i=i+1 end
+            end
+            if not generic and native_is_han then names.zh=native
+            elseif not generic and native_is_ascii then names.en=native end
+        end
+        event.target_names=names
+        event.display_name=M.language.is_chinese() and row.display_name or row.display_name_en
+    else
+        local rule=stratagem_catalog.resolve_rule_resource(event.resource)
+            or stratagem_catalog.resolve_rule_name_key(event.localization_key)
+        if rule then event.stratagem_rule_id=rule.id;event.stratagem_group=rule.group;event.stratagem_ambiguous=true end
+    end
+end
+'''
+        source = source[:event_start] + event_block + source[event_end:]
     path.write_text(source, encoding='utf-8')
 
 

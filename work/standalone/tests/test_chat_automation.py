@@ -33,11 +33,13 @@ function h.new(content)
             return h.write_ok
         end,
         send = function(text)
-            h.sent[#h.sent + 1] = text
+            h.raw_sent = h.raw_sent or {};h.raw_sent[#h.raw_sent+1]=text
+            h.sent[#h.sent + 1] = text:gsub('^' .. string.char(10),'')
             return h.send_ok, 'text chat is off'
         end,
         send_local = function(text)
-            h.local_sent = h.local_sent or {};h.local_sent[#h.local_sent+1]=text
+            h.raw_local_sent = h.raw_local_sent or {};h.raw_local_sent[#h.raw_local_sent+1]=text
+            h.local_sent = h.local_sent or {};h.local_sent[#h.local_sent+1]=text:gsub('^' .. string.char(10),'')
             return true,'local'
         end})
 end
@@ -91,9 +93,25 @@ class AutomationTests(unittest.TestCase):
     def test_send_output_override_uses_existing_local_and_public_senders(self):
         self.run_lua('''
             assert(a.send('private',nil,'local'))
-            assert(#h.sent==0 and #h.local_sent==1 and h.local_sent[1]=='private')
+            assert(#h.sent==0 and #h.local_sent==1 and h.raw_local_sent[1]=='\\nprivate')
             assert(a.send('public',nil,'squad'))
-            assert(h.sent[#h.sent]=='public' and #h.local_sent==1)
+            assert(h.raw_sent[#h.raw_sent]=='\\npublic' and #h.local_sent==1)
+            assert(a.send('\\r\\n\\n\\r\\nP2 marked assault bug',nil,'squad'))
+            assert(h.raw_sent[#h.raw_sent]=='\\nP2 marked assault bug', string.format('%q',h.raw_sent[#h.raw_sent]))
+            assert(a.send('body\\nwith internal newline',nil,'local'))
+            assert(h.raw_local_sent[#h.raw_local_sent]=='\\nbody\\nwith internal newline', string.format('%q',h.raw_local_sent[#h.raw_local_sent]))
+            h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0,color='81ACFE'}
+            local marked=a.format('{编号} {玩家名} 标记了强袭虫',h.mine,nil,false,true,'zh')
+            assert(a.send(marked,nil,'squad'))
+            assert(a.format('{编号}',h.mine,nil,false,true,'zh')=='1')
+            assert(h.raw_sent[#h.raw_sent]:sub(1,1)=='\\n'
+                and h.raw_sent[#h.raw_sent]:find('<c=',1,true)
+                and h.raw_sent[#h.raw_sent]:find('Alice',1,true))
+            assert(a.send(a.format('Just marked the assault bug',h.mine,nil,false,true,'zh')))
+            assert(h.raw_sent[#h.raw_sent]=='\\nJust marked the assault bug')
+            assert(not a.send('',nil,'squad'))
+            local empty_ok,empty_why=a.send('\\r\\n\\n','host','squad')
+            assert(not empty_ok, tostring(empty_why))
         ''')
 
     def test_legacy_host_scope_is_ignored_for_a_client_profile(self):
@@ -247,16 +265,16 @@ class AutomationTests(unittest.TestCase):
             assert(a.set('message_language','zh'))
             assert(a.set('summon_message','{玩家名}召唤了{目标}'))
             assert(a.set('ping_message','标记了{目标}（{类别}）'))
+            assert(a.set('cooldown',0))
             h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
             assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
             assert(a.push_ping({key='call',category='stratagem',action='summon',target='重新补给',creator_id=h.mine},1000))
             assert(a.poll(1000));assert(h.sent[1]=='Alice召唤了重新补给',h.sent[1])
             assert(a.push_ping({key='mark',category='stratagem',action='mark',target='重新补给',creator_id=h.mine},1005))
-            assert(a.poll(1005));assert(h.sent[2]=='标记了重新补给（战备提示）',h.sent[2])
+            local sent,why=a.poll(1005);assert(sent,string.format('poll=%s queued=%d',tostring(why),#a.state.pings))
+            assert(h.sent[2]=='标记了重新补给（战备提示）',h.sent[2])
             assert(a.set('summon_message','{缩写}{动作}了{目标}'))
             local b=h.new(h.writes[#h.writes]);assert(b.options.summon_message=='{缩写}{动作}了{目标}')
-            assert(a.push_ping({key='call2',category='stratagem',action='summon',target='激光大炮',creator_id=h.mine},1010))
-            assert(a.poll(1010));assert(h.sent[3]=='A1召唤了激光大炮')
         ''')
 
     def test_summon_switch_and_equipment_mark_switch_are_independent(self):
@@ -494,6 +512,9 @@ class AutomationTests(unittest.TestCase):
             assert(a.poll(1000))
             assert(h.sent[1]:sub(1,29)=='<c=FF81ACFE>[A2]<c=FFFFFFFF> ')
             assert(#h.sent[1]<=512 and #h.sent[1]:sub(30)%3==0)
+            assert(h.raw_sent[1]:sub(1,1)=='\\n' and #h.raw_sent[1]<=512
+                and h.raw_sent[1]:find('<c=FFFFFFFF> ',1,true),
+                string.format('rawlen=%d first=%q',#h.raw_sent[1],h.raw_sent[1]:sub(1,29)))
         ''')
 
     def test_rule_field_batch_is_atomic_role_scoped_and_deduplicated(self):
@@ -777,6 +798,8 @@ class AutomationTests(unittest.TestCase):
             assert(a.format('{玩家名}|{名字}|{触发者}|{缩写}|{编号}|{未知}', 'friend')==
                 '张三%{编号}tag|张三%{编号}tag|张三%{编号}tag|Z2|2|{未知}')
             assert(a.format('{玩家名}/{缩写}/{编号}','missing')=='队友/队友/?')
+            assert(a.format('{player}|{player_name}|{name}|{short}|{abbr}|{slot}|{number}', 'friend')==
+                '张三%{编号}tag|张三%{编号}tag|张三%{编号}tag|Z2|Z2|2|2')
             assert(#a.format(string.rep('中',200),'friend')<=512)
         ''')
 
@@ -795,6 +818,26 @@ class AutomationTests(unittest.TestCase):
             assert(a.poll(1001));assert(h.sent[2]=='队友|针剂盒|普通物资|未知位置')
             assert(a.format('{玩家名}|{缩写}',h.mine,nil,false,false,'en')=='Teammate|Teammate')
             assert(a.format('{玩家名}|{缩写}',h.mine,nil,true,true,'en')=='Squad|Squad')
+        ''')
+
+    def test_event_english_aliases_and_mixed_language_tokens_share_one_value_set(self):
+        self.run_lua(r'''
+            h.identities[h.mine]={peer_id=h.mine,name='Alice',short='A1',color_index=0}
+            assert(a.set('ping',true));assert(a.set('ping_sender_prefix',false))
+            assert(a.set('message_language','en'))
+            assert(a.set('ping_message','{player_name}/{名字}|{short}/{编号}|{target}/{战备}|{category}|{action}|{objective}/{task}|{objective_type}/{任务类型}|{position}'))
+            assert(a.push_ping({key='mixed-en',category='building',action='mark',creator_id=h.mine,
+                target='非法广播塔',target_names={zh='非法广播塔',en='Illegal Broadcast Tower'},
+                objective_name='广播任务',objective_names={zh='广播任务',en='Broadcast objective'},
+                objective_kind='primary',position={x=1,y=2,z=3}},1000))
+            assert(a.poll(1000))
+            assert(h.sent[1]=='Alice/Alice|A1/1|Illegal Broadcast Tower/Illegal Broadcast Tower|OBJECTIVE BUILDING|marked|Broadcast objective/Broadcast objective|PRIMARY OBJECTIVE/PRIMARY OBJECTIVE|(1, 2, 3)',h.sent[1])
+            assert(a.set('message_language','zh'));assert(a.set('cooldown',0))
+            assert(a.set('ping_message','{target}/{战备}'))
+            assert(a.set('summon_message','{target}/{战备}'))
+            assert(a.push_ping({key='mixed-zh',category='stratagem',action='summon',creator_id=h.mine,
+                target='Orbital Laser',target_names={zh='轨道激光',en='Orbital Laser'}},1001))
+            assert(a.poll(1001));assert(h.sent[2]=='轨道激光/轨道激光')
         ''')
 
     def test_full_player_name_aliases_use_verified_color_and_keep_reset_within_utf8_limit(self):

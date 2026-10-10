@@ -14,6 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import re
 import tempfile
 import urllib.request
 
@@ -228,8 +229,10 @@ def render(catalog: dict | None = None) -> str:
             raise ValueError(f"Invalid Encyclopedia localization key: {resource}")
         label = next((row[field] for field in ("name_zh", "name")
                       if row[field] and row[field] != "N/A"), "敌方单位")
+        label_en = row["name"] if row["name"] and row["name"] != "N/A" else "Enemy unit"
+        label_en = re.sub(r"\s*\((?:No Package|Crash|Spawned)\)", "", label_en, flags=re.I)
         category = "flying_enemy" if row["flying"] else SIZE_CATEGORIES[size]
-        lines.append(f"    ['{resource}'] = {{{lua_string(category)}, {lua_string(label)}, {key}}},")
+        lines.append(f"    ['{resource}'] = {{{lua_string(category)}, {lua_string(label)}, {key}, {lua_string(label_en)}}},")
     return "\n".join(lines + ["}", "-- END ENEMY TARGET CATALOG"])
 
 

@@ -33,6 +33,9 @@ class EnemyCatalogTests(unittest.TestCase):
         self.assertEqual(rows['AC60E78435098C9D'][1], 'flying_enemy')
         self.assertEqual(rows['8FF0A839830A7692'][1], 'small_enemy')
         self.assertEqual(rows['64090088502435DD'][3], 793026793)
+        self.assertEqual(rows['64090088502435DD'][4], 'Shrieker')
+        self.assertFalse(any(tag in value[4] for value in rows.values()
+                             for tag in ('(No Package)', '(Crash)', '(Spawned)')))
         for resource in ('304C3124208291E9', '5D142C3A73EBC634', '14453B8FCB040099',
                          '79CCFFD281E3F3A9', '86F3CB87D97942B4'):
             self.assertNotIn(resource, rows)

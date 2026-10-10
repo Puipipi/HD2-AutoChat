@@ -32,6 +32,23 @@ class RoleOutputTests(unittest.TestCase):
         self.assertEqual('私有提示\0',h.last_call().arg3_text)
         self.assertEqual(0,mod.sent)
 
+    def test_automatic_output_prefix_uses_both_native_utf8_limited_paths(self):
+        lua,h,mod=self.fresh()
+        lua.execute("""
+            local a=m.debug_automation()
+            local text=string.rep('x',509)..string.char(228,184,173)
+            assert(a.send(text))
+            a.set('output','local')
+            assert(a.send(text))
+        """)
+        self.assertEqual(2,h.call_count())
+        public=h.call_at(1).arg3_text.rstrip('\0').encode('utf-8')
+        local=h.call_at(2).arg3_text.rstrip('\0').encode('utf-8')
+        expected=b'\n'+b'x'*509
+        self.assertEqual(expected,public)
+        self.assertEqual(expected,local)
+        self.assertEqual(h.code_base+0x10979c0,h.call_at(2).address)
+
     def test_bad_local_signature_fails_without_a_network_call(self):
         lua,h,mod=self.fresh()
         h.bytes(h.code_base+mod.LOCAL_LINE_RVA,'broken signature')
@@ -69,7 +86,7 @@ class RoleOutputTests(unittest.TestCase):
         self.assertTrue(client.done)
         self.assertEqual(1,h.call_count())
         self.assertEqual(h.code_base+0x10979c0,h.last_call().address)
-        self.assertEqual('private\0',h.last_call().arg3_text)
+        self.assertEqual('\nprivate\0',h.last_call().arg3_text)
         self.assertIn('仅自己可见',client.result)
         data=mod.debug_serialize_tasks()
         self.assertTrue(mod.debug_restore_tasks(data))
