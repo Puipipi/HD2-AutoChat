@@ -399,6 +399,92 @@ class UiPreviewTests(unittest.TestCase):
                     # assertion catches truncation at the real small-screen width.
                     self.assertGreater(region.w, 0)
 
+    def test_wrapped_task_details_preserve_blank_lines_and_crlf(self):
+        def render_message(message, locale, name='Paragraph fixture'):
+            lua, _, mod = self.fresh()
+            mod.ui_preview_language = locale
+            task = mod.add_task('Paragraph fixture', 'repeat', '30',
+                                'PARA-A PARA-B', 1000, 'host')
+            self.assertIsNotNone(task)
+            # add_task correctly normalizes user-entered scheduled messages to a
+            # single line; this fixture models an existing persisted value so the
+            # detail preview's paragraph layout can be exercised directly.
+            task.name = name
+            task.message = message
+            panel = mod.debug_panel()
+            panel.settings_view = 'tasks'
+            panel.profile = 'host'
+            panel.selected_task_detail_id = task.id
+            panel.sig = None
+            lua.execute('''
+                paragraph_capture={}
+                local original=stingray.Gui.text
+                stingray.Gui.text=function(gui,value,font,size,material,position,color)
+                    paragraph_capture[#paragraph_capture+1]={text=tostring(value),y=position.y}
+                    return original(gui,value,font,size,material,position,color)
+                end
+            ''')
+            lua.eval('update()')
+            panel = mod.debug_panel()
+            panel.scroll_offsets.task_form = panel.viewports.task_form.max
+            panel.sig = None
+            lua.globals().paragraph_capture = lua.table()
+            lua.eval('update()')
+            rows = lua.globals().paragraph_capture
+            lines = [(str(rows[i].text), float(rows[i].y)) for i in range(1, len(rows) + 1)]
+            view = mod.debug_panel().viewports.task_form
+            return lines, float(view.max)
+
+        # This exercises the production task-detail renderer and its matching viewport
+        # height calculation; input task messages themselves intentionally reject
+        # newlines as a separate single-line validation rule.
+        for locale in ('en', 'zh'):
+            with self.subTest(locale=locale):
+                lines, paragraph_max = render_message('PARA-A\n\nPARA-B', locale)
+                y_a = next(y for text, y in lines if text == 'PARA-A')
+                y_b = next(y for text, y in lines if text == 'PARA-B')
+                one_break_lines, _ = render_message('PARA-A\nPARA-B', locale)
+                one_break_a = next(y for text, y in one_break_lines if text == 'PARA-A')
+                one_break_b = next(y for text, y in one_break_lines if text == 'PARA-B')
+                line_height = one_break_a - one_break_b
+                self.assertAlmostEqual(2 * line_height, y_a - y_b, delta=1,
+                                       msg='an explicit blank paragraph must reserve one full line')
+
+        crlf_lines, crlf_max = render_message('PARA-A\r\nPARA-B', 'en')
+        lf_lines, lf_max = render_message('PARA-A\nPARA-B', 'en')
+        self.assertEqual(crlf_max, lf_max, 'CRLF is one line break, not two')
+        crlf_a = next(y for text, y in crlf_lines if text == 'PARA-A')
+        crlf_b = next(y for text, y in crlf_lines if text == 'PARA-B')
+        self.assertAlmostEqual(16, crlf_a - crlf_b, delta=1)
+
+        leading_lines, leading_max = render_message('\nPARA-A\n', 'en')
+        plain_lines, plain_max = render_message('PARA-A', 'en')
+        leading_y = next(y for text, y in leading_lines if text == 'PARA-A')
+        plain_y = next(y for text, y in plain_lines if text == 'PARA-A')
+        self.assertAlmostEqual(16, plain_y - leading_y, delta=1,
+                               msg='leading empty paragraph must remain in the layout')
+        self.assertEqual(leading_max, plain_max,
+                         'short copy should fit without scrolling')
+        empty_name_lines, _ = render_message('PARA-B', 'en', name='')
+        one_char_name_lines, _ = render_message('PARA-B', 'en', name='X')
+        empty_name_y = next(y for text, y in empty_name_lines if text == 'PARA-B')
+        one_char_name_y = next(y for text, y in one_char_name_lines if text == 'PARA-B')
+        self.assertAlmostEqual(one_char_name_y, empty_name_y, delta=1,
+                               msg='an empty wrapped value occupies one layout line')
+
+        long_prefix = 'X' * 1100
+        _, no_break_max = render_message(long_prefix, 'en')
+        _, trailing_blank_max = render_message(long_prefix + '\n', 'en')
+        _, one_break_max = render_message(long_prefix + '\nB', 'en')
+        _, blank_break_max = render_message(long_prefix + '\n\nB', 'en')
+        blank_row_height = blank_break_max - one_break_max
+        self.assertGreater(blank_row_height, 0,
+                           msg='scroll height must include explicit empty lines')
+        self.assertAlmostEqual(blank_row_height, trailing_blank_max - no_break_max, delta=1,
+                               msg='trailing paragraph breaks must reserve the same scroll height')
+        _, crlf_scroll_max = render_message(long_prefix + '\r\nB', 'en')
+        self.assertAlmostEqual(one_break_max, crlf_scroll_max, delta=1,
+                               msg='CRLF must add only one line to scroll height')
 
 if __name__ == '__main__':
     unittest.main()

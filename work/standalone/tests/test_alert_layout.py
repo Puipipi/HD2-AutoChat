@@ -200,6 +200,105 @@ class AlertLayoutIntegrationTests(unittest.TestCase):
                 ), f'{key} hitbox must match its clipped visible rectangle')
         self.assertTrue(expected <= observed, f'missing scrolled controls: {expected-observed}')
 
+    def test_enemy_page_bilingual_help_and_edit_tail_survive_small_viewport_scroll(self):
+        for locale in ('en', 'zh'):
+            with self.subTest(locale=locale):
+                lua, harness, mod, panel = self.setup_alert(locale)
+                if locale == 'en':
+                    plugin_title = 'LONG ENEMY PAGE TITLE ' * 3
+                    help_start, help_end = 'ENEMY HELP START', 'ENEMY HELP END'
+                    phrase = ' Long enemy detail stays readable while scrolling.'
+                    middle = ' ENEMY HELP MIDDLE '
+                    long_help = help_start + phrase * 18 + middle + phrase * 18 + help_end
+                    edit_value = 'hidden-enemy-prefix-' * 8 + 'KEEP-ENEMY-TAIL'
+                    expected_static = ('ENEMY ALERT RULES', 'FLYING TAKES PRIORITY OVER SIZE.',
+                                       'SIZES FOLLOW THE GAME UNIT SIZE ENUM.',
+                                       'CONFIGURE EACH CATEGORY; SUPPLIES USE PING SETTINGS.',
+                                       'MARK MESSAGE')
+                else:
+                    plugin_title = 'LONG ENEMY PAGE TITLE ' * 3
+                    help_start, help_end = '敌人帮助开头', '敌人帮助结尾'
+                    phrase = ' 敌人规则长说明需要在滚动过程中完整可读。'
+                    middle = ' 敌人帮助中段 '
+                    long_help = help_start + phrase * 18 + middle + phrase * 18 + help_end
+                    edit_value = '隐藏敌人前缀-' * 8 + '保留敌人尾部'
+                    expected_static = ('敌人细分提醒', '飞行分类优先，不受原体型开关影响。',
+                                       '体型采用游戏内部 Small / Medium / Large / Massive。',
+                                       '各类别单独设置；普通物资使用标记提醒。',
+                                       '标记消息')
+
+                lua.globals().plugin_title = plugin_title
+                lua.globals().english_plugin_title = 'LONG ENEMY PAGE TITLE ' * 3
+                lua.execute('''
+                    assert(HD2AutoChat.register_plugin({id='enemy_layout_tabs',
+                        title=plugin_title,name_en=english_plugin_title,draw=function() end}))
+                ''')
+                panel.rule_view = 'enemy'
+                panel.rule_selected = 'giant_enemy'
+                panel.rule_filter = 'all'
+                panel.hint = long_help
+                panel.editing = True
+                panel.edit_field = 'rule:enemy:giant_enemy:mark_message'
+                panel.edit_text = edit_value
+                panel.scroll_offsets.rules_detail = 0
+                panel.sig = None
+                lua.globals().preview_drawn = lua.table()
+                lua.globals().layout_metrics = lua.table()
+                lua.globals().layout_rects = lua.table()
+                lua.eval('update()')
+
+                initial = self.rendered(lua)
+                initial_flat = ''.join(initial.split())
+                title_flat = ''.join(plugin_title.split())
+                self.assertIn(title_flat, initial_flat)
+                for label in expected_static:
+                    self.assertIn(''.join(label.split()), initial_flat)
+                self.assertGreater(float(panel.viewports.rules_detail.max), 0,
+                                   'long enemy help must create a scrollable detail region')
+                tail_rows = [lua.globals().layout_metrics[i]
+                             for i in range(1, len(lua.globals().layout_metrics) + 1)
+                             if str(lua.globals().layout_metrics[i].text).endswith(
+                                 ('KEEP-ENEMY-TAIL_' if locale == 'en' else '保留敌人尾部_'))]
+                self.assertEqual(1, len(tail_rows), 'the focused field must expose its visible tail')
+                tail = tail_rows[0]
+                self.assertTrue(str(tail.text).startswith('..'))
+                self.assertGreaterEqual(float(tail.size), 9)
+
+                field_key = 'rule:enemy:giant_enemy:mark_message'
+                max_offset = float(panel.viewports.rules_detail.max)
+                offsets = [0.0]
+                offsets.extend(float(offset) for offset in range(12, int(max_offset), 12))
+                offsets.append(max_offset)
+                observed_field = False
+                marker_tokens = (help_start, middle.strip(), help_end)
+                markers = {''.join(token.split()): False for token in marker_tokens}
+                for offset in offsets:
+                    panel.scroll_offsets.rules_detail = offset
+                    panel.sig = None
+                    lua.globals().preview_drawn = lua.table()
+                    lua.globals().layout_rects = lua.table()
+                    lua.eval('update()')
+                    rendered = self.rendered(lua)
+                    flat = ''.join(rendered.split())
+                    for marker in markers:
+                        markers[marker] |= marker in flat
+                    regions = [panel.regions[i] for i in range(1, len(panel.regions) + 1)
+                               if str(panel.regions[i].key) == field_key]
+                    if regions:
+                        observed_field = True
+                        hit = regions[0]
+                        rects = lua.globals().layout_rects
+                        self.assertTrue(any(
+                            abs(float(rects[i].x)-float(hit.x)) < 1.1
+                            and abs(float(rects[i].y)-float(hit.y)) < 1.1
+                            and abs(float(rects[i].w)-float(hit.w)) < 1.1
+                            and abs(float(rects[i].h)-float(hit.h)) < 1.1
+                            for i in range(1, len(rects) + 1)
+                        ), f'{locale} enemy input outline must match its clipped hitbox')
+                self.assertTrue(observed_field, 'enemy message field must remain reachable')
+                self.assertTrue(all(markers.values()),
+                                f'every part of the long help must be scroll-reachable: {markers}')
+
 
 if __name__ == '__main__':
     unittest.main()

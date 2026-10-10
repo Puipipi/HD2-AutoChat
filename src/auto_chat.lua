@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '1.0.0', build_id = 'v1.0.0-build.8', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.0.0', build_id = 'v1.0.0-build.9', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -8832,47 +8832,62 @@ local function draw_panel()
     -- frames reuse retained GUIs, so this work runs only when their signature changes.
     local function wrapped_lines(value, size, limit)
         value = tostring(value or '')
+        value = value:gsub('\r\n', '\n'):gsub('\r', '\n')
         limit = tonumber(limit) or 1
         if limit ~= limit or limit <= 0 then limit = 1 end
-        local lines, current = {}, ''
-        local function push()
-            current = current:gsub('%s+$', '')
-            if current ~= '' then lines[#lines + 1] = current end
-            current = ''
-        end
-        local i = 1
-        while i <= #value do
-            local byte = value:byte(i)
-            local step = byte >= 0xF0 and 4 or byte >= 0xE0 and 3 or byte >= 0xC0 and 2 or 1
-            local ch = value:sub(i, math.min(#value, i + step - 1))
-            i = i + step
-            if ch == '\n' or ch == '\r' then
-                push()
-            elseif current == '' and ch:match('^%s$') then
-                -- Do not start a wrapped line with the previous word's separator.
-            elseif measure(current .. ch, size) <= limit then
-                current = current .. ch
-            else
-                local space = current:match('^.*() ')
-                if space then
-                    local prefix = current:sub(1, space - 1)
-                    local suffix = current:sub(space + 1)
-                    if prefix ~= '' then lines[#lines + 1] = prefix end
-                    current = suffix
-                    if measure(current .. ch, size) <= limit then
-                        current = current .. ch
+        local lines = {}
+        local function wrap_paragraph(paragraph)
+            if paragraph == '' or paragraph:match('^%s*$') then
+                lines[#lines + 1] = ''
+                return
+            end
+            local current = ''
+            local function push()
+                current = current:gsub('%s+$', '')
+                if current ~= '' then lines[#lines + 1] = current end
+                current = ''
+            end
+            local i = 1
+            while i <= #paragraph do
+                local byte = paragraph:byte(i)
+                local step = byte >= 0xF0 and 4 or byte >= 0xE0 and 3 or byte >= 0xC0 and 2 or 1
+                local ch = paragraph:sub(i, math.min(#paragraph, i + step - 1))
+                i = i + step
+                if current == '' and ch:match('^%s$') then
+                    -- Trim automatic wrap separators without affecting paragraph boundaries.
+                elseif measure(current .. ch, size) <= limit then
+                    current = current .. ch
+                else
+                    local space = current:match('^.*() ')
+                    if space then
+                        local prefix = current:sub(1, space - 1)
+                        local suffix = current:sub(space + 1)
+                        if prefix ~= '' then lines[#lines + 1] = prefix end
+                        current = suffix
+                        if measure(current .. ch, size) <= limit then
+                            current = current .. ch
+                        else
+                            push()
+                            current = ch
+                        end
                     else
                         push()
                         current = ch
                     end
-                else
-                    push()
-                    current = ch
                 end
             end
+            push()
         end
-        push()
-        if #lines == 0 then lines[1] = '' end
+        local from = 1
+        while true do
+            local at = value:find('\n', from, true)
+            if not at then
+                wrap_paragraph(value:sub(from))
+                break
+            end
+            wrap_paragraph(value:sub(from, at - 1))
+            from = at + 1
+        end
         return lines
     end
     local function wrapped_text(value, x, y, size, c, limit, align)
