@@ -32,7 +32,8 @@ class PresetPanelTests(unittest.TestCase):
         h.user32.set_key(0x0D, False)
         lua.eval('update()')
 
-    def render_fragment(self, rows, profile='client', selected=None, page=1, font_ok=True):
+    def render_fragment(self, rows, profile='client', selected=None, page=1, font_ok=True,
+                        error=None, status_text=None):
         lua = LuaRuntime(unpack_returned_tuples=True)
         draw = lua.execute(PRESET_PANEL_FRAGMENT.read_text(encoding='utf-8') + '\nreturn draw_preset_panel')
         lua.execute('''
@@ -54,7 +55,7 @@ class PresetPanelTests(unittest.TestCase):
             lua_rows[role] = lua_items
         applied = lua.table_from({'count': 0})
         library = lua.table_from({
-            'state': lua.table_from({'error': None}),
+            'state': lua.table_from({'error': error}),
             '_list_view': lua.eval('function(rows) return function(role) return rows[role] or {} end end')(lua_rows),
             'apply': lua.eval('function(state) return function(...) state.count=state.count+1;return true end end')(applied),
         })
@@ -76,7 +77,8 @@ class PresetPanelTests(unittest.TestCase):
         lua.globals().test_rows = lua_rows
         lua.globals().test_automation = automation
         lua.globals().test_library = library
-        draw(lua.globals().UX, panel, automation, library, font_ok, lua.eval('function(value)return value end'))
+        translator = status_text or lua.eval('function(value)return value end')
+        draw(lua.globals().UX, panel, automation, library, font_ok, translator)
         texts = [str(lua.globals().drawn_text[i])
                  for i in range(1, len(lua.globals().drawn_text) + 1)]
         regions = [lua.globals().drawn_regions[i]
@@ -100,7 +102,6 @@ class PresetPanelTests(unittest.TestCase):
         renamed = next(entries[i] for i in range(1, len(entries)+1)
                        if entries[i].id == 'P00000001')
         self.assertEqual('小队欢迎-主机', renamed.name)
-
         automation = mod.debug_automation()
         automation.set('welcome_message', 'changed after capture', 'host')
         self.click(lua, h, mod, 'preset:apply')
@@ -133,6 +134,51 @@ class PresetPanelTests(unittest.TestCase):
         renamed = next(entries[i] for i in range(1, len(entries)+1)
                        if entries[i].id == 'P00000002')
         self.assertEqual('小队欢迎-主机', renamed.name)
+
+    def test_english_ui_hides_only_builtin_chinese_presets_without_applying_or_mutating(self):
+        rows = {'client': [
+            {'id': 'builtin-client-en', 'name': 'English Default Preset', 'builtin': True, 'payload': 'en'},
+            {'id': 'builtin-client-zh', 'name': '中文默认预设', 'builtin': True, 'payload': 'zh'},
+            {'id': 'P00000001', 'name': '用户中文预设', 'builtin': False, 'payload': 'custom'},
+        ], 'host': [
+            {'id': 'builtin-host-en', 'name': 'Host English Default', 'builtin': True, 'payload': 'host-en'},
+            {'id': 'builtin-host-zh', 'name': '主机中文默认', 'builtin': True, 'payload': 'host-zh'},
+        ]}
+        lua, panel, applied, texts, regions = self.render_fragment(
+            rows, selected={'client': 'builtin-client-zh'}, font_ok=False)
+        self.assertNotIn('preset:select:builtin-client-zh', regions)
+        self.assertIn('preset:select:builtin-client-en', regions)
+        self.assertIn('preset:select:P00000001', regions)
+        self.assertNotIn('中文默认预设', '\n'.join(texts))
+        self.assertIn('用户中文预设', '\n'.join(texts))
+        self.assertEqual('builtin-client-en', panel.preset_selected_by_role.client)
+        self.assertEqual('zh', rows['client'][1]['payload'])
+        self.assertEqual(0, applied.count)
+        _, custom_panel, _, custom_texts, custom_regions = self.render_fragment(
+            rows, selected={'client': 'P00000001'}, font_ok=False)
+        self.assertIn('preset:select:P00000001', custom_regions)
+        self.assertEqual('P00000001', custom_panel.preset_selected_by_role.client)
+        self.assertIn('用户中文预设', '\n'.join(custom_texts))
+        _, host_panel, _, host_texts, host_regions = self.render_fragment(
+            rows, profile='host', selected={'host': 'builtin-host-zh'}, font_ok=False)
+        self.assertNotIn('preset:select:builtin-host-zh', host_regions)
+        self.assertIn('preset:select:builtin-host-en', host_regions)
+        self.assertEqual('builtin-host-en', host_panel.preset_selected_by_role.host)
+        self.assertIn('host-en', [entry['payload'] for entry in rows['host']])
+
+        _, _, _, zh_texts, zh_regions = self.render_fragment(rows, font_ok=True)
+        self.assertIn('preset:select:builtin-client-zh', zh_regions)
+        self.assertIn('中文默认预设', '\n'.join(zh_texts))
+
+        _, _, _, error_texts, _ = self.render_fragment(
+            rows, font_ok=False, error='预设库格式损坏',
+            status_text=lambda value: 'Preset library is corrupt' if value == '预设库格式损坏' else value)
+        self.assertIn('Preset library is corrupt', '\n'.join(error_texts))
+        _, _, _, custom_error_texts, _ = self.render_fragment(
+            rows, font_ok=False, error='用户预设文件路径含中文',
+            status_text=lambda value: 'Preset library is corrupt' if value == '预设库格式损坏' else value)
+        self.assertIn('用户预设文件路径含中文', '\n'.join(custom_error_texts))
+
 
     def test_profile_targets_stay_separate_and_failed_save_does_not_add_entry(self):
         lua, h, mod = self.fresh()
@@ -220,20 +266,20 @@ class PresetPanelTests(unittest.TestCase):
                 self.assertFalse(dx > 1 and dy > 1, (a.key,b.key))
         page_size = mod.debug_panel().preset_page_size_by_role['host']
         self.assertEqual(page_size, len([r for r in regions if r.key.startswith('preset:select:')]))
-        first_page_custom = max(0, page_size - 2)  # the two built-in presets precede saved entries
+        first_page_custom = max(0, page_size - 1)  # the English preset precedes saved entries
         self.assertTrue(any(r.key == 'preset:select:P%08d' % first_page_custom for r in regions))
         self.click(lua, h, mod, 'preset:next')
         lua.execute('for i=1,3 do update() end')
         self.assertEqual(2, mod.debug_panel().preset_page_by_role['host'])
         boxes = mod.debug_panel().regions
-        second_page_last = min(40, page_size * 2 - 2)
+        second_page_last = min(40, page_size * 2 - 1)
         self.assertTrue(any(boxes[i].key == 'preset:select:P%08d' % second_page_last
                             for i in range(1,len(boxes)+1)))
         self.click(lua, h, mod, 'preset:next')
         lua.execute('for i=1,3 do update() end')
         self.assertEqual(3, mod.debug_panel().preset_page_by_role['host'])
         boxes = mod.debug_panel().regions
-        third_page_last = min(40, page_size * 3 - 2)
+        third_page_last = min(40, page_size * 3 - 1)
         self.assertTrue(any(boxes[i].key == 'preset:select:P%08d' % third_page_last
                             for i in range(1,len(boxes)+1)))
 
@@ -250,15 +296,15 @@ class PresetPanelTests(unittest.TestCase):
             rows, profile='client', font_ok=False)
         self.assertEqual('builtin-client-en', panel.preset_selected_by_role.client)
         self.assertIn('English Default Preset', texts)
-        self.assertIn('中文默认预设', texts)
+        self.assertNotIn('中文默认预设', texts)
         self.assertEqual(0, applied.count, 'drawing or selecting a default must not apply it')
         self.assertTrue({'preset:apply', 'preset:export', 'preset:save'} <= region_keys)
         self.assertFalse({'preset:replace', 'preset:rename', 'preset:delete'} & region_keys)
 
         # Language changes must not replace the stable selection with another name or apply it.
-        _, _, _, texts_after_language_change, keys_after_language_change = self.render_fragment(
+        _, panel_after_language_change, _, texts_after_language_change, keys_after_language_change = self.render_fragment(
             rows, profile='client', selected={'client': 'builtin-client-en'}, font_ok=True)
-        self.assertEqual('builtin-client-en', panel.preset_selected_by_role.client)
+        self.assertEqual('builtin-client-en', panel_after_language_change.preset_selected_by_role.client)
         self.assertIn('English Default Preset', texts_after_language_change)
         self.assertIn('中文默认预设', texts_after_language_change)
         self.assertFalse({'preset:replace', 'preset:rename', 'preset:delete'}
@@ -292,7 +338,7 @@ class PresetPanelTests(unittest.TestCase):
             {'client': items}, profile='client', page=3, font_ok=False)
         self.assertEqual(3, panel.preset_page_by_role.client)
         self.assertIn('3 / 3', texts)
-        self.assertIn('42 PRESETS', texts)
+        self.assertIn('41 PRESETS', texts)
         self.assertFalse(any('/ 32' in text for text in texts))
         self.assertIn('preset:select:P00000040', region_keys)
 

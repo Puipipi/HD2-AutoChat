@@ -36,7 +36,7 @@ def make_runtime(source: str):
         TASK_SORTS=0
         local native_sort=table.sort
         table.sort=function(list,...)
-            if list[1] and list[1].bench_probe then TASK_SORTS=TASK_SORTS+1 end
+            if type(list[1])=='table' and list[1].bench_probe then TASK_SORTS=TASK_SORTS+1 end
             return native_sort(list,...)
         end
         function seed_future_tasks(n)

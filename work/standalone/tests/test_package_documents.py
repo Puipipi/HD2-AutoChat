@@ -18,7 +18,7 @@ class PackageDocumentsTests(unittest.TestCase):
                 [sys.executable, '-B', str(BUILDER), '--output-dir', directory],
                 cwd=ROOT, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            output = Path(directory) / 'AutoChat-1.0.0.zip'
+            output = Path(directory) / 'AutoChat-1.1.3.zip'
             self.assertTrue(output.is_file())
             with zipfile.ZipFile(output) as package:
                 self.assertIsNone(package.testzip())
@@ -32,7 +32,7 @@ class PackageDocumentsTests(unittest.TestCase):
                 self.assertTrue(expected.issubset(names), names)
                 self.assertLessEqual(names - expected, {'cover-autochat.png'})
                 manifest = json.loads(package.read('manifest.json'))
-                self.assertEqual(manifest['Name'], 'AutoChat 1.0.0')
+                self.assertEqual(manifest['Name'], 'AutoChat 1.1.3')
                 self.assertEqual(package.read('Docs/PLUGIN-API.md'),
                                  (ROOT / 'docs/PLUGIN-API.md').read_bytes())
                 self.assertEqual(package.read('Docs/INTERFACE-DEMO.md'),

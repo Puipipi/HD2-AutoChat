@@ -1,6 +1,6 @@
 -- HD2-Addon: mods/codex/auto_chat
 -- ===========================================================================
---  自动聊天 / AutoChat —— 不打开聊天栏直接发消息 + 设置与自动消息 (v0.7.0)
+--  自动聊天 / AutoChat —— 不打开聊天栏直接发消息 + 设置与自动消息 (v1.1.3)
 --
 --  为什么能绕开聊天栏：
 --    聊天框做四件事——夺取键鼠、画框、收集按键、调用发送。把玩家卡住的是前两件。
@@ -9,7 +9,7 @@
 --
 --  本版本三部分：
 --    1. 发送：5 段机器码签名校验通过后解析函数指针，把文本交给游戏。
---    2. 面板：按 K 呼出，沿用 Armory 双栏框架与已加载字体，关闭时精确归还鼠标。
+--    2. 面板：按 K 或 Mod Bindings Menu 动作呼出，关闭时精确归还鼠标。
 --    3. 定时任务：重复间隔、一次倒计时、每天时刻；单人飞船也可发送。
 --
 --  红线：
@@ -19,7 +19,7 @@
 --    * update/shutdown 一定调回上一个，绝不断链。
 --    * 观测每 30 帧一次并复用输出表（帧预算看门狗按 ms/秒计费）。
 -- ===========================================================================
-local M = {version = '1.0.0', build_id = 'v1.0.0-build.10', status = 'starting', frames = 0, reads = 0,
+local M = {version = '1.1.3', build_id = 'v1.1.3-build.1', status = 'starting', frames = 0, reads = 0,
            bytes = 0, errors = 0, signature = 'unknown', sent = 0,
            send_ready = false, panel_open = false, last_peers = nil}
 
@@ -384,7 +384,8 @@ local function write_status(extra)
         'signature   : ' .. tostring(M.signature),
         'send ready  : ' .. tostring(M.send_ready),
         'messages sent: ' .. tostring(M.sent or 0),
-        'panel       : ' .. (M.panel_open and 'open' or 'closed') .. '  (hotkey K)',
+        'panel       : ' .. (M.panel_open and 'open' or 'closed') .. '  (hotkey ' ..
+            (M.panel_binding_registered and 'Mod Bindings Menu' or 'K') .. ')',
         'game input  : ' .. tostring(M.input_state or 'panel closed'),
         'panel context: ' .. tostring(M.panel_context or 'not checked'),
         'auto send   : ' .. (M.options and M.options.enabled and 'enabled' or 'disabled'),
@@ -880,10 +881,14 @@ M.build_language = function(env)
         ['战备目录数据暂不可读']='Stratagem catalog data is temporarily unreadable',
         ['选择主机或客机配置后，点击应用按钮写入该角色。']='Select a host or client configuration, then apply the preset to that role.',
         ['输入已确认；点击对应按钮执行操作']='Input confirmed; click the corresponding button to apply it',
+        ['输入已确认，点击“添加定时任务”保存']='Input confirmed; click Add Scheduled Task to save',
         ['已取消本次输入']='Input cancelled',
         ['Enter 保存 / Esc 取消 / Ctrl+V 粘贴']='Enter saves / Esc cancels / Ctrl+V pastes',
         ['Enter 确认输入 / Esc 取消']='Enter confirms / Esc cancels',
+        ['Enter 确认 / Esc 取消 / Ctrl+V 粘贴']='Enter confirms / Esc cancels / Ctrl+V pastes',
+        ['Enter 确认 / Esc 取消']='Enter confirms / Esc cancels',
         ['已保存当前自动消息配置']='Current automatic message settings saved',
+        ['输出方式已保存']='Output mode saved',
         ['请先选择预设']='Select a preset first',
         ['已替换所选预设内容']='Selected preset replaced with current settings',
         ['预设名称已更新']='Preset renamed',
@@ -892,12 +897,30 @@ M.build_language = function(env)
         ['预设已导入，请选择后加载']='Preset imported; select it to apply',
         ['设置已保存']='Settings saved',
         ['任务状态已保存']='Task status saved',
+        ['任务已添加']='Task added',
         ['任务已删除']='Task deleted',
         ['保存失败']='Save failed',
         ['该分类尚无可读取的战备']='No readable stratagems in this category',
         ['中文输入不可用：窗口 IME 上下文未就绪']='Chinese input is unavailable: the window IME is not ready',
         ['输入队列溢出，已取消并保留原值']='Input queue overflow; edit cancelled and the original value was kept',
         ['搜索已应用']='Search applied',
+        ['任务战备消息已关闭']='Task stratagem messages are off',
+        ['标记消息已关闭']='Ping messages are off',
+        ['自动发送已关闭']='Automatic sending is off',
+        ['新人欢迎已关闭']='New-player welcome is off',
+        ['等待标记数据']='Waiting for ping data',
+        ['标记计时不可用']='Ping timer unavailable',
+        ['标记数据暂不可用']='Ping data temporarily unavailable',
+        ['标记数据切换中']='Ping data is changing',
+        ['已记录现有标记']='Existing pings recorded',
+        ['已识别玩家标记']='Player ping detected',
+        ['等待新的玩家标记']='Waiting for the next ping',
+        ['等待任务战备数据']='Waiting for task stratagem data',
+        ['任务战备：不支持的游戏版本']='Mission stratagems: unsupported game version',
+        ['任务战备数据暂不可读']='Mission stratagem data temporarily unreadable',
+        ['任务战备数据切换中']='Mission stratagem data is updating',
+        ['任务战备读取就绪']='Mission stratagem alerts ready',
+        ['等待：主机身份尚未确认']='Waiting: host identity is not confirmed',
         ['预设数据长度无效']='Preset data length is invalid',
         ['预设校验器不可用']='Preset validator is unavailable',
         ['预设数据校验失败']='Preset data validation failed',
@@ -3471,6 +3494,20 @@ local function build_stratagem_catalog(env)
     local api={state=state}
     local by_id,by_name,by_resource={},{},{}
     local rule_names,rule_resources={},{},{}
+    local function same_content(a,b,seen)
+        if type(a)~=type(b) then return false end
+        if type(a)~='table' then return a==b end
+        seen=seen or {}
+        if seen[a] then return seen[a]==b end
+        seen[a]=b
+        for key,value in pairs(a) do
+            if key~='_panel_native_names' and not same_content(value,b[key],seen) then return false end
+        end
+        for key in pairs(b) do
+            if key~='_panel_native_names' and a[key]==nil then return false end
+        end
+        return true
+    end
     local pins={
         {0x66d54c,string.char(0x4b,0x8b,0x84,0xfd,0,0xb6,0x7c,3)},
         {0x179d962,string.char(0x8b,0x75,0x2c)},
@@ -3555,16 +3592,23 @@ local function build_stratagem_catalog(env)
                     -- Use the already validated native debug string. Resolving every
                     -- localization key here calls into a game function during the
                     -- first update; discovery and rule identity do not need it.
-                    local name_zh=names_zh[id]
-                    if type(name_zh)~='string' or name_zh=='' then name_zh='未知战备' end
-                    local name_en=names_en[id]
-                    if type(name_en)~='string' or name_en=='' then name_en='Unknown stratagem' end
-                    local display_name=names_zh[id]
-                    if type(display_name)~='string' or display_name=='' then display_name='战备 #'..tostring(id) end
-                    local display_name_en=names_en[id]
-                    if type(display_name_en)~='string' or display_name_en=='' then display_name_en='Stratagem #'..tostring(id) end
+                    local function usable_name(value)
+                        if type(value)~='string' then return false end
+                        local normalized=value:gsub('^%s+',''):gsub('%s+$',''):lower()
+                        return normalized~='' and normalized~='未知战备'
+                            and normalized~='unknown stratagem'
+                    end
+                    local name_zh=usable_name(names_zh[id]) and names_zh[id] or nil
+                    local name_en=usable_name(names_en[id]) and names_en[id] or nil
+                    local display_name=name_zh or (name_en and name_en..' #'..tostring(id))
+                        or '战备 #'..tostring(id)
+                    local display_name_en=name_en or 'Stratagem #'..tostring(id)
+                    local name_zh_missing,name_en_missing=name_zh==nil,name_en==nil
+                    name_zh=name_zh or '战备 #'..tostring(id)
+                    name_en=name_en or 'Stratagem #'..tostring(id)
                     local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
                         display_name=display_name,display_name_en=display_name_en,
+                        native_name_missing={zh=name_zh_missing,en=name_en_missing},
                         target_names={zh=name_zh,en=name_en},
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
@@ -3647,7 +3691,7 @@ local function build_stratagem_catalog(env)
     end
     function api.reset()
         state.ready=false;state.entries={};state.rules={};state.status='等待战备目录'
-        state.last_scan=nil;by_id,by_name,by_resource={},{},{}
+        state.last_scan=nil;state.base=nil;by_id,by_name,by_resource={},{},{}
         rule_names,rule_resources={},{}
     end
     function api.scan(now)
@@ -3658,10 +3702,19 @@ local function build_stratagem_catalog(env)
             and now>=state.last_scan and now-state.last_scan<5 then return #state.entries,state.status end
         local ok,entries,ids,keys,aliases,rules,rule_keys,rule_aliases=pcall(capture,base)
         if not ok then api.reset();state.status='战备目录数据暂不可读';return 0,state.status end
-        state.entries,by_id,by_name,by_resource=entries,ids,keys,aliases
-        state.rules,rule_names,rule_resources=rules,rule_keys,rule_aliases
-        state.base=base;state.ready=true;state.last_scan=now;state.generation=state.generation+1
-        state.status='战备目录读取就绪（'..#entries..'）'
+        local seen={}
+        local unchanged=state.ready and state.base==base
+            and same_content(state.entries,entries,seen) and same_content(state.rules,rules,seen)
+            and same_content(by_id,ids,seen) and same_content(by_name,keys,seen)
+            and same_content(by_resource,aliases,seen) and same_content(rule_names,rule_keys,seen)
+            and same_content(rule_resources,rule_aliases,seen)
+        if not unchanged then
+            state.entries,by_id,by_name,by_resource=entries,ids,keys,aliases
+            state.rules,rule_names,rule_resources=rules,rule_keys,rule_aliases
+            state.generation=state.generation+1
+        end
+        state.base=base;state.ready=true;state.last_scan=now
+        state.status='战备目录读取就绪（'..#state.entries..'）'
         return #entries,state.status
     end
     function api.list() return state.entries end
@@ -4707,6 +4760,29 @@ local function build_ping_events(env)
             local identity = guarded(address, 24)
             if u32(identity, 8) ~= entry.target_id then return nil, 'retry' end
             local resource = hex64(identity, 0)
+            -- Static RawData links this exact field Hellbomb entity resource to
+            -- the existing MISSIONS. HELLBOMB stratagem (ID 3989310204). The
+            -- kind-17 field-mark fixture is synthetic, not a live capture; keep
+            -- the whitelist exact and preserve the native action/source split.
+            if resource == 'C6A87C428FD3C7A3'
+                and ((entry.kind == 17 and not summoned) or (entry.kind == 20 and summoned)) then
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                local names={zh='地狱火炸弹',en='Stratagem #3989310204'}
+                local native=localized and not generic_name(localized,entry.localization_key)
+                    and localized or nil
+                if native then
+                    if env.language and env.language()=='zh' then names.zh=native
+                    elseif env.language and env.language()=='en' then names.en=native end
+                end
+                local label=native or (env.language and env.language()=='en'
+                    and names.en or names.zh)
+                return {category='stratagem',target=label,target_id=entry.target_id,
+                    stratagem_id=3989310204,stratagem_rule_id=3989310204,
+                    target_names=names,creator_id=entry.creator_id,resource=resource,
+                    kind=entry.kind,slot=entry.slot,localization_key=entry.localization_key,
+                    position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
             local mission = MISSION_TARGETS[resource]
             if not mission and exact_supply_name(localized) then
                 if read(address, 24) ~= identity then return nil, 'retry' end
@@ -6423,6 +6499,61 @@ local function key_pressed(vk)
     key_prev[vk] = down
     return down and not was and focused()
 end
+
+-- Mod Bindings Menu owns its key mapping and saves it with the game's native
+-- action settings. Its public API cannot set a default key, so K is used only
+-- until a ready menu successfully registers this action (or when unavailable).
+M._panel_binding_id = 'autochat.toggle_panel'
+function M._panel_binding_host()
+    local host = rawget(_G, 'ModBindingsMenu')
+    if host ~= M.panel_binding_host then
+        M.panel_binding_host, M.panel_binding_registered = host, false
+        M.panel_binding_retry_frame, M.panel_binding_down = 0, false
+        M.panel_binding_sampled = false
+    end
+    if type(host) ~= 'table' then return nil end
+    if M.panel_binding_registered then return host end
+    if M.frames < (M.panel_binding_retry_frame or 0) then return nil end
+    M.panel_binding_retry_frame = M.frames + 60
+    if host.api ~= 1 or type(host.version) ~= 'number' or host.version < 2
+       or type(host.ready) ~= 'function' or type(host.register_binding) ~= 'function'
+       or type(host.is_down) ~= 'function' then return nil end
+    local ready_ok, ready = pcall(host.ready)
+    if not ready_ok or not ready then return nil end
+    local called, registered, reason = pcall(host.register_binding,
+        M._panel_binding_id, 'Toggle AutoChat panel', 0, {category = 'AutoChat'})
+    if not called or not registered then
+        if M.frames >= (M.panel_binding_note_frame or 0) then
+            M.panel_binding_note_frame = M.frames + 600
+            note('Mod Bindings Menu registration failed; using K: ' .. tostring(reason or registered))
+        end
+        return nil
+    end
+    M.panel_binding_registered, M.panel_binding_down = true, false
+    M.panel_binding_sampled = false
+    note('Registered panel toggle in Mod Bindings Menu; assign a key in its bindings page.')
+    return host
+end
+
+function M._panel_toggle_input()
+    -- Always consume K edges, even while the menu action is authoritative, so a
+    -- later fallback cannot treat a key held across that transition as fresh.
+    local fallback_pressed = key_pressed(0x4B)
+    local fallback_down = key_prev[0x4B]
+    local host = M._panel_binding_host()
+    if not host then return fallback_pressed, fallback_down end
+    local ok, down = pcall(host.is_down, M._panel_binding_id)
+    if not ok or type(down) ~= 'boolean' then
+        -- Registration already succeeded: never reactivate K on a transient read
+        -- failure, which could make the old key unexpectedly toggle the panel.
+        M.panel_binding_down, M.panel_binding_sampled = true, false
+        return false, false
+    end
+    local pressed = M.panel_binding_sampled and down and not M.panel_binding_down and focused()
+    M.panel_binding_down = down
+    M.panel_binding_sampled = true
+    return pressed, down
+end
 local function mouse_state()
     if not user then return nil end
     local win = user.GetForegroundWindow()
@@ -7669,6 +7800,13 @@ M.build_plugin_ui = function(env)
             or (limit ~= nil and (not finite(limit) or limit <= 0)) then
             return false, 'invalid_geometry'
         end
+        if UX.display_text then
+            local display_ok, display_value = pcall(UX.display_text, string_value)
+            if not display_ok or type(display_value) ~= 'string' then
+                return false, 'invalid_text'
+            end
+            string_value = display_value
+        end
         local draw_limit = limit
         if draw_limit == nil then
             if align == 'right' then
@@ -8258,8 +8396,8 @@ PANEL.active_plugin = PANEL.active_plugin
 
 -- BEGIN ALERT PANEL
 -- Dedicated configuration views using the existing Armory frame/input owner.
--- No native reads here; catalog rows and safely bound icons come from the host.
-local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
+-- Native names are resolved only through the host's safe callback for visible rows.
+local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text,native_localize,game_locale,panel_locale)
     local body_top=math.max(158,(canvas.body_y or 136)+10)
     local body_shift=body_top-158
     local raw_canvas=canvas
@@ -8313,6 +8451,19 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
         return row.display_name_en or row.name_en or row.debug_name or row.name or row.display_name or tostring(row.id)
     end
+    local native_allowed=type(native_localize)=='function' and game_locale==panel_locale
+        and (panel_locale=='zh' or panel_locale=='en')
+    local native_cache_key=tostring(panel_locale)..':'..tostring(catalog.state.generation or 0)
+    local function native_name_needed(row)
+        local missing=row.native_name_missing
+        return type(missing)=='table' and (chinese and missing.zh==true or not chinese and missing.en==true)
+    end
+    local function visible_row_name(row)
+        local cache=row._panel_native_names
+        local value=cache and cache[native_cache_key]
+        if native_allowed and native_name_needed(row) and type(value)=='string' then return value end
+        return row_name(row)
+    end
     local function button(key,value,x,y,w,on,disabled,min_h)
         local label_h=wrap_height(value,13,w-18)
         local h=math.max(32,label_h+16,min_h or 0)
@@ -8331,8 +8482,9 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local enemy=p.rule_view=='enemy'
     text(enemy and say('敌人细分提醒','ENEMY ALERT RULES') or say('战备细分提醒','STRATAGEM ALERT RULES'),160,170,22,C.TEXT,750)
     text(say('自动消息：','AUTO MESSAGES: ')..(opts.enabled and opts.ping and 'ON' or 'OFF')..
-        say('  · 空消息继承默认模板','  · BLANK MESSAGES INHERIT DEFAULTS'),22,210,12,C.MUTED,950)
+        say('  · 空消息继承默认模板',' / BLANK MESSAGES INHERIT DEFAULTS'),22,210,12,C.MUTED,950)
     local rows={}
+    local rule_cache={}
     if enemy then
         for _,v in ipairs({{'small_enemy','小型敌人','SMALL'}, {'medium_enemy','中型敌人','MEDIUM'},
             {'large_enemy','大型敌人','LARGE'}, {'giant_enemy','巨型敌人','MASSIVE'}, {'flying_enemy','飞行敌人','FLYING'}}) do
@@ -8348,15 +8500,49 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     else
         local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'},
             {'mission','任务战备','MISSION STRATAGEMS'}}
+        local source_rows=catalog.list_rules and catalog.list_rules() or catalog.list()
+        local group_counts={red={0,0},blue={0,0},green={0,0},mission={0,0}}
+        local filter=p.rule_filter or 'all'
+        local query=(p.rule_search or ''):lower()
+        for _,row in ipairs(source_rows) do
+            local red=row.group=='red'
+            local blue=row.group=='blue'
+            local green=row.group=='green'
+            local mission=row.family=='mission'
+            local rule
+            if red or blue or green or mission then
+                rule=a.rule('stratagem',row.id,role)
+                rule_cache[tostring(row.id)]=rule
+            end
+            if red then
+                local counts=group_counts.red;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            if blue then
+                local counts=group_counts.blue;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            if green then
+                local counts=group_counts.green;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            if mission then
+                local counts=group_counts.mission;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            local matches_filter=filter=='all' or (filter=='mission' and mission)
+                or (filter=='other' and row.group=='other' and not mission)
+                or (filter~='mission' and filter~='other' and row.group==filter)
+            if matches_filter and (query=='' or row_name(row):lower():find(query,1,true)
+                or tostring(row.id):find(query,1,true)
+                or (row.debug_name or row.name or ''):lower():find(query,1,true)) then
+                rows[#rows+1]=row
+            end
+        end
         local group_y=237
         for _,v in ipairs(groups) do
-            local total,enabled_count=0,0
-            for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-                if (v[1]=='mission' and row.family=='mission') or (v[1]~='mission' and row.group==v[1]) then
-                    total=total+1
-                    if a.rule('stratagem',row.id,role).enabled~=false then enabled_count=enabled_count+1 end
-                end
-            end
+            local counts=group_counts[v[1]]
+            local total,enabled_count=counts[1],counts[2]
             local group_text=say(v[2],v[3])..' '..enabled_count..'/'..total
             local label_height=wrap_height(group_text,13,104)
             wrapped(group_text,22,group_y+2,13,C.TEXT,104)
@@ -8379,17 +8565,6 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         search=input_value(search..(search_edit and '_' or ''),14,408,search_edit)
         text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,search_y+8,14,C.MUTED,408)
         canvas.region('rules:search',22,search_y,424,32)
-        local query=(p.rule_search or ''):lower()
-        for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-            local filter=p.rule_filter or 'all'
-            local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
-                or (filter=='other' and row.group=='other' and row.family~='mission')
-                or (filter~='mission' and filter~='other' and row.group==filter)
-            if matches_filter
-                and (query=='' or row_name(row):lower():find(query,1,true)
-                    or tostring(row.id):find(query,1,true)
-                    or (row.debug_name or row.name or ''):lower():find(query,1,true)) then rows[#rows+1]=row end
-        end
         local status=status_text and status_text(catalog.state.status) or catalog.state.status
         local status_y=search_y+40
         local status_h=wrapped(status,22,status_y,12,C.MUTED,424)
@@ -8460,15 +8635,63 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local page_size=enemy and math.min(5,available_rows) or available_rows
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
+    if native_allowed then
+        local candidates,seen={},{}
+        local first=(p.rule_page-1)*page_size+1
+        local last=math.min(#rows,p.rule_page*page_size)
+        for i=first,last do
+            local row=rows[i]
+            candidates[#candidates+1]=row;seen[row]=true
+        end
+        if selected and not seen[selected] then candidates[#candidates+1]=selected end
+        local signature={native_cache_key}
+        for _,row in ipairs(candidates) do
+            signature[#signature+1]=native_cache_key..':'..tostring(row.id)..':'..tostring(row.name_key)..':'..tostring(row.name_upper_key)
+        end
+        signature=table.concat(signature,'|')
+        if signature~=p._native_name_candidate_signature then
+            if p._native_name_candidate_cache_key~=native_cache_key then
+                p._native_name_retry_by_key={}
+                p._native_name_key_cursor={}
+                p._native_name_fallbacks={}
+            end
+            p._native_name_candidate_signature=signature
+            p._native_name_candidate_cache_key=native_cache_key
+            p._native_name_candidates=candidates
+            p._native_name_cursor=1
+            p._native_name_key_cursor={}
+            p._native_name_retry_frame=0
+            p._native_name_done_signature=nil
+            p._native_name_rebind_for=nil
+            p._native_name_stale_cleared_for=nil
+        else p._native_name_candidates=candidates end
+        p._native_name_fallbacks=p._native_name_fallbacks or {}
+        for _,row in ipairs(candidates) do
+            p._native_name_fallbacks[native_cache_key..':'..tostring(row.id)]=row_name(row)
+        end
+    else
+        p._native_name_retry_by_key={}
+        p._native_name_key_cursor={}
+        p._native_name_fallbacks={}
+        p._native_name_candidates={}
+        p._native_name_candidate_signature=nil
+        p._native_name_candidate_cache_key=nil
+        p._native_name_done_signature=nil
+        p._native_name_retry_frame=nil
+    end
     for i=(p.rule_page-1)*page_size+1,math.min(#rows,p.rule_page*page_size) do
         local row=rows[i];local y=top+(i-(p.rule_page-1)*page_size-1)*40
-        local rule=a.rule(enemy and 'enemy' or 'stratagem',row.id,role)
+        local rule=enemy and a.rule('enemy',row.id,role) or rule_cache[tostring(row.id)]
+        if not enemy and not rule then
+            rule=a.rule('stratagem',row.id,role)
+            rule_cache[tostring(row.id)]=rule
+        end
         local enabled=enemy and opts['ping_'..row.id] or not enemy and rule.enabled~=false
         local key='rules:select:'..row.id
         canvas.rect(22,y,424,36,row==selected and C.ROW_HI or C.PANEL,951)
         canvas.border(22,y,424,36,row==selected and C.YELLOW or C.LINE,952)
         if not enemy and canvas.icon then canvas.icon(row.icon,27,y+4,28) end
-        text(row_name(row),enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
+        text(enemy and row_name(row) or visible_row_name(row),enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
         text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
         canvas.region(key,22,y,424,36)
     end
@@ -8488,9 +8711,14 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         end
         return
     end
-    local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
-    local title=row_name(selected)
-    local info=not enemy and (say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s') or nil
+    local kind=enemy and 'enemy' or 'stratagem'
+    local rule=enemy and a.rule(kind,selected.id,role) or rule_cache[tostring(selected.id)]
+    if not enemy and not rule then
+        rule=a.rule(kind,selected.id,role)
+        rule_cache[tostring(selected.id)]=rule
+    end
+    local title=enemy and row_name(selected) or visible_row_name(selected)
+    local info=not enemy and (say('规则ID ','RULE ID ')..selected.id..(chinese and '  · ' or ' / ')..selected.group..(chinese and '  · ' or ' / ')..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s') or nil
     local variants=not enemy and selected.variant_ids and #selected.variant_ids>1
         and say('同名 '..#selected.variant_ids..' 个变体共用此规则','SHARED BY '..#selected.variant_ids..' SAME-NAME VARIANTS') or nil
     local enabled=enemy and opts['ping_'..selected.id] or not enemy and rule.enabled~=false
@@ -8503,12 +8731,14 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local help={
         {say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),12,C.YELLOW},
         {say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),12,C.MUTED},
-        {'{玩家名}/{player_name}',12,C.TEXT},{'{缩写}/{abbr}  ·  {编号}/{slot}',12,C.TEXT},
-        {'{目标}/{target}',12,C.TEXT},{'{战备}/{stratagem}',12,C.TEXT},
-        {'{类别}/{category}',12,C.TEXT},{'{动作}/{action}',12,C.TEXT},
-        {'{任务名}/{objective}',12,C.TEXT},{'{任务类型}/{objective_type}',12,C.TEXT},
-        {'{位置}/{position}',12,C.TEXT},
-        {say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),12,C.MUTED},
+        {say('{玩家名}/{player_name}','{player_name}'),12,C.TEXT},
+        {say('{缩写}/{abbr}  ·  {编号}/{slot}','{abbr} / {slot}'),12,C.TEXT},
+        {say('{目标}/{target}','{target}'),12,C.TEXT},{say('{战备}/{stratagem}','{stratagem}'),12,C.TEXT},
+        {say('{类别}/{category}','{category}'),12,C.TEXT},{say('{动作}/{action}','{action}'),12,C.TEXT},
+        {say('{任务名}/{objective}','{objective}'),12,C.TEXT},
+        {say('{任务类型}/{objective_type}','{objective_type}'),12,C.TEXT},
+        {say('{位置}/{position}','{position}'),12,C.TEXT},
+        {say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE / ESC CANCEL / CTRL+V PASTE'),12,C.MUTED},
     }
     if p.hint then help[#help+1]={status_text and status_text(p.hint) or p.hint,12,C.YELLOW} end
     local pad=canvas.wrap_start_pad and canvas.wrap_start_pad(20) or 0
@@ -8575,6 +8805,112 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     for _,item in ipairs(help) do y=y+wrapped(item[1],DETAIL_X,y,item[2],item[3],draw_w)+3 end
     end_viewport()
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,902-body_shift,474,false)
+end
+
+M.pump_alert_panel_native_names=function(p,native_localize,game_locale,panel_locale,generation,frame,request_redraw)
+    if not p.open or p.rule_view~='stratagem' or type(native_localize)~='function'
+        or game_locale~=panel_locale or (panel_locale~='zh' and panel_locale~='en') then return 0 end
+    frame=tonumber(frame) or 0
+    if frame<(tonumber(p._native_name_retry_frame) or 0) then return 0 end
+    local rows=p._native_name_candidates or {}
+    if #rows==0 then return 0 end
+    local cache_key=tostring(panel_locale)..':'..tostring(generation or 0)
+    if p._native_name_candidate_cache_key~=cache_key then
+        if p._native_name_stale_cleared_for~=cache_key then
+            p._native_name_retry_by_key={}
+            p._native_name_key_cursor={}
+            p._native_name_fallbacks={}
+            p._native_name_done_signature=nil
+            p._native_name_retry_frame=nil
+            p._native_name_stale_cleared_for=cache_key
+        end
+        if p._native_name_rebind_for~=cache_key then
+            p._native_name_rebind_for=cache_key
+            if type(request_redraw)=='function' then pcall(request_redraw) end
+        end
+        return 0
+    end
+    if p._native_name_done_signature==p._native_name_candidate_signature then return 0 end
+    local budget,called,changed=4,0,false
+    p._native_name_retry_by_key=p._native_name_retry_by_key or {}
+    local cursor=math.max(1,math.min(#rows,tonumber(p._native_name_cursor) or 1))
+    local visits=0
+    while budget>0 and visits<#rows do
+        local index=((cursor+visits-1)%#rows)+1
+        local row=rows[index]
+        visits=visits+1
+        local missing=row.native_name_missing
+        local needed=type(missing)=='table' and
+            ((panel_locale=='zh' and missing.zh==true) or (panel_locale=='en' and missing.en==true))
+        if needed then
+            row._panel_native_names=row._panel_native_names or {}
+            local cache=row._panel_native_names
+            if type(cache[cache_key])~='string' then
+                local keys={row.name_key,row.name_upper_key}
+                local key_cursor=p._native_name_key_cursor and p._native_name_key_cursor[index] or 1
+                local examined,tried=0,{}
+                while examined<2 and budget>0 and type(cache[cache_key])~='string' do
+                    local key=keys[key_cursor]
+                    key_cursor=key_cursor%2+1
+                    examined=examined+1
+                    if type(key)=='number' and key>0 and not tried[key] then
+                        tried[key]=true
+                        local key_cache=cache_key..':'..tostring(key)
+                        if cache[key_cache]==nil and
+                            frame>=(tonumber(p._native_name_retry_by_key[key_cache]) or 0) then
+                            budget=budget-1;called=called+1
+                            local ok,value=pcall(native_localize,key)
+                            if ok and type(value)=='string' and value:gsub('^%s+',''):gsub('%s+$','')~='' then
+                                p._native_name_retry_by_key[key_cache]=nil
+                                local normalized=value:gsub('^%s+',''):gsub('%s+$',''):lower()
+                                local generic=normalized=='未知战备' or normalized=='unknown stratagem'
+                                    or normalized=='未知目标' or normalized=='unknown target'
+                                    or normalized=='未知' or normalized=='unknown' or normalized=='location'
+                                    or normalized=='地点' or normalized=='位置' or normalized=='战备'
+                                    or normalized=='stratagem' or normalized=='战略配备'
+                                    or normalized:match('^#%d+$') or normalized:match('^#id%[')
+                                if generic then cache[key_cache]=false
+                                else
+                                    cache[key_cache]=value
+                                    cache[cache_key]=value
+                                    local row_identity=cache_key..':'..tostring(row.id)
+                                    if value~=p._native_name_fallbacks[row_identity] then
+                                        changed=true
+                                    end
+                                end
+                            else p._native_name_retry_by_key[key_cache]=frame+15 end
+                        elseif type(cache[key_cache])=='string' then cache[cache_key]=cache[key_cache] end
+                    end
+                end
+                p._native_name_key_cursor=p._native_name_key_cursor or {}
+                p._native_name_key_cursor[index]=key_cursor
+            end
+        end
+    end
+    cursor=((cursor+visits-1)%#rows)+1
+    p._native_name_cursor=cursor
+    local pending,next_retry=false,nil
+    for _,row in ipairs(rows) do
+        local missing=row.native_name_missing
+        local needed=type(missing)=='table' and
+            ((panel_locale=='zh' and missing.zh==true) or (panel_locale=='en' and missing.en==true))
+        if needed then
+            local cache=row._panel_native_names or {}
+            if type(cache[cache_key])~='string' then
+                for _,key in ipairs({row.name_key,row.name_upper_key}) do
+                    if type(key)=='number' and key>0 and cache[cache_key..':'..tostring(key)]==nil then
+                        local retry=tonumber(p._native_name_retry_by_key[cache_key..':'..tostring(key)]) or 0
+                        if not next_retry or retry<next_retry then next_retry=retry end
+                        pending=true
+                    end
+                end
+            end
+        end
+    end
+    p._native_name_retry_frame=pending and math.max(frame+3,next_retry or frame+3) or nil
+    if not pending then p._native_name_done_signature=p._native_name_candidate_signature end
+    if changed and type(request_redraw)=='function' then pcall(request_redraw) end
+    return called
 end
 -- END ALERT PANEL
 
@@ -8649,7 +8985,23 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
         index_cache={revision=revision,entries=entries,by_id=by_id}
         PANEL.preset_index_cache_by_role[role]=index_cache
     end
-    if selected_id and not index_cache.by_id[selected_id] then
+    local locale=font_ok and 'zh' or 'en'
+    if index_cache.display_locale~=locale then
+        local display_entries,display_by_id={},{}
+        for _,entry in ipairs(entries) do
+            local hidden=locale=='en' and entry.builtin==true
+                and entry.id=='builtin-'..role..'-zh'
+            if not hidden then
+                display_entries[#display_entries+1]=entry
+                display_by_id[entry.id]=entry
+            end
+        end
+        index_cache.display_locale=locale
+        index_cache.display_entries=display_entries
+        index_cache.display_by_id=display_by_id
+    end
+    local display_entries=index_cache.display_entries
+    if selected_id and not index_cache.display_by_id[selected_id] then
         selected_id=nil;PANEL.preset_selected_by_role[role]=nil
     end
     if not selected_id then
@@ -8658,23 +9010,24 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
         if english and english.builtin==true then selected_id=english_id;PANEL.preset_selected_by_role[role]=english_id end
     end
     local selected=selected_id and index_cache.by_id[selected_id] or nil
-    local count_text=say('共 '..#entries..' 个预设',#entries..' PRESETS')
+    local count_text=say('共 '..#display_entries..' 个预设',#display_entries..' PRESETS')
     local count_h=text_block(count_text,40,TOP+20+list_title_h+4,12,C.MUTED,306)
     if preset_library.state.error then
         local error_top=TOP+60
         text_block(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,error_top,12,C.BAD,300)
-        text_block(preset_library.state.error,40,error_top+26,11,C.BAD,300)
-    elseif #entries==0 then text_block(say('暂无已保存预设','NO SAVED PRESETS'),40,TOP+66,14,C.DIM,300) end
+        text_block(status_text and status_text(preset_library.state.error) or preset_library.state.error,
+            40,error_top+26,11,C.BAD,300)
+    elseif #display_entries==0 then text_block(say('暂无已保存预设','NO SAVED PRESETS'),40,TOP+66,14,C.DIM,300) end
     PANEL.preset_page_size_by_role=PANEL.preset_page_size_by_role or {}
     local list_top=math.max(TOP+98,TOP+20+list_title_h+count_h+16)
     local page_size=math.max(1,math.min(16,math.floor((H-160-list_top)/36)))
     PANEL.preset_page_size_by_role[role]=page_size
-    local pages=math.max(1,math.ceil(#entries/page_size))
+    local pages=math.max(1,math.ceil(#display_entries/page_size))
     local page=PANEL.preset_page_by_role[role] or 1
     page=math.max(1,math.min(pages,page));PANEL.preset_page_by_role[role]=page
     local first=(page-1)*page_size+1
-    for i=first,math.min(#entries,first+page_size-1) do
-        local entry=entries[i];local y=list_top+(i-first)*36
+    for i=first,math.min(#display_entries,first+page_size-1) do
+        local entry=display_entries[i];local y=list_top+(i-first)*36
         local chosen=entry.id==selected_id
         rect(38,y,308,30,chosen and C.ROW_HI or C.ROW,951)
         border(38,y,308,30,chosen and C.YELLOW or C.LINE2,952)
@@ -8821,9 +9174,84 @@ local function draw_panel()
     local min_font = math.max(9, px(14 * height / 1080))
     local function font_px(size) return math.max(min_font, px(size * s)) end
 
+    -- English UI uses the game's currently selected font. Keep display conversion
+    -- local to this retained draw; callers and persisted values always keep UTF-8.
+    local display_cache, display_cache_count = {}, 0
+    local CJK_HIDDEN = '[Chinese text hidden]'
+    local display_is_chinese = panel_is_chinese()
+    local display_punctuation = {
+        [0x3000]=' ', [0x3001]=',', [0x3002]='.', [0x3008]='<', [0x3009]='>',
+        [0x300A]='<', [0x300B]='>', [0x300C]='"', [0x300D]='"',
+        [0x300E]='"', [0x300F]='"', [0x3010]='[', [0x3011]=']',
+        [0x3014]='[', [0x3015]=']', [0x3016]='[', [0x3017]=']',
+        [0x3018]='[', [0x3019]=']', [0x301A]='[', [0x301B]=']',
+        [0x301C]='~', [0x3030]='~', [0x2026]='...', [0x2014]='--',
+        [0xFF01]='!', [0xFF02]='"', [0xFF03]='#', [0xFF04]='$', [0xFF05]='%',
+        [0xFF06]='&', [0xFF07]="'", [0xFF08]='(', [0xFF09]=')', [0xFF0A]='*',
+        [0xFF0B]='+', [0xFF0C]=',', [0xFF0D]='-', [0xFF0E]='.', [0xFF0F]='/',
+        [0xFF1A]=':', [0xFF1B]=';', [0xFF1C]='<', [0xFF1D]='=', [0xFF1E]='>',
+        [0xFF1F]='?', [0xFF20]='@', [0xFF3B]='[', [0xFF3C]='\\', [0xFF3D]=']',
+        [0xFF3E]='^', [0xFF3F]='_', [0xFF5B]='{', [0xFF5C]='|', [0xFF5D]='}',
+        [0xFF5E]='~',
+    }
+    local function is_cjk(cp)
+        return (cp>=0x2E80 and cp<=0x2FFF) or (cp>=0x3000 and cp<=0x303F)
+            or (cp>=0x3100 and cp<=0x312F) or (cp>=0x31A0 and cp<=0x31EF)
+            or (cp>=0x3400 and cp<=0x4DBF) or (cp>=0x4E00 and cp<=0x9FFF)
+            or (cp>=0xF900 and cp<=0xFAFF) or (cp>=0xFE30 and cp<=0xFE4F)
+            or (cp>=0xFF00 and cp<=0xFFEF) or (cp>=0x20000 and cp<=0x323AF)
+            or (cp>=0x2F800 and cp<=0x2FA1F)
+    end
+    local function display_text(value)
+        value = tostring(value == nil and '' or value)
+        if display_is_chinese or not value:find('[\128-\255]') then return value end
+        local cached = display_cache[value]
+        if cached then return cached end
+        local out, hidden = {}, false
+        local function flush_hidden()
+            if hidden then out[#out+1]=CJK_HIDDEN; hidden=false end
+        end
+        local i=1
+        while i<=#value do
+            local a=value:byte(i)
+            local cp,step
+            if a<0x80 then cp,step=a,1
+            elseif a>=0xC2 and a<=0xDF and i+1<=#value then
+                local b=value:byte(i+1); if b>=0x80 and b<=0xBF then cp,step=(a-0xC0)*0x40+b-0x80,2 end
+            elseif a>=0xE0 and a<=0xEF and i+2<=#value then
+                local b,c=value:byte(i+1,i+2)
+                local valid_b=b>=0x80 and b<=0xBF and a~=0xE0 or a==0xE0 and b>=0xA0 and b<=0xBF
+                valid_b=valid_b and not (a==0xED and b>=0xA0)
+                if valid_b and c>=0x80 and c<=0xBF then cp,step=(a-0xE0)*0x1000+(b-0x80)*0x40+c-0x80,3 end
+            elseif a>=0xF0 and a<=0xF4 and i+3<=#value then
+                local b,c,d=value:byte(i+1,i+3)
+                local valid_b=b>=0x80 and b<=0xBF and a~=0xF0 and a~=0xF4
+                    or a==0xF0 and b>=0x90 and b<=0xBF
+                    or a==0xF4 and b>=0x80 and b<=0x8F
+                if valid_b and c>=0x80 and c<=0xBF and d>=0x80 and d<=0xBF then cp,step=(a-0xF0)*0x40000+(b-0x80)*0x1000+(c-0x80)*0x40+d-0x80,4 end
+            end
+            if not cp then flush_hidden(); out[#out+1]='?'; i=i+1
+            elseif is_cjk(cp) then
+                local mapped=display_punctuation[cp]
+                if not mapped and cp>=0xFF01 and cp<=0xFF5E then
+                    mapped=string.char(cp-0xFEE0)
+                end
+                if mapped then flush_hidden(); out[#out+1]=mapped else hidden=true end
+                i=i+step
+            else
+                flush_hidden(); out[#out+1]=value:sub(i,i+step-1); i=i+step
+            end
+        end
+        flush_hidden()
+        local result=table.concat(out)
+        if display_cache_count<256 then display_cache[value]=result; display_cache_count=display_cache_count+1 end
+        return result
+    end
+
     -- Engine measurement when available, else the same per-character estimate Armory
     -- uses (deliberately on the wide side).
     local function measure_px(value, sz)
+        value = display_text(value)
         if FONT.ok then
             local ok, lo, hi = pcall(Gui.text_extents, gui, value, FONT.font, sz)
             if ok and lo and hi then
@@ -8856,7 +9284,7 @@ local function draw_panel()
     -- Wrap at redraw time, using the same real-font measurement as drawing. Panel
     -- frames reuse retained GUIs, so this work runs only when their signature changes.
     local function wrapped_lines(value, size, limit)
-        value = tostring(value or '')
+        value = display_text(value or '')
         value = value:gsub('\r\n', '\n'):gsub('\r', '\n')
         limit = tonumber(limit) or 1
         if limit ~= limit or limit <= 0 then limit = 1 end
@@ -8931,15 +9359,24 @@ local function draw_panel()
         return math.max(2, math.ceil((font_px(size) / s - size) * 0.5 + 2))
     end
     local function input_tail(value, size, limit)
-        value = tostring(value or '')
+        value = display_text(value or '')
         if measure(value, size) <= limit then return value end
         local chars = {}
         local i = 1
         while i <= #value do
-            local byte = value:byte(i)
-            local step = byte >= 0xF0 and 4 or byte >= 0xE0 and 3 or byte >= 0xC0 and 2 or 1
-            chars[#chars + 1] = value:sub(i, math.min(#value, i + step - 1))
-            i = i + step
+            local hidden_at=value:find(CJK_HIDDEN,i,true)
+            if hidden_at==i then
+                -- Keep the explanatory token whole when the caret viewport scrolls.
+                chars[#chars+1]=CJK_HIDDEN
+                i=i+#CJK_HIDDEN
+            else
+                local stop=hidden_at and hidden_at-1 or #value
+                if stop<i then stop=#value end
+                local byte = value:byte(i)
+                local step = byte >= 0xF0 and 4 or byte >= 0xE0 and 3 or byte >= 0xC0 and 2 or 1
+                chars[#chars + 1] = value:sub(i, math.min(stop, i + step - 1))
+                i = i + step
+            end
         end
         local shown = ''
         for n = #chars, 1, -1 do
@@ -8954,7 +9391,7 @@ local function draw_panel()
     -- compressed into the former 6-pixel text. Trim whole UTF-8 characters.
     text = function(value, x, y, size, c, limit, align)
         if value == nil or value == '' then return 0 end
-        value = tostring(value)
+        value = display_text(value)
         y = viewport_y(y)
         local sz = font_px(size)
         local w = measure_px(value, sz) / s
@@ -8995,7 +9432,7 @@ local function draw_panel()
     end
     -- Text cut to fit at a readable size: "LONG MESSAGE GOES HER.."
     local function cut(value, size, limit)
-        value = tostring(value)
+        value = display_text(value)
         if measure_px(value, font_px(size)) / s <= limit then return value end
         local function shorter(v)
             local w = (v:gsub('[\194-\244][\128-\191]*$', ''))
@@ -9067,7 +9504,7 @@ local function draw_panel()
     -- (which is where they used to live) handed every plugin a nil palette, and the
     -- plugin's very first u.rect then failed on a nil index.
     UX.s, UX.ox, UX.oy, UX.height = s, ox, oy, height
-    UX.text, UX.wrap_text, UX.wrap_height, UX.input_tail = text, wrapped_text, wrapped_height, input_tail
+    UX.text, UX.wrap_text, UX.wrap_height, UX.input_tail, UX.display_text = text, wrapped_text, wrapped_height, input_tail, display_text
     UX.wrap_start_pad = wrapped_start_pad
     UX.begin_viewport, UX.end_viewport = begin_viewport, end_viewport
     UX.rect, UX.border = rect, border
@@ -9274,7 +9711,8 @@ local function draw_panel()
     -- ---------------------------------------------------------- settings body
     if PANEL.rule_view then
         stratagem_catalog.scan(os.time())
-        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,panel_is_chinese(),M.version,panel_status)
+        draw_alert_panel(UX,PANEL,automation,stratagem_catalog,panel_is_chinese(),M.version,panel_status,
+            marker_localization.lookup,M.language.current(),M.panel_locale())
         PANEL.ui_s,PANEL.ui_ox,PANEL.ui_oy=s,ox,oy
         return
     end
@@ -9415,15 +9853,15 @@ local function draw_panel()
             {caption('本人和队友；共享记录显示“小队”', 'SELF + TEAM; SHARED CALLS: SQUAD'), 12, C.YELLOW},
             {panel_status(M.ping_status or '等待标记数据'), 12, C.MUTED},
             {panel_status(M.task_stratagem_status or '等待任务战备数据'), 12, C.MUTED},
-            {'{玩家名}/{player_name}', 12, C.MUTED},
-            {'{缩写}/{abbr}  ·  {编号}/{slot}', 12, C.MUTED},
-            {'{目标}/{target}', 12, C.MUTED},
-            {'{战备}/{stratagem}', 12, C.MUTED},
-            {'{类别}/{category}', 12, C.MUTED},
-            {'{动作}/{action}', 12, C.MUTED},
-            {'{任务名}/{objective}', 12, C.MUTED},
-            {'{任务类型}/{objective_type}', 12, C.MUTED},
-            {'{位置}/{position}', 12, C.MUTED},
+            {caption('{玩家名}/{player_name}', '{player_name}'), 12, C.MUTED},
+            {caption('{缩写}/{abbr}  ·  {编号}/{slot}', '{abbr} / {slot}'), 12, C.MUTED},
+            {caption('{目标}/{target}', '{target}'), 12, C.MUTED},
+            {caption('{战备}/{stratagem}', '{stratagem}'), 12, C.MUTED},
+            {caption('{类别}/{category}', '{category}'), 12, C.MUTED},
+            {caption('{动作}/{action}', '{action}'), 12, C.MUTED},
+            {caption('{任务名}/{objective}', '{objective}'), 12, C.MUTED},
+            {caption('{任务类型}/{objective_type}', '{objective_type}'), 12, C.MUTED},
+            {caption('{位置}/{position}', '{position}'), 12, C.MUTED},
         }
         if PANEL.hint then ping_tail[#ping_tail + 1] = {panel_status(PANEL.hint), 11, C.YELLOW} end
         local pings_content_h = 0
@@ -9484,8 +9922,8 @@ local function draw_panel()
         local auto_tail = {
             {PANEL.hint and panel_status(PANEL.hint)
                 or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'), 12},
-            {'{玩家名}/{player_name}', 12},
-            {'{缩写}/{abbr}  ·  {编号}/{slot}', 12},
+            {caption('{玩家名}/{player_name}', '{player_name}'), 12},
+            {caption('{缩写}/{abbr}  ·  {编号}/{slot}', '{abbr} / {slot}'), 12},
         }
         for _, item in ipairs(auto_tail) do
             auto_content_h = auto_content_h + wrapped_height(item[1], item[2], form_width) + 4
@@ -9519,8 +9957,8 @@ local function draw_panel()
         y = y + wrapped_text(PANEL.hint and panel_status(PANEL.hint)
             or caption('修改后自动保存；Enter 确认，Esc 取消', 'AUTO SAVED / ENTER CONFIRMS / ESC CANCELS'),
             IX, y, 12, PANEL.hint and C.YELLOW or C.MUTED, IW) + 6
-        y = y + wrapped_text('{玩家名}/{player_name}', IX, y, 12, C.DIM, IW) + 2
-        wrapped_text('{缩写}/{abbr}  ·  {编号}/{slot}', IX, y, 12, C.DIM, IW)
+        y = y + wrapped_text(caption('{玩家名}/{player_name}', '{player_name}'), IX, y, 12, C.DIM, IW) + 2
+        wrapped_text(caption('{缩写}/{abbr}  ·  {编号}/{slot}', '{abbr} / {slot}'), IX, y, 12, C.DIM, IW)
         end_viewport()
     else
     local form_top, form_width = y, IW - 14
@@ -9540,11 +9978,11 @@ local function draw_panel()
         {PANEL.hint and panel_status(PANEL.hint) or caption('点击输入框填写；Enter 确认', 'CLICK TO TYPE; ENTER CONFIRMS'), 12, 2},
         {caption('Esc 取消', 'ESC CANCELS'), 12, 2},
         {caption('填写完成后点击“添加任务”，任务才会保存并进入预设',
-                 'CLICK “ADD TASK” TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), 11, 4},
+                 'CLICK ADD TASK TO SAVE THE DRAFT AND INCLUDE IT IN PRESETS'), 11, 4},
         {caption('重复 / 倒计时：5 秒至 24 小时', 'REPEAT / COUNTDOWN: 5 S TO 24 H'), 12, 4},
         {caption('每天定时：使用本机时间', 'DAILY: LOCAL SYSTEM TIME'), 12, 4},
-        {'{玩家名}/{player_name}', 12, 2},
-        {'{缩写}/{abbr}  ·  {编号}/{slot}', 12, 0},
+        {caption('{玩家名}/{player_name}', '{player_name}'), 12, 2},
+        {caption('{缩写}/{abbr}  ·  {编号}/{slot}', '{abbr} / {slot}'), 12, 0},
     }
     local task_mode_w = (form_width - 8) / 2
     local mode_heights = {
@@ -9702,9 +10140,9 @@ set_panel_open = function(open, discard_world_gui)
 end
 
 local function panel_frame()
-    -- Sample K even while the panel is unavailable. A key held across startup or a
-    -- world transition must not become a fresh toggle when the gate opens.
-    local toggle = key_pressed(0x4B)
+    -- Sample the selected input even while the panel is unavailable. A key held
+    -- across startup or a world transition must not become a fresh toggle later.
+    local toggle, toggle_down = M._panel_toggle_input()
     local is_focused = focused()
     if not is_focused then
         PANEL.scrollbar_drag = nil
@@ -9728,7 +10166,6 @@ local function panel_frame()
         return
     end
 
-    -- hotkey K (0x4B)
     if toggle and not PANEL.editing then
         if PANEL.open then set_panel_open(false) else panel_context_guard.request_open() end
         note('panel ' .. (PANEL.open and 'opened' or 'closed'))
@@ -9781,7 +10218,7 @@ local function panel_frame()
         PANEL.pending_edit_action = queued_edit_action
         queued_edit_action = nil
     end
-    panel_input.hold(os.clock(), is_focused and user.GetForegroundWindow() or nil, key_down(0x4B))
+    panel_input.hold(os.clock(), is_focused and user.GetForegroundWindow() or nil, toggle_down)
     M.input_state = panel_input.status().state
     keep_cursor()
     local gx, gy = mouse_state()
@@ -10324,6 +10761,12 @@ local function panel_frame()
     -- the redraw. Creating in the ladder and then immediately rebuilding (the first
     -- version of this) destroyed a gui that had just been made, which is pure waste
     -- and doubles the number of engine objects per open.
+    if PANEL.rule_view=='stratagem' then
+        M.pump_alert_panel_native_names(PANEL,marker_localization.lookup,M.language.current(),M.panel_locale(),
+            stratagem_catalog.state.generation,M.frames,function()
+                PANEL.version=(PANEL.version or 0)+1
+            end)
+    end
     local signature = panel_signature()
     if signature ~= PANEL.sig then
         if PANEL.gui then
@@ -10702,7 +11145,7 @@ note('installed: ' .. tostring(M.status))
 -- README comment below is part of the same chunk.
 do return M end
 
---[===[AutoChat / 自动聊天  v1.0.0 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
+--[===[AutoChat / 自动聊天  v1.1.3 candidate  —— SETTINGS + PLAYER TEMPLATES + ADDON API
 
 English
 -------
@@ -10733,6 +11176,10 @@ global cooldown and prioritizes new events, while master/dedup still apply.
 No zero-cooldown rules are seeded; configure individual rules when needed.
 Native names/icon materials/stable IDs follow the workspace StratagemCooldown
 reader. Search/filter and red/blue/green bulk enable/disable are available.
+On the English UI, built-in Chinese presets stay hidden; Chinese custom text uses
+an English display placeholder in the panel and plugin canvas. This changes only
+what is drawn: saved values, edit buffers and outgoing UTF-8 messages are untouched.
+The Chinese UI continues to display Chinese values.
 Icons draw only when the game's material is already loaded. Same-name variants
 with the same call type share one GUI rule (resupply/reward and jump packs).
 Actual event variant IDs remain unknown when ambiguous. Unresolved identities
@@ -10780,7 +11227,16 @@ repeat tasks; there is no separate quick-timer sender or settings page.
 Manual console send/force remain explicit squad sends. New native local display
 requires an in-game check; offline tests do not establish multiplayer visibility.
 
-The panel (hotkey K)
+The panel hotkey defaults to K when Mod Bindings Menu is unavailable. When that
+menu is ready, AutoChat registers a rebindable "Toggle AutoChat panel" action under
+Mods > AutoChat. Assign its key on the bindings page; the registered action then
+replaces K. The menu persists the assigned key with its native game settings.
+The menu API has no default-key setter, so a new menu registration starts unbound.
+After rebinding, verify in game that the new key both opens and closes the panel;
+offline tests cannot confirm that the game keeps refreshing this action while
+AutoChat's raw keyboard input lock is active.
+
+The panel (hotkey K or Mod Bindings Menu action)
 --------------------
   - Armory Forge's 1000x990 frame, shield, title strip, tabs and two-column layout
   - uses verified loaded game fonts; readable sizes and higher text contrast
@@ -10859,13 +11315,14 @@ Files / 文件位置
 
 简体中文
 -------
-**不打开聊天栏**即可把一条聊天发给小队，键鼠不会被夺走。游戏内按 **K** 呼出面板。
+**不打开聊天栏**即可把一条聊天发给小队，键鼠不会被夺走。无按键菜单时游戏内按 **K** 呼出面板。
+Mod Bindings Menu 就绪后，在按键设置页的 **Mods → AutoChat** 中给“Toggle AutoChat panel”指定按键；该动作注册后取代 K。菜单按其原生游戏键位设置保存改键；首次注册没有默认键，需要手动指定。
 
 为什么能不发聊天栏就发聊天：聊天框做四件事——夺取键鼠、画框、收集按键、调发送。
 "被卡在聊天栏"是前两件。本模组只要最后一件：聊天框自己用的那个聊天对象和那个发送
 函数。所以没有框，也没有输入锁。
 
-面板（快捷键 K）
+面板（默认快捷键 K；Mod Bindings Menu 动作注册后由菜单改键）
   - 沿用 Armory Forge 的 1000×990 框架、盾形标识、双栏、标签与控件
   - 字体先校验游戏资源已加载；提高字号与对比度，长文字省略，不再缩成6像素
   - 打开时解除鼠标锁定以便点击；关闭时把光标与裁剪矩形**原样**归还

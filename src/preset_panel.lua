@@ -68,7 +68,23 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
         index_cache={revision=revision,entries=entries,by_id=by_id}
         PANEL.preset_index_cache_by_role[role]=index_cache
     end
-    if selected_id and not index_cache.by_id[selected_id] then
+    local locale=font_ok and 'zh' or 'en'
+    if index_cache.display_locale~=locale then
+        local display_entries,display_by_id={},{}
+        for _,entry in ipairs(entries) do
+            local hidden=locale=='en' and entry.builtin==true
+                and entry.id=='builtin-'..role..'-zh'
+            if not hidden then
+                display_entries[#display_entries+1]=entry
+                display_by_id[entry.id]=entry
+            end
+        end
+        index_cache.display_locale=locale
+        index_cache.display_entries=display_entries
+        index_cache.display_by_id=display_by_id
+    end
+    local display_entries=index_cache.display_entries
+    if selected_id and not index_cache.display_by_id[selected_id] then
         selected_id=nil;PANEL.preset_selected_by_role[role]=nil
     end
     if not selected_id then
@@ -77,23 +93,24 @@ local function draw_preset_panel(UX, PANEL, automation, preset_library, font_ok,
         if english and english.builtin==true then selected_id=english_id;PANEL.preset_selected_by_role[role]=english_id end
     end
     local selected=selected_id and index_cache.by_id[selected_id] or nil
-    local count_text=say('共 '..#entries..' 个预设',#entries..' PRESETS')
+    local count_text=say('共 '..#display_entries..' 个预设',#display_entries..' PRESETS')
     local count_h=text_block(count_text,40,TOP+20+list_title_h+4,12,C.MUTED,306)
     if preset_library.state.error then
         local error_top=TOP+60
         text_block(say('预设库读取失败，已锁定写入：','LIBRARY ERROR; WRITES DISABLED:'),40,error_top,12,C.BAD,300)
-        text_block(preset_library.state.error,40,error_top+26,11,C.BAD,300)
-    elseif #entries==0 then text_block(say('暂无已保存预设','NO SAVED PRESETS'),40,TOP+66,14,C.DIM,300) end
+        text_block(status_text and status_text(preset_library.state.error) or preset_library.state.error,
+            40,error_top+26,11,C.BAD,300)
+    elseif #display_entries==0 then text_block(say('暂无已保存预设','NO SAVED PRESETS'),40,TOP+66,14,C.DIM,300) end
     PANEL.preset_page_size_by_role=PANEL.preset_page_size_by_role or {}
     local list_top=math.max(TOP+98,TOP+20+list_title_h+count_h+16)
     local page_size=math.max(1,math.min(16,math.floor((H-160-list_top)/36)))
     PANEL.preset_page_size_by_role[role]=page_size
-    local pages=math.max(1,math.ceil(#entries/page_size))
+    local pages=math.max(1,math.ceil(#display_entries/page_size))
     local page=PANEL.preset_page_by_role[role] or 1
     page=math.max(1,math.min(pages,page));PANEL.preset_page_by_role[role]=page
     local first=(page-1)*page_size+1
-    for i=first,math.min(#entries,first+page_size-1) do
-        local entry=entries[i];local y=list_top+(i-first)*36
+    for i=first,math.min(#display_entries,first+page_size-1) do
+        local entry=display_entries[i];local y=list_top+(i-first)*36
         local chosen=entry.id==selected_id
         rect(38,y,308,30,chosen and C.ROW_HI or C.ROW,951)
         border(38,y,308,30,chosen and C.YELLOW or C.LINE2,952)

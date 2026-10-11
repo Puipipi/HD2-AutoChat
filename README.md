@@ -1,423 +1,166 @@
-# 自动聊天 / AutoChat
+# AutoChat
 
-![AutoChat 封面](assets/cover-autochat.png)
+English / [简体中文](https://github.com/Puipipi/HD2-AutoChat/blob/main/README_cn.md)
 
-封面生成说明：[assets/cover-autochat.prompt.txt](assets/cover-autochat.prompt.txt)。
+![AutoChat cover](assets/cover-autochat.png)
 
-一个 Helldivers 2 的 Bingus/MDL 加载器模组：**不打开聊天栏，直接把文字聊天发给小队。**
+[Cover artwork notes](assets/cover-autochat.prompt.txt).
 
-"玩家被聊天栏卡住"是聊天框**夺取键鼠**造成的；而发消息只需要它最后一步——
-调用发送函数。所以不需要那个框在场，也就没有输入锁。
+A Helldivers 2 mod for the Bingus/MDL loader: **send text to the squad without opening the chat box.** The current release is [AutoChat 1.1.3](https://github.com/Puipipi/HD2-AutoChat/releases/tag/v1.1.3), build `v1.1.3-build.1`.
 
-游戏内按 **K** 呼出控制面板（打开时自动解除鼠标锁定，关闭时原样归还）。
-
-已发布版：[AutoChat 1.0.0](https://github.com/Puipipi/HD2-AutoChat/releases/tag/v1.0.0)。本次构建：[v1.0.0-build.2](https://github.com/Puipipi/HD2-AutoChat/releases/tag/v1.0.0-build.2)。
-1.0.0 将插件 API 与接口示例文档随包附带，便于第三方作者离线查阅；界面会跟随受支持的游戏语言在简体中文与英文间切换，插件可提供 `name_en` 作为英文标签。插件 API v2 revision 4 提供独立发送、角色设置快照、受限绘图和可选插件预设 hooks。实际游戏和原生 GUI 的性能仍待用户实测，离线桩环境不能证明每帧低于0.05毫秒。
-
-| 项 | 值 |
+| Item | Value |
 | --- | --- |
-| 版本 | 1.0.0 |
-| 资源名 | `mods/codex/auto_chat` |
+| Game resource | `mods/codex/auto_chat` |
 | GUID | `a1000000-0000-4000-8000-000000000022` |
-| 前置 | Bingus Shared Loader v15+ / API 1 |
-| 目标 build | Steam build 25480438 / EXE 1.8.46015.0 |
-| 快捷键 | **K** 开关面板 |
+| Dependency | Bingus Shared Loader v15+ / API 1 |
+| Recorded target | Steam build 25480438 / EXE 1.8.46015.0 |
+| Panel toggle | K without a working Mod Bindings Menu registration; otherwise bind the AutoChat action in **Mods → AutoChat** |
 
-## 面板与定时发送
+## Panel and scheduled messages
 
-插件扩展契约见[插件 API 文档](docs/PLUGIN-API.md)。它保留原有 API v2 严格握手，并通过 revision/capabilities 暴露独立发送、设置快照与受限绘制能力。
+Open the panel, then choose **Settings → Alerts → Stratagem rules** or **Enemy size / flying alerts**. Host and client profiles store their rules separately. Stratagem rules provide per-entry switches, separate world-marker and call-in messages/cooldowns, search by name or ID, paging, color filters, and batch changes for a group or filtered results. Mission stratagems have a separate group switch; red, blue, and green controls only affect their own color groups. The current catalog has 149 valid native entries organized into 135 settings groups; new game data may change this. The six confirmed SEAF shell mission buildings use the existing mission-building alert path. See [stratagem reference](docs/STRATAGEM-REFERENCE-0.8.0.md), [enemy coverage](docs/ENEMY-COVERAGE-0.8.0.md), and [ping classification](docs/PING-CLASSIFICATION-0.7.0.md).
 
-**新增细分设置：** 按 K → 设置 → 标记消息 → **战备细分设置** 或 **敌人体型 / 飞行提醒**。主机、客机预设分别保存这些规则，客机原有“仅自己可见”输出保持有效。
+Enemy alerts support small, medium, large, massive, and flying categories. Flying classification takes priority over size; ordinary supplies are excluded. The size labels come from the game's `UnitSize` enum, not armor or threat level. Coverage is tied to a dated game-data snapshot, not a guarantee for future enemies. A game binary change disables unsafe reads until offsets are checked again.
 
-- 战备：游戏名称与已加载的原生图标、名称/ID 搜索、分页、颜色筛选、红蓝绿各类一键开启/关闭。逐项设置开关、落地物品标记消息、召唤/执行消息、独立冷却；支持按分组或筛选结果跨页批量修改单个字段或重置。
-- 敌人：小型、中型、大型、巨型、飞行分别开关，自定义标记模板和冷却。飞行分类优先于体型，不受原体型开关影响；小型默认关闭，普通物资仍不提示。
-- 消息留空沿用当前预设的默认模板。冷却留空使用全局每人间隔；填入秒数时按**触发者 + 此规则**独立计时，不占用全局间隔；**0 表示每次新的有效事件都提醒**，仍遵守总开关、会话和去重校验。默认不添加零冷却规则。
-- 变量在面板内按界面语言提示中文或英文写法，二者可混用；例如召唤模板：`{缩写}扔出{目标}，注意避让！` 或 `{short} called in {target}`。中文用 Ctrl+V 粘贴，Enter 保存，Esc 取消。
-- 主机和客机分别保存命名预设与定时任务。应用按钮会标出目标角色；旧版预设没有任务定义时保留目标角色的现有任务。旧版已启用的快捷定时只迁移一次为普通重复任务，之后不再有独立快捷定时入口或隐藏发送器；未保存过的任务无法恢复。
-- 战备规则页可单独启用或关闭任务战备组，颜色组按钮仍只控制红/蓝/绿组。目录显示语言跟随界面；自动消息名称按所选消息语言，当前149项战备提供英中名称。未知条目使用本地化通用名称。六种核实过的SEAF炮弹补入现有任务建筑提醒。
-- 游戏内中文输入与战备召唤/ping、公屏多人发送仍待用户实测。
+Leave a per-rule message blank to use the selected preset's default. A blank cooldown uses the global per-player interval; a numeric value is tracked per triggering player and rule. `0` allows every new valid event through the cooldown check while the master switch, session checks, and event deduplication still apply. Default profiles do not add zero-cooldown rules. Template hints follow the interface language, and Chinese and English aliases can be mixed. Examples and variable meanings are in [player templates](docs/PLAYER-TEMPLATES.md).
 
-### 默认消息与语言
+Scheduled tasks support repeating intervals, one-time countdowns, and local-time daily schedules. Intervals and countdowns accept 5 seconds through 24 hours; daily schedules use times such as `21:30`. Messages allow up to 200 UTF-8 bytes. Tasks use system time rather than frame count. A missed repeating schedule sends once, countdowns include time while the game is closed and are attempted on the next run, and daily tasks are attempted at most once per day. They wait when session, chat, or role conditions disallow output, and the panel shows the reason. Tasks do not consume event cooldowns; the earliest due task runs first. Data is saved to `%LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\tasks.txt` and is never executed as Lua.
 
-新安装使用英文消息模板。命名预设中始终有两个不可覆盖、重命名或删除的内置项：“中文默认预设”和“English Default Preset”（主机 ID 为 `builtin-host-zh` / `builtin-host-en`，客机 ID 为 `builtin-client-zh` / `builtin-client-en`）；它们分别从主机、客机各自的默认配置生成。只有选择预设并点击“应用”才会替换对应角色的配置。游戏语言变化只刷新界面，不会更改消息、规则或任务。已有设置中缺少 `message_language` 的旧配置按 `auto` 兼容读取，并保留原消息；保存的自定义文本不会因界面语言变化而被改写。新配置默认使用固定英文消息；内置中文预设应用后使用固定中文消息。`message_language` 是预设内部字段，主设置没有单独的消息语言选项。
+The panel has a settings tab with sections for scheduled tasks, automatic messages, and alerts. Choose which host/client profile to edit in the upper-right; the current game role selects which profile is active. Drag the title bar to move the panel; the position scales with resolution and is saved. Use Ctrl plus/minus to scale and Ctrl+0 to reset. Lists and details scroll within their own regions; click a task row to view its full name and message. Click and release on the same control to activate it; moving away before release cancels the action.
 
-不再限制预设、定时任务或规则的条目数量：单个预设最多 1 MiB，预设库最多 16 MiB，任务文件最多 16 MiB，各字段仍有自己的长度和格式校验；这不是无限存储。默认配置不预置零冷却规则；你添加的零冷却规则会保留，且仍遵守会话、总开关与事件去重校验。自动消息中的玩家名称与玩家标记缩写前缀由同一个“玩家名称与缩写使用队员颜色”开关控制；插件直接发送的文字不会被自动染色。
+When open, AutoChat blocks game keyboard and mouse input and releases the mouse for panel interaction. It restores input on close, focus loss, or exit. During text editing K is treated as a character; leave the field to use the hotkey. The close button remains available. Ctrl+V pastes Unicode, Enter confirms, Esc cancels, and Ctrl+A selects all. Editing a task draft does not alter an already-added task until saved. See the [stratagem rules preview](docs/stratagem-rules-preview.png), [enemy rules preview](docs/enemy-rules-preview.png), and [settings preview](docs/settings-preview.png); these are mockups, not game screenshots.
 
-战备读取参考仓库 StratagemCooldown 的原生目录、稳定 ID、内部英文调试名和颜色家族，另验证图标材质字段。0.8.1 候选版的目录编辑器显示这些英文调试名，避免扫描时批量调用游戏本地化函数；实际战备事件消息仍使用现有事件名称路径。新条目在**同一已支持布局**下自动加入，未知家族列在“任务等”，仍可逐项设置；图标资源尚未加载时保留名称。同名且呼叫方式一致的普通版、奖励版等合并为一个面板规则，并显示变体数，解决重新补给、跳跃背包等共享名称键造成的漏配；事件仍只在能唯一确认时提供具体变体 ID。资源连接既不能确定具体 ID、也不能确定同名规则时，沿用默认提醒。当前149条有效原生记录形成135个可见设置组；同名规则须同时匹配两种名称键和呼叫类型。游戏更新后，新增同组变体可能改变代表项 ID，请检查组内配置。图标仅在游戏已加载对应材质时绘制。
+With Mod Bindings Menu available and AutoChat's action successfully registered, the menu action becomes the only toggle source. It starts unbound, so assign a key on **Mods → AutoChat**. The old K key no longer toggles after registration. If the menu is absent, not ready, or registration fails, K remains the fallback. Offline tests use simulated native action-state bytes; they cannot confirm that the game keeps updating the action while AutoChat's input lock is active. Verify that the selected key opens and closes the panel in game.
 
-敌人体型来自游戏内部 `UnitSize` 枚举 `Small / Medium / Large / Massive`，不是装甲等级或威胁等级；飞行是根据游戏组件另分的类别。旧 79 条目录有遗漏；本版核对了当前数据的 **142 条可标记敌对资源（含变体、12 条飞行）**，排除友军。公开配置快照为 2026-09-22 / 1.007.100，不能称为未来全部敌人都自动覆盖。游戏二进制改变时读取会停用，需验证新偏移；新敌人也需更新经核实的组件目录。依据见 [敌人覆盖报告](docs/ENEMY-COVERAGE-0.8.0.md) 和 [战备读取报告](docs/STRATAGEM-REFERENCE-0.8.0.md)。
+Plugins retain the API v2 handshake and can negotiate revisions and capabilities for independent sends, role settings snapshots, constrained drawing, and optional preset hooks. See [Plugin API](docs/PLUGIN-API.md). Plugin sends are not automatically recolored.
 
-### 命名预设与文件交换
+### Default messages and language
 
-在面板右上方选择主机或客机预设，再打开“命名预设”，可将当前所选角色的自动消息选项、定时任务定义和逐战备/逐敌人规则保存到本机预设库。主机和客机预设池彼此独立，同名预设可分别存在；当前选中项也按角色保存。两个内置默认预设始终保留，用户预设可保存、替换、重命名、应用、删除，也可导出或导入 `.autochat` 文件。导入文件只会将预设加入本机库；选择预设并点“应用”后，才会更新当前选定角色的配置，不会切换当前主客机身份。预设池不限制条目数，但仍受文件大小和字段校验限制。
+New profiles use fixed English message templates. Built-in Chinese and English presets exist for both host and client (`builtin-host-zh`, `builtin-host-en`, `builtin-client-zh`, `builtin-client-en`) and cannot be overwritten, renamed, or deleted. Select a preset and choose **Apply** to replace the selected role's settings; changing the game interface language does not apply a preset or rewrite saved messages. English UI hides built-in Chinese presets without deleting their IDs or data. Old configurations without `message_language` are read as `auto` while retaining their original text. New configuration defaults to English messages; applying a Chinese built-in preset selects fixed Chinese messages. `message_language` belongs to each preset; there is no separate message-language setting in the main settings page.
 
-`.autochat` 使用有长度限制的数据格式，逐项检查字段、转义和取值；普通文本字段须为有效 UTF-8，不会执行 Lua。profile v5 的可选插件数据是不透明字节串，经转义后保存，不要求其内部内容为 UTF-8。配置落盘采用临时文件原子替换。若预设库文件损坏，面板会报告错误并停用库操作，不会用空库覆盖原文件。更完整的行为和验证边界见 [0.8.0 验证记录](docs/AUTOMATION-0.8.0-VERIFICATION.md)。
+The player name and abbreviated prefix in automatic messages share the teammate-color setting. Plugin text is not automatically colored. Local-only chat output uses the game's ordinary chat row and name format; it is not a nameless system broadcast.
 
-离线布局预览：[战备细分](docs/stratagem-rules-preview.png)、[敌人细分](docs/enemy-rules-preview.png)。预览使用示例条目，不是游戏截图，未伪造原生图标。
+### Named presets and file exchange
 
-按 **K** 开关独立面板。沿用 Super Earth Armory Forge 的 **1000×990** 面板单位、
-盾形标识、标题栏、黄色顶线、标签斜纹、左右双栏、配色和控件；默认只有一个 **设置** 标签。
-左栏可切换 **定时任务 / 自动消息 / 标记消息**，右栏显示任务列表。右上方可选择要编辑的主机/客机预设。
-面板打开时按 Armory 的方式屏蔽游戏键鼠（包括 Esc、O），关闭、失焦或退出时恢复。
-拖动顶部条移动窗口，位置随分辨率缩放并保存；Ctrl +/- 缩放，Ctrl+0 复位。
-按钮按下时选中，松开仍在同一按钮内才执行；按下后移开可取消。
+Host and client have independent named-preset libraries and remember the selected item per role. A preset stores automatic-message options, scheduled-task definitions, and per-stratagem/per-enemy rules. User presets can be saved, replaced, renamed, applied, deleted, exported, and imported as `.autochat` files. Import only adds an item to the local library. Applying it updates the selected role and does not switch host/client identity. Applying task definitions creates new task IDs and deadlines. Older presets without task definitions leave that role's current tasks intact.
 
-| 输入 | 作用 |
-| --- | --- |
-| 事件名称 | 自定义任务名称 |
-| 重复间隔 | 每隔自定义秒数发送一次（5–86400 秒） |
-| 一次倒计时 | 自定义秒数后尝试发送一次（5–86400 秒） |
-| 每天定时 | 自定义本机时刻，例如 `21:30` |
-| 发送消息 | 自定义内容，最多 200 个 UTF-8 字节 |
-| 添加定时任务 | 校验并保存；列表支持暂停、启用、重启和删除 |
+The `.autochat` format bounds and validates fields, escaping, and UTF-8 text, and does not execute Lua. Optional plugin data in profile v5 is escaped opaque bytes and need not be UTF-8. Writes use a temporary file and atomic replacement. A preset is limited to 1 MiB, the library to 16 MiB, and tasks to 16 MiB. If a library file is damaged, the panel reports the error and disables library operations instead of overwriting it with an empty library. See [automation verification 0.8.0](docs/AUTOMATION-0.8.0-VERIFICATION.md), [0.7.9](docs/AUTOMATION-0.7.9-VERIFICATION.md), and [0.7.8](docs/AUTOMATION-0.7.8-VERIFICATION.md).
 
-点击输入框后可键入文字并使用游戏内输入法；Ctrl+V 仍可粘贴 Unicode。
-Enter 确认当前输入，Esc 撤销当前输入，Ctrl+A 全选；最后点“添加定时任务”保存。
-编辑草稿不会改变已添加任务的消息。编辑时 K 是字符；退出输入后 K 才关闭面板，也可点右上角 X。
+Legacy enabled single-task timers migrate once from `panel.txt` to the task list. Unsaved task definitions cannot be recovered. Older task migration and role behavior are detailed in the verification notes above.
 
-任务、预设和标记详情可在各自区域内滚动；点击任务行文字可查看完整名称与消息。面板自有长标签和说明按字体测量换行，重复/倒计时范围为 **5 秒至 24 小时**，输入提示完整显示 Enter 确认与 Esc 取消。英文界面预览包只切换面板语言，不改变消息语言、预设或插件语言；标准包仍跟随游戏语言。
+## Why no chat box is needed
 
-字体沿用 Armory 的加载校验及回退链：游戏字体 → 调试字体 → 点阵。
-本版提高最小字号和文字对比度；长标签会按可用宽度换行，不再把字号缩到6像素。在1080p下至少14像素、1600p下至少21像素。
-只有资源确实已加载才创建材质，GUI 只在 world 就绪后建立；像素边界取整，签名变化才重建。
-离线布局预览见 [settings-preview.png](docs/settings-preview.png)，**不是游戏截图**。
-
-任务使用真实系统时间，计时不依赖 FPS。重复任务错过多个间隔时只补一次；倒计时包含游戏
-关闭期间经过的时间，到期后在下次运行时尝试一次。每天任务每天最多尝试一次；当天漏过时刻的
-已存任务会在启动后补一次，新建且当天时刻已过的每日任务则从明天开始。
-暂停后重新启用的间隔/倒计时任务从完整秒数重新计时。
-
-任务按当前身份的输出方式，走已校验的小队发送或本地聊天显示函数。无会话、聊天关闭或角色条件不满足时保留等待，
-显示具体原因，不直接消耗一次倒计时。定时任务忽略事件冷却，也不会占用或延长事件冷却。多个到期任务按最早截止时刻优先。
-单人房间默认允许发送，可以在自动消息里关闭。
-**仅在游戏运行且模组加载时执行**。任务保存于
-`%LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\tasks.txt`，不执行配置中的 Lua 代码。
-旧 `panel.txt` 中已启用的单任务在升级时迁移为列表中的“旧版定时发送”，不保留隐藏计时器。
-
-**主机 / 客机预设（0.7.9）**：右上方按钮选择编辑哪套设置，实际启用哪套由当前主客机身份自动决定。
-欢迎开关及文本、标记分类及模板、冷却、总开关、无人房间策略和输出方式分别保存；编辑另一套不会改变当前正在使用的设置。
-定时任务也分别归入两套预设，只显示和执行对应身份的任务。任务数量不设业务上限，保存文件仍受大小和格式校验限制。切换身份不重置任务截止时间。命名预设只保存任务行为定义，应用时会生成新的任务编号和下一次截止时间。
-旧设置与旧任务归入主机预设；客机复制旧标记偏好和文本，默认关闭欢迎、允许客机运行、输出为“仅自己可见”。旧任务不会自动复制到客机。
-主机保留原来的欢迎开关，可手动开启；首次安装欢迎仍默认关闭。
-
-在“自动消息”中选择 **小队公屏 / 仅自己可见**。后者只把文字添加到本机游戏聊天记录并显示，
-不调用网络聊天发送，其他玩家无需安装模组，也收不到这条提示。它仍使用游戏普通聊天行的姓名格式，未实现无姓名系统广播。
-此选择覆盖欢迎、玩家标记、战备召唤/执行、定时任务和注册模组的发送接口。控制台手动 `autochat send/force` 仍是明确的小队发送命令。
-本地入口校验失败不会回退到公屏；身份尚未确认时暂停自动输出。切换身份会取消旧欢迎/标记队列并重置自动消息冷却。
-本地模式仍需开启游戏文字聊天，也受所选角色预设的总开关和无人房间策略控制。
-实现依据和实机验证边界见 [0.7.9 验证记录](docs/AUTOMATION-0.7.9-VERIFICATION.md)。
-
-自动消息设置：总开关、主机/客机独立配置并按当前会话身份启用、无人房间允许发送、标记/召唤提醒间隔、新人欢迎开关、
-自定义欢迎消息与欢迎延迟。默认总开关开启、主客机都允许、允许单人、冷却5秒，欢迎关闭、延迟2秒。
-欢迎按玩家 ID 新增触发；启用功能或进入另一房间时，已有队友不会被当成新人。
-身份来自游戏会话 API；身份未确认时不会选择主机配置发送。
-
-0.7.0 的标记分类为 **任务建筑、战备提示、中型敌人、大型敌人、巨型敌人、地图标记**。
-普通弹药、手雷、针剂、样本不再提示。保留旧设置，旧任务地点开关迁移为任务建筑，旧小物品开关迁移为战备提示。
-本人和队友的新标记均接入原生读取，中型/大型/巨型敌人覆盖当前数据表中79种已知敌人资源。
-重新补给舱/补给箱与M-103补给车归入“战备提示”；普通弹药、针剂、样本仍不提示。
-本人标记使用本人的事件间隔。事件冷却期间新到的标记、召唤和执行通知会直接丢弃，不会排队补发；欢迎和定时任务忽略事件冷却，也不会占用或延长它。首次读取只记录已有标记，之后的新标记才触发。
-任务建筑与战备优先读取游戏标记的本地化名称；支持 TCS、LAS-98 激光大炮、堡垒坦克等42种新增资源兜底。
-目录外的特殊目标，使用原生特殊标记类型与游戏提供的名称识别；名称尚未加载会在标记有效期内重试。
-地图图钉读取玩家实际同步状态，不依赖物品标记环。标记任务图标时，`{目标}` / `{任务名}` 使用游戏地图名称，
-包括“获取发射代码”这样的前置任务。`{任务类型}` 来自当前任务记录：主线任务、主线前置任务、支线任务、战术任务。
-同一“摧毁非法广播”名称可在不同任务配置里属于主线或支线，分类不按名字写死。名称未加载时等待重试。
-普通地面空点、地图空白点不发送消息；“地图任务 / 撤离区”开关只处理任务图标和撤离区图钉。
-任务旗杆和可携带任务旗帜补充资源兜底，分别显示“超级地球旗杆”“任务旗帜”；不会将 CQC-1 旗帜武器当成任务建筑。
-0.7.8 将任务/撤离目录扩展为220个资源，包括雷达/广播/科研站、SEAF火炮与防空阵地、机器人迫击炮/防空炮阵地及干扰器/探测塔/轨道炮/指挥碉堡、
-虫族孢子/孢肺/尖啸虫巢穴、燃料/导弹/数据/撤离设施及任务携带物。184个有具体资源名，36个只能确认任务终端或交互物。
-这些是资源数量，不是220种任务。名称优先使用游戏具体标记文字；仅返回“特殊地点”“终端”“敌方单位”时，改用已核实资源的名称。
-有目标实体的地面式标记可识别上述任务对象，空地仍不发。普通物资仍排除；任务弹药、数据和幼虫等交互物归“任务建筑”开关。
-目录与证据见 [任务地点适配](docs/AUTOMATION-0.7.8-VERIFICATION.md)；无法核实具体身份的目标不会猜成附近某个任务。
-召唤战备与手动标记落地战备分别处理：“战备召唤 / 任务执行”的召唤模板为 `{玩家名}召唤了{目标}`，
-“战备物品标记”继续使用原标记模板。二者独立开关，可分别自定义消息，均受标记总开关与发送策略约束。
-原地执行类调用（如上传数据）使用单独可编辑模板 `{玩家名}正在开始{目标}`；已核对22项非投掷战备。
-`{动作}` 按事件为“召唤”“开始”或“标记”。共享记录不能确认触发者时显示“小队”，避免错写本机名字；其他玩家资料缺失时回退“队友”。
-现场撤离信标、鹈鹕飞船与地图撤离区分别命名，仍由任务建筑/地图开关控制。
-`{位置}` 是世界 XYZ 坐标，不是地图网格编号。现场标记若仅返回“特殊地点”且无目标ID，则使用原标签，不猜建筑名。
-要读取具体任务名，请在地图上标记任务图标。本次实机采样确认任务名为“关停非法广播”、敌人名为“武斗虫”、补给小车名为“补给型快速侦察载具”。
-默认标记功能关闭；开启后处理本人和队友的新标记，进入房间时已有标记只建基线。
-提示消息支持 `{类别}`、`{目标}`、`{触发者}`、`{位置}`；地图任务另支持 `{任务名}`、`{任务类型}`。变量提示在面板分行显示；队列最长保留15秒。
-旧默认模板 `队友标记了{类别}，请注意！` 自动升级为 `标记了{目标}`。旧内置标记模板精确迁移为无尾注版本；其他自定义模板保持原样。
-其他自定义模板保持原样；要显示任务名，请在标记消息中填写 `标记了{目标}（{任务类型}）`。
-实际聊天发件人仍是运行模组的玩家；可开启触发者缩写和队色前缀，例如 `[A2] 标记了非法广播`。
-完整玩家名称与缩写前缀共用真实 HUD/peer 队员颜色字段；字段缺失时显示无色名称，不按玩家列表顺序猜颜色。插件直接发送的文字不会自动染色。
-“标记/召唤提醒间隔”用于标记、召唤和执行事件，按触发玩家分别计算，默认5秒，设0不限制；欢迎和定时任务不受此项限制。
-事件冷却中的通知直接丢弃；欢迎按新人分别延时发送，且欢迎和定时任务不读取或更新事件冷却记录。
-暂时发送失败、等待重试的事件不会阻塞其他可发送玩家；冷却中的事件不会入队。未指定触发者的扩展发送仍使用本机玩家间隔。
-
-欢迎、标记、定时任务、扩展发送可使用模板变量（不需要写正则表达式）：
-
-| 变量 | 内容 |
-| --- | --- |
-| `{玩家名}` / `{名字}` / `{触发者}` | 对应玩家的名字 |
-| `{缩写}` | 游戏HUD缩写，例如 `A2` |
-| `{编号}` | 真实队伍槽号，例如 `2`；按游戏字段取值，不按入房顺序猜 |
-
-例如欢迎语：`欢迎 {玩家名}（{缩写}，{编号}号）加入小队！`。
-欢迎语代入新人，标记语代入标记者，定时任务代入本机玩家。未知变量原样保留，资料缺失时显示“队友/队友/?”。
-游戏关闭重启或切换房间时重新计时；不同玩家电脑上的模组仍各自运行，不互相同步。
-完整用法见 [每人间隔与玩家模板](docs/PLAYER-TEMPLATES.md)。
-此版本的标记读取和输入拦截经过离线验证，仍需游戏内验收。
-详细范围与证据见 [标记分类说明](docs/PING-CLASSIFICATION-0.7.0.md)。
-设置写入 `AutoChat/settings.txt`，通过临时文件原子替换；窗口位置写入 `AutoChat/panel-position.txt`。
-
-其他模组可通过 `HD2AutoChatAPI.register` 注册名称、绘制、点击和标记事件回调；注册名会成为“设置”旁的菜单。
-最多16个扩展菜单，较多时可翻页；发送遵守宿主策略。见 [接口文档](docs/PLUGIN-API.md)。
-独立示例 [AutoChat-Interface-Demo-0.7.0.zip](dist/AutoChat-Interface-Demo-0.7.0.zip) 注册“接口示例”，
-包含标记计数开关和测试发送按钮，加载时不自动发送。源码见 `src/examples/interface_demo.lua`。
-
-**关于 user32（重要）**：面板要读 K 键、要解除鼠标锁定，就必须用 user32。LuaJIT 的
-`ffi.cdef` **保留第一次声明**，所以本模组**逐条先检测该符号是否已被声明**，只在确实
-没有时才补，且原型**逐字照抄 Super Earth Armory Forge**。这样无论哪个模组先声明，
-进程里那一份都完全一致，谁也废不掉谁。构建门禁会校验这一点：任何与参考不一致的
-user32 原型都会被拒绝打包。
-
-
-> **已实机验证：同小队的另一名玩家（另一台机器、另一个人）看到了消息 —— 两个方向都确认了。**
-> 本机当主机发 10 条、再当客机发 10 条，全部走**正常路径**（一次都没用强制旁路），
-> 游戏自身 `history` `0/5 → 0/37`，对端两次都当场确认聊天栏里出现了这些消息
-> （`他看到了` / `可以，都能看到`）。
-> 见 [多人投递验证](docs/LIVE-EVIDENCE-MULTIPLAYER-2026-10-08.md)。
->
-> 发送路径本身另有机器码级证明：反汇编**聊天框自己的调用点**后，网络上下文全局
-> `game.dll+0x347CEF0`、聊天对象偏移 `+0xC418`、发送函数 `game.dll+0x1097560`
-> 三个地址与本模组使用的**完全相同** —— 走的是你手打一条所走的同一条路径，
-> 不是本地自绘/回显。可用 work/standalone/tools/verify_send_site.py 重复核对。
->
-> **仍未验证**：只测过 **1 名**对端（3–4 人小队未测）；"以 -1 广播给所有对等端"
-> 仍是照抄第三方的说法、没有独立追证。详见文末未验证清单。
-
----
-
-## 为什么能绕开聊天栏
-
-游戏自己的聊天框做四件事：**夺取键鼠 → 画个框 → 收集按键 → 调用发送函数**。
-
-前两件就是"卡住"的来源。发送本身只是把一段文本交给一个函数：
+The game chat box captures input, draws a window, collects keys, and finally calls a send function. AutoChat uses that final send path without opening the window. The recorded call uses the network context's chat object at `ctx + 0xC418` and `game.dll + 0x1097560`. This is based on a read-only reference implementation and the project's recorded checks; the project does not redistribute that reference source. The [multiplayer delivery report](docs/LIVE-EVIDENCE-MULTIPLAYER-2026-10-08.md) describes the dated live test and its limits.
 
 ```text
-ctx + 0xC418                      网络上下文里的聊天对象
+ctx + 0xC418                      chat object in the network context
 game.dll + 0x1097560              LmChatSend(chat, 0, text_buffer)
 ```
 
-这是聊天框**自己也调**的同一套东西（`game.dll+0x186025d` 就是聊天框的调用点）。
+## Safety design: verify before calling
 
-这不是推测：第三方模组 `mods/cowboybingus/better_lobby_management` 已经这么
-发小队消息了。本仓库的偏移与机器码**全部取自它的源码记录**，没有自己猜。
+Absolute addresses are observations for a particular game binary and can become invalid after an update. At startup, the mod checks five machine-code prefixes; any mismatch disables sending for that session and reports the expected and actual bytes. It casts a callable function pointer only after validation. Before each send it checks the network session, chat object, and game text-chat setting. Lua `pcall` catches Lua errors only; it cannot catch a native process fault. Prefix lengths stop before relative-call bytes whose relocation can change without changing function identity. Offline provenance tests compare bytes with the recorded reference.
 
----
+| RVA | Meaning | Checked bytes |
+| --- | --- | ---: |
+| `0x1097560` | chat send function | 32 |
+| `0x0bde430` | RPC send | 28 |
+| `0x186025d` | chat-box call site | 21 |
+| `0x0beb103` | chat message RPC construction | 16 |
+| `0x1097a7c` | chat-history read | 12 |
 
-## 安全设计：先验证，再调用
+### Cross-mod `ffi.cdef` conflicts
 
-模组的所有绝对地址都是**某一版二进制**的观测值，游戏一更新就全废。拿一个没验证
-的地址去调用，轻则"装上了但什么都不做"，重则在 `game.dll` 里 fault 把进程带走——
-而 `pcall` **抓不住原生崩溃**。所以顺序是硬性的：
-
-1. **启动时校验 5 段机器码前缀**（下表）。任何一段不符 → 整局停手，日志写明
-   **是哪一段**、期望值与实际值各是什么。不符之后本文件里**任何**偏移都不会被使用。
-2. 只有校验通过，才 `ffi.cast` 出可调用的发送函数指针。
-3. 每次发送前再判断：网络会话存在、聊天对象可读、游戏自己的聊天开关是开的。
-4. 发送用 `pcall` 包住——但**不把 pcall 当安全网**，它只拦 Lua 级错误。
-
-| RVA | 内容 | 校验长度 |
-| --- | --- | --- |
-| `0x1097560` | 聊天发送函数 | 32 字节 |
-| `0x0bde430` | RPC 发送 | 28 字节 |
-| `0x186025d` | 聊天框的调用点 | 21 字节 |
-| `0x0beb103` | 聊天消息 RPC 构造 | 16 字节 |
-| `0x1097a7c` | 聊天历史读取 | 12 字节 |
-
-**为什么不是整段都校验：** 字节串里有一部分是 `call rel32` 的**相对位移**，
-重链接会让它变，而它变不变跟"这还是不是同一个函数"无关。断言一段没人推理过的
-字节，会把一次无害的重链接报成"签名变了"——最贵的假警报，因为它让你去查游戏，
-而问题在自己的文件里。校验长度只到**含义被真正理解**的那一段为止。
-`tests/test_signature_provenance.py` 会离线核对每个字节是否与参考源码逐字节一致，
-并断言前缀不超过上表长度。
-
-### 跨模组 `ffi.cdef` 冲突
-
-LuaJIT 的 C 命名空间是**进程级**的，且 `ffi.cdef` **保留第一次声明**。所以本模组
-声明的原型必须和其他模组一致，否则调用约定不符、守卫失效。最危险的是
-`VirtualQuery`：本工作区**多数**模组声明它返回 `size_t`（成功时 48）。
+LuaJIT's C namespace is process-wide, and the first `ffi.cdef` declaration is retained. Function prototypes must match other mods' declarations. The shared `VirtualQuery` prototype returns `size_t`; success is checked against `MBI_SIZE` (48), not zero. Reads outside `M.REGION_PROBE` first check page state (committed and not guarded).
 
 ```lua
 size_t VirtualQuery(const void *address, void *info, size_t length);
 ```
 
-本模组采用这个多数写法，并拿返回值与 `MBI_SIZE`(48) 比较，而**不是**与 `0` 比较。
-用 `== 0` 判失败在另一种原型下会读错返回值，页守卫就会停止守卫——那正是会产生
-崩溃的状态。`M.REGION_PROBE` 之外的读取一律先过页状态检查（已提交、非 guard）。
+## How to use
 
----
-
-## 怎么用
-
-1. 把 `dist/AutoChat-0.6.0.zip` 导入模组管理器，启用 **AutoChat** 与
-   **Bingus Shared Loader**，部署。
-2. 进游戏，**确保小队里至少还有一名其他玩家**。
-3. 用随仓库的脚本发（它写触发文件、等一会儿、再把日志贴回来）：
+1. Import the package through your mod manager, enable **AutoChat** and **Bingus Shared Loader**, then deploy it.
+2. Enter a session. The legacy manual squad-send command requires at least one other player; scheduled output can separately be configured for solo sessions.
+3. To exercise the repository's local trigger helper, write a line to the trigger file or use its documented commands:
 
 ```powershell
-python -B tools/send.py 1433223        # 把这段文字作为一条聊天发出去
-python -B tools/send.py inspect        # 不发送，改为倾倒聊天对象里的可读文本
-python -B tools/send.py find 1433223   # 在聊天对象里搜这段字节，报告命中位置
-python -B tools/send.py --status       # 只看 STATUS 和最近日志，什么都不发
-python -B tools/send.py ring           # 打印聊天历史环形缓冲与每行内容
-python -B tools/send.py "find 1433223"  # 在聊天对象里逐字节搜索，报告命中位置
-python -B tools/send_and_verify.py 1433223   # 发送并对比游戏自身的 before/after
-python -B tools/watch_for_squad.py     # 等到小队里真有人，再走正常路径发一条
+python -B tools/send.py 1433223        # send this text as one chat message
+python -B tools/send.py inspect        # dump readable text from the chat object; do not send
+python -B tools/send.py find 1433223   # search the chat object for these bytes
+python -B tools/send.py --status       # read status and recent logs
+python -B tools/send.py ring           # print chat history entries
+python -B tools/send.py "find 1433223"  # search the chat object byte by byte
+python -B tools/send_and_verify.py 1433223   # compare game history before and after
+python -B tools/watch_for_squad.py     # wait for another player, then send normally
 
-# 从内存转储反汇编，证明我们调的就是聊天框调的那个函数
+# Disassemble a memory dump to verify the chat-box call site
 # python -B work/standalone/tools/verify_send_site.py --dump <section0.bin> --headers <headers.bin>
 ```
 
-或者手工把一行文字写进：
+The trigger file is `%LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\trigger.txt`. Its first non-empty line is sent once, then cleared. `inspect` reads the chat object without sending. Logs are written to `%LOCALAPPDATA%\CowboyBingus\Helldivers2\Logs\AutoChat.log`; status is in `%LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\AutoChat-STATUS.txt`.
 
 ```text
 %LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\trigger.txt
 ```
 
-第一行非空内容会被发送一次，然后文件被清空；要再发一遍就再写一次。
-写 `inspect` 则**不发送**，改为把聊天对象里所有可读文本段倾倒进日志——
-这样不用第二个玩家也能确认聊天通道在读。
-
-**发送要求小队里至少还有一名其他玩家。** 只有你一个人的话会得到
-`nobody else in the session`。这是旧命令接口的默认守卫；设置中的定时任务改由“无人房间也发送”开关控制。
-
-4. 看日志：
+**Manual squad send requires another player in the session.** The settings-based scheduled-task path has a separate “send in solo session” control.
 
 ```text
 %LOCALAPPDATA%\CowboyBingus\Helldivers2\Logs\AutoChat.log
 %LOCALAPPDATA%\CowboyBingus\Helldivers2\AutoChat\AutoChat-STATUS.txt
 ```
 
-**成功的标志是 `history` 前后不同**——例如
-`sent 7 bytes; history 0/0 -> 0/1`。那是游戏自己承认这条消息进了聊天，
-而不是模组自称发出去了。
+### Reasons sending is refused
 
-日志是 UTC，北京时间 = UTC+8。启动时记一次观测，之后**只在游戏自己的值变化时**
-才再记，外加每 ~30 秒一条心跳。所以**静止的日志不代表没跑**——看 STATUS 的
-`frames` 和 `reads`。
-
-### 发送被拒绝时日志会写明原因
-
-| 日志 | 含义 |
+| Log message | Meaning |
 | --- | --- |
-| `nobody else in the session` | 小队里只有你（**最常见**，不是故障） |
-| `text chat is off` | 游戏自己的聊天开关是关的 |
-| `no network session` | 还没进入任何会话 |
-| `signature not verified` | 签名校验没过，整局禁用发送 |
+| `nobody else in the session` | The squad has no other player; this is the common manual-send guard. |
+| `text chat is off` | The game's text-chat setting is disabled. |
+| `no network session` | The game has not entered a session. |
+| `signature not verified` | A signature check failed, so sending is disabled. |
 
----
+## Verified and not verified
 
-## 已验证 / 未验证
+A dated live test recorded another player seeing messages in both host and client roles on Steam build 25480438. The project's log also recorded matching signatures and increasing game chat history. This does not validate the current 1.1.3 build, every squad size, all game versions, or all action/input behavior.
 
-> **已实机验证：同小队的另一名玩家（另一台机器、另一个人）看到了消息。**
-> 10 条走正常路径，游戏自身 `history 0/5 → 0/17`，对端当场确认。
-> 详见 [多人投递验证](docs/LIVE-EVIDENCE-MULTIPLAYER-2026-10-08.md)。
+Not established by that evidence: delivery to three or four other players, the meaning of the `-1` broadcast argument, client-to-host behavior, keyboard behavior at send time, the exact chat-enabled bit semantics, or the second send-function argument's meaning. The historical ring reader was documented as incorrect, and the text scan did not cover the entire history ring. See the [live evidence report](docs/LIVE-EVIDENCE-MULTIPLAYER-2026-10-08.md) for details.
 
-**实机验证过（2026-10-08，build 25480438）：**
+## Build and tests
 
-- **另一名玩家（另一台机器）看到了消息 —— 两个方向都确认**：本机当主机发 10 条、
-  再当客机发 10 条，全部正常路径，`history 0/5 → 0/37`，对端两次都当场确认
-  （`他看到了` / `可以，都能看到`）。
-- 游戏正常启动进入游戏，加载器 **62 loaded / 0 failed**（装之前 61/0）。
-- 5 段签名在实机进程里**全部匹配** —— 这些偏移对这版二进制有效。
-- `send ready : true`：把已验证的绝对地址成功转成可调用的函数指针。
-- **游戏自己接受了消息**：`history` 一路递增到 `0/30` 以上，多次会话累计 35+ 条。
-- 发送文本在聊天对象里定位到 `chat+0xBA0 / +0xDC8 / +0xFF0 / +0x1218`，
-  **间隔 0x228**，与从游戏自身历史访问器读出的槽步长一致；文本落在 `entry+0x208`。
-- 调用目标经反汇编核对为 `game.dll+0x1097560`，与**聊天框自己调用的那个函数**是同一个。
-- **用户视觉确认**消息出现在聊天栏；发送期间帧率稳定（69–82 fps）、无卡顿。
-- **性能开销：6.000 → 0.200 reads/frame**（0.2.7 修掉每帧约 10 次堆分配）。
-- 累计约 20 万帧，**errors = 0**，无新崩溃转储，均正常退出。
-- 回退后游戏目录层文件数回到 **707**，与安装前记录的 707 一致；`game.dll` 哈希不变。
-
-**没有验证：**
-
-- **只测过 1 名对端。** 3–4 人小队未测，"广播给所有对等端"里的"多"这一层没测到。
-- **`ctx+0x16390`（`PEER_COUNT`）在主机与客机两种角色下都读到 0**，尽管会话里
-  确实有 1 名对端。发送守卫能正确放行靠的是 `other_peers()` 的枚举，不是这个字段。
-  所以**不要用 `PEER_COUNT` 判断"会话里有没有人"** —— 两种角色下都会漏。
-- **"以 -1 广播给所有对等端"是照抄参考模组的说法，本仓库没有独立验证。**
-  我确认发送函数入口处确实有一条 `mov edx, 0xffffffff` 紧跟一次 `call`，
-  但那个 callee 落在虚拟化节（`.winlice` / `.vm_sec`）上、无法可靠静态追踪，
-  所以**指令看到了、含义没有追证**。
-- **主机侧 `ctx+0x16390`（`PEER_COUNT`）在本次会话里始终读 0**，尽管会话里确实有
-  1 名客机。发送守卫能正确放行靠的是 `other_peers()` 的枚举，不是这个字段。
-  所以**用 `PEER_COUNT` 判断"会话里有没有人"在主机上是错的** —— 这条只观测到
-  一次，没有第二次复现。
-- 客机发送（本机当客机、对方当主机）未测。
-- 发送瞬间键鼠是否不受影响：帧率无抖动、模组不声明任何输入符号，但**没有做
-  键盘级实测**。
-- 聊天开关语义（`(raw % 256) == 0` 是否真等于"聊天关闭"）是参考模组的说法，
-  本仓库没有独立验证；探针只记原始值。
-- `send` 的第二个参数传 `0`，照抄参考调用点，**含义未查证**。
-- 环形读取器目前**是坏的**（entry 基准地址算错，打印出 `p_` 之类噪音）；
-  `find` 逐字节搜索是准的，`ring` 的输出在修好前不可信。
-- `inspect` 读聊天对象窗口只找到部分消息，窗口大小不足以覆盖整个环。
-
----
-
-## 构建与测试
+From the repository root, validate source and run offline tests:
 
 ```powershell
-# 门禁：LuaJIT 编译 / 共享原型一致 / 调用⊆声明 / 无内存写原语 / 检测活性 / README 块
+# Gate: LuaJIT compile / shared prototypes / calls ⊆ declarations / no memory-write primitive / live detection / README block
 python -B work/standalone/build_mod.py --validate-only
 
-# 全部离线测试（含原生输入过滤器模拟执行、调度与事件策略）
+# All offline tests, including native-input filter simulation, scheduling, and event policy
 python -B -m unittest discover -s work/standalone/tests -p "test_*.py" -v
 
-# 打包 -> work/standalone/dist/AutoChat-<version>.zip
+# Build -> dist/AutoChat-<version>.zip
 python -B work/standalone/build_mod.py
-
-# 部署 / 查看 / 回退（脚本先核对哈希，不是自己的文件就拒绝）
-python -B work/standalone/deploy.py --deploy   --slot 336
-python -B work/standalone/deploy.py --status   --slot 336
-python -B work/standalone/deploy.py --rollback --slot 336
 ```
 
-### 门禁曾经**不可能失败**
+By default, the package builder writes to the repository root `dist/`; `--output-dir` overrides that location. No deployment or live-game test was performed for this release preparation.
 
-`work/standalone/gates.py` 被拆成独立模块，唯一理由是：内联的门禁无法被证明会
-失败，而这里有三条**曾经根本不可能失败**：
+### Build gates that once could never fail
 
-- **user32 门禁**只认得 `ffi.cdef[[...]]`，而本工作区写的是
-  `pcall(ffi.cdef, [[...]])` —— 它找到 **0 个** cdef 块，于是无论文件声明了
-  什么都报 "no user32"。
-- **"调用必须先声明"门禁**的正则 `\b(?:k|u|kernel32|…)\.` **永远匹配不到
-  `kernel.Foo(`**：交替分支在 "kernel" 的第一个字母 `k` 上就成功了，紧接着却
-  要求一个 `.`，而那里是 `e`。它在调用 `kernel.ReadProcessMemory` 五次的文件上
-  报告 "none"。
-- 两条合起来的效果是**"什么都没找到 = 全部通过"**。
+The build gates were moved to `work/standalone/gates.py` so each can be tested with violating input. Earlier checks could pass without finding any declarations or calls: the user32 gate recognized only direct `ffi.cdef[[...]]` blocks, while the source used `pcall(ffi.cdef, [[...]])`; a call-detection regex also failed to match `kernel.Foo(`. The live-detection gate now fails when it finds no relevant source, and regression tests verify that violating input is rejected.
 
-现在多了一条 `check_detection_is_live`：**一个正则什么都没匹配到，构建直接失败**，
-而不是报成功。`tests/test_build_gates.py` 对每一条门禁都喂一份违规源码，断言它
-被拒绝；其中两个测试专门把上游那条**匹配不到**的正则跑一遍并断言它返回空，
-把这个 bug 本身钉在测试里。
+## Third-party references and license
 
----
+Address and machine-code provenance refers to `mods/cowboybingus/better_lobby_management` as read-only reference material; its source is not redistributed. Bingus envelope-packaging scripts are build dependencies and are not included in the package or repository. See [third-party notices](THIRD_PARTY_NOTICES.md). AutoChat's license is in [LICENSE](LICENSE).
 
-## 第三方与许可
-
-- 偏移与机器码记录取自 `mods/cowboybingus/better_lobby_management`（第三方，
-  只读参考，本仓库**不再分发**其源码）。
-- `work/standalone/vendor/bingus/` 的 `build_addon.py` / `archive.py` 是加载器作者
-  的信封包工具，属于**构建依赖**，不随本仓库分发。见 `THIRD_PARTY_NOTICES.md`。
-- 本模组自己的源码许可见 `LICENSE`。
-
-## 目录
+## Repository layout
 
 ```text
 auto-chat/
-├─ src/auto_chat.lua                 模组源码（纯文本 UTF-8，无 BOM）
+├─ src/auto_chat.lua                 mod source (UTF-8 text, no BOM)
 ├─ work/standalone/
-│  ├─ build_mod.py                   门禁 + 打包
-│  ├─ gates.py                       门禁实现（可测）
-│  ├─ deploy.py                      部署 / 查看 / 回退（核对哈希）
-│  └─ tests/                         29 项离线测试
-├─ work/deploy/                      部署记录与安装前基线
-├─ docs/LIVE-EVIDENCE-2026-10-08.md  实机取证
-└─ dist/                             产出的 ZIP
+│  ├─ build_mod.py                   source gates and packaging
+│  ├─ gates.py                       independently testable gates
+│  ├─ deploy.py                      deploy / status / rollback with hash checks
+│  └─ tests/                         offline tests
+├─ work/deploy/                      local deployment records and baselines
+├─ docs/LIVE-EVIDENCE-2026-10-08.md  dated live-test evidence
+└─ dist/                             repository release ZIPs
 ```

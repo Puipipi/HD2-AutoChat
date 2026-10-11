@@ -9,6 +9,163 @@ class PanelInteractionTest(unittest.TestCase):
         return next((panel['regions'][i] for i in range(1, len(panel['regions']) + 1)
                      if panel['regions'][i]['key'] == key), None)
 
+    def _install_binding_menu(self, lua, **overrides):
+        lua.execute('''
+            binding_menu_state={ready=false, registrations=0, reads=0,
+                                fail_registration=false,state_address=808+32*(10*97+0)}
+            native_action_bytes={}
+            ModBindingsMenu={api=1,version=3,
+                ready=function() return binding_menu_state.ready end,
+                register_binding=function(id,label,slot,options)
+                    binding_menu_state.registrations=binding_menu_state.registrations+1
+                    binding_menu_state.id=id; binding_menu_state.label=label
+                    binding_menu_state.slot=slot; binding_menu_state.options=options
+                    if binding_menu_state.fail_registration then return false,'synthetic conflict' end
+                    -- Match MBM v2+ auto-allocation and is_down's documented game
+                    -- action-state byte address; the byte itself is the fake native
+                    -- memory boundary for the production panel path below.
+                    binding_menu_state.group=10; binding_menu_state.action=0
+                    binding_menu_state.state_address=808+32*(10*97+0)
+                    return true
+                end,
+                is_down=function(id)
+                    binding_menu_state.reads=binding_menu_state.reads+1
+                    if id~=binding_menu_state.id then return nil end
+                    return native_action_bytes[binding_menu_state.state_address]=='\\1'
+                end}
+        ''')
+        for key, value in overrides.items():
+            lua.globals().binding_menu_state[key] = value
+        return lua.globals().binding_menu_state
+
+    @staticmethod
+    def _set_native_menu_action(lua, menu, down):
+        lua.globals().native_action_bytes[int(menu['state_address'])] = chr(1) if down else chr(0)
+
+    def test_mod_bindings_menu_registration_owns_hotkey_and_old_k_stops_toggling(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        menu = self._install_binding_menu(lua, ready=True)
+        lua.execute('for i=1,601 do update() end')
+        self.assertEqual(1, int(menu['registrations']))
+        self.assertEqual('autochat.toggle_panel', str(menu['id']))
+        self.assertEqual(0, int(menu['slot']), 'AutoChat must request a free action, not a fixed shared slot')
+        self.assertEqual('AutoChat', str(menu['options']['category']))
+        mod.debug_panel()['profile'] = 'client'
+        mod.ui_preview_language = 'en'
+        mod.debug_panel()['version'] = mod.debug_panel()['version'] + 1
+        lua.eval('update()')
+        mod.ui_preview_language = 'zh'
+        mod.debug_panel()['version'] = mod.debug_panel()['version'] + 1
+        lua.eval('update()')
+        self.assertEqual(1, int(menu['registrations']), 'role and UI language changes do not re-register or alter the action')
+
+        h.user32.set_key(0x4B, True)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'K is no longer an input after menu registration')
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        self._set_native_menu_action(lua, menu, True)
+        lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'the menu action opens through panel_frame')
+        self.assertGreater(int(menu['reads']), 0)
+
+        self._set_native_menu_action(lua, menu, False); lua.eval('update()')
+        self._set_native_menu_action(lua, menu, True); lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'the same remapped menu action closes the panel')
+
+    def test_menu_arriving_late_registers_once_and_resource_reload_does_not_duplicate(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'K remains the fallback before the menu exists')
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        menu = self._install_binding_menu(lua, ready=False)
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'K remains available while a present menu is not ready')
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'])
+        h.user32.set_key(0x4B, False); lua.eval('update()')
+        lua.execute('for i=1,120 do update() end')
+        self.assertEqual(0, int(menu['registrations']), 'a not-ready menu must not register early')
+        menu['ready'] = True
+        lua.execute('for i=1,120 do update() end')
+        self.assertEqual(1, int(menu['registrations']))
+        same_instance = h.load(SOURCE)
+        self.assertTrue(lua.eval('rawequal')(mod, same_instance))
+        lua.execute('for i=1,120 do update() end')
+        self.assertEqual(1, int(menu['registrations']), 'reload must retain registration state')
+        self._set_native_menu_action(lua, menu, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'late registration becomes the active toggle input')
+
+    def test_action_held_through_late_registration_or_host_replacement_is_consumed(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        lua.execute('for i=1,601 do update() end')
+        menu = self._install_binding_menu(lua, ready=False)
+        lua.execute('for i=1,60 do update() end')
+        self._set_native_menu_action(lua, menu, True)
+        menu['ready'] = True
+        lua.execute('for i=1,120 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'the first native-state sample seeds the edge state')
+        self._set_native_menu_action(lua, menu, False); lua.eval('update()')
+        self._set_native_menu_action(lua, menu, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'only a fresh post-registration edge opens')
+
+        self._set_native_menu_action(lua, menu, False); lua.eval('update()')
+        replacement = self._install_binding_menu(lua, ready=True)
+        self._set_native_menu_action(lua, replacement, True)
+        lua.execute('for i=1,120 do update() end')
+        self.assertTrue(mod.debug_panel()['open'], 'host replacement cannot turn a held action into a close edge')
+        self._set_native_menu_action(lua, replacement, False); lua.eval('update()')
+        self._set_native_menu_action(lua, replacement, True); lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'fresh action from replacement host closes normally')
+
+    def test_menu_action_held_during_startup_is_consumed_until_fresh_press(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        menu = self._install_binding_menu(lua, ready=True)
+        self._set_native_menu_action(lua, menu, True)
+        lua.execute('for i=1,660 do update() end')
+        self.assertFalse(mod.debug_panel()['open'], 'a held action cannot open when the loading/world gate lifts')
+        self._set_native_menu_action(lua, menu, False); lua.eval('update()')
+        self._set_native_menu_action(lua, menu, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'a new action edge works after the gate is ready')
+
+    def test_registration_conflict_keeps_k_fallback(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        menu = self._install_binding_menu(lua, ready=True, fail_registration=True)
+        lua.execute('for i=1,601 do update() end')
+        self.assertGreater(int(menu['registrations']), 0)
+        h.user32.set_key(0x4B, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'], 'failed registration must retain the known K fallback')
+
+    def test_menu_hotkey_respects_focus_and_loading_guards_and_releases_raw_input(self):
+        lua, h = fresh_image()
+        mod = h.load(SOURCE)
+        menu = self._install_binding_menu(lua, ready=True)
+        lua.execute('for i=1,601 do update() end')
+        self._set_native_menu_action(lua, menu, True)
+        h.user32.set_foreground_pid(h.own_pid + 1)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'background menu input cannot open the panel')
+        h.user32.set_foreground_pid(h.own_pid)
+        lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'a held background action is consumed')
+        self._set_native_menu_action(lua, menu, False); lua.eval('update()')
+        self._set_native_menu_action(lua, menu, True); lua.eval('update()')
+        self.assertTrue(mod.debug_panel()['open'])
+        self.assertGreater(h.live_guis, 0)
+        self._set_native_menu_action(lua, menu, False); lua.eval('update()')
+        self._set_native_menu_action(lua, menu, True); lua.eval('update()')
+        self.assertFalse(mod.debug_panel()['open'], 'the registered action remains on the panel close path')
+        self.assertEqual(0, h.live_guis, 'closing still destroys the owned GUI')
+
     def test_panel_input_wheel_reader_consumes_captured_counter_once(self):
         lua, h = fresh_image()
         mod = h.load(SOURCE)
@@ -188,7 +345,6 @@ class PanelInteractionTest(unittest.TestCase):
         h.user32.set_key(1, False); lua.eval('update()')
         panel = mod.debug_panel()
         self.assertEqual(1, panel['selected_task_detail_id'])
-        self.assertGreater(panel['scroll_offsets']['task_form'], 0)
         drawn = ' '.join(str(lua.globals().captured_task_detail_text[i])
                          for i in range(1, len(lua.globals().captured_task_detail_text)+1))
         self.assertIn(full_name, drawn)

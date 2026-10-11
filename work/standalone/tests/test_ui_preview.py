@@ -194,6 +194,7 @@ class UiPreviewTests(unittest.TestCase):
 
     def test_pings_viewport_content_height_tracks_wrapped_hint_rows(self):
         lua, _, mod = self.fresh()
+        mod.ui_preview_language = 'en'
         mod.debug_panel().settings_view = 'pings'
         lua.execute('''
             stingray.Gui.text_extents=function(gui,value,font,size)
@@ -221,7 +222,7 @@ class UiPreviewTests(unittest.TestCase):
         lua.globals().preview_drawn = lua.table()
         lua.eval('update()')
         rendered = self.rendered(lua)
-        self.assertIn('{位置}/{position}', rendered,
+        self.assertIn('{position}', rendered,
                       'the final help row stays reachable at the calculated scroll limit')
         self.assertNotIn('{位置}/{posit..', rendered)
 
@@ -262,7 +263,7 @@ class UiPreviewTests(unittest.TestCase):
                 panel.sig = None
                 lua.globals().preview_drawn = lua.table()
                 lua.eval('update()')
-                self.assertIn('{位置}/{position}', self.rendered(lua))
+                self.assertIn('{position}' if locale == 'en' else '{位置}/{position}', self.rendered(lua))
 
                 panel.settings_view = 'automation'
                 panel.scroll_offsets.automation = 0

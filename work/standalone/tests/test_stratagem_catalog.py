@@ -30,12 +30,13 @@ class StratagemCatalogTests(unittest.TestCase):
             self.localize_calls.append(int(key))
             return self.localized.get(int(key))
 
+        self.aliases = self.lua.table_from({'00000000abcdef01': 4119049995})
         self.reader = factory(self.lua.table_from({
             'base': lambda: self.base, 'read': self.read,
             'localize': localize,
             'names_zh': self.names_zh,
             'names_en': self.names_en,
-            'resource_aliases': self.lua.table_from({'00000000abcdef01': 4119049995}),
+            'resource_aliases': self.aliases,
         }))
 
     def raw(self, at, data):
@@ -94,8 +95,21 @@ class StratagemCatalogTests(unittest.TestCase):
         self.assertEqual(self.reader.resolve_name_key(2994328991)['id'], 4119049995)
         self.assertEqual(unknown['display_name'], '战备 #123456')
         self.assertEqual(unknown['display_name_en'], 'Stratagem #123456')
-        self.assertEqual(unknown['target_names']['zh'], '未知战备')
-        self.assertEqual(unknown['target_names']['en'], 'Unknown stratagem')
+        self.assertEqual(unknown['target_names']['zh'], '战备 #123456')
+        self.assertEqual(unknown['target_names']['en'], 'Stratagem #123456')
+
+    def test_both_language_placeholders_are_filtered_symmetrically(self):
+        self.names_zh[123456] = '  Unknown Stratagem  '
+        self.names_en[123457] = ' 未知战备 '
+        self.row(5,123456,'FUTURE. ENGLISH PLACEHOLDER',11,21)
+        self.row(6,123457,'FUTURE. CHINESE PLACEHOLDER',12,22)
+        self.reader.scan(0)
+        english_placeholder=self.reader.lookup(123456)
+        chinese_placeholder=self.reader.lookup(123457)
+        self.assertEqual(english_placeholder['display_name'],'战备 #123456')
+        self.assertEqual(english_placeholder['display_name_en'],'Stratagem #123456')
+        self.assertEqual(chinese_placeholder['display_name'],'战备 #123457')
+        self.assertEqual(chinese_placeholder['display_name_en'],'Stratagem #123457')
 
     def test_reviewed_live_catalog_fixture_has_a_display_name_for_every_stable_id(self):
         import json
@@ -277,6 +291,7 @@ class StratagemCatalogTests(unittest.TestCase):
 
     def test_build_and_consumer_guard_failures_retire_cached_catalog(self):
         self.reader.scan(0)
+        generation=int(self.reader.state['generation'])
         self.raw(BASE + 0x183a1e5, b'\x90')
         self.assertEqual(self.reader.scan(6)[0], 0)
         self.assertFalse(self.reader.state['ready'])
@@ -285,6 +300,12 @@ class StratagemCatalogTests(unittest.TestCase):
         self.assertIsNone(self.reader.resolve_rule_name_key(2994328991))
         self.base = None
         self.assertEqual(self.reader.scan(7)[0], 0)
+        self.base=BASE
+        for offset,data in PINS:
+            self.raw(BASE+offset,bytes.fromhex(data))
+        self.assertEqual(self.reader.scan(12)[0],1)
+        self.assertEqual(int(self.reader.state['generation']),generation+1,
+                         'a successful scan after retirement must publish a fresh generation')
 
     def test_mid_scan_row_change_is_rejected(self):
         original_read = self.read
@@ -312,6 +333,67 @@ class StratagemCatalogTests(unittest.TestCase):
         reads = len(self.reads)
         self.assertEqual(self.reader.scan(1)[0], 1)
         self.assertEqual(len(self.reads), reads)
+
+    def test_unchanged_capture_keeps_generation_rows_and_panel_cache(self):
+        self.reader.scan(0)
+        row=self.reader.lookup(4119049995)
+        generation=int(self.reader.state['generation'])
+        row['_panel_native_names']=self.lua.table_from({'en:1':'cached UI title'})
+        self.reader.scan(6)
+        self.assertEqual(int(self.reader.state['generation']),generation,
+                         'same catalog content must not invalidate generation-scoped caches')
+        self.assertTrue(self.lua.eval('function(a,b)return a==b end')(self.reader.lookup(4119049995),row),
+                        'unchanged snapshots should retain published row identity')
+        self.assertEqual(row['_panel_native_names']['en:1'],'cached UI title')
+
+    def test_changed_catalog_business_inputs_publish_new_generation_and_indexes(self):
+        self.reader.scan(0)
+        first=self.reader.lookup(4119049995)
+        generation=int(self.reader.state['generation'])
+        self.row(3,4119049995,'EAGLE. UPDATED 500KG BOMB',2994328991,1057738842)
+        self.reader.scan(6)
+        changed=self.reader.lookup(4119049995)
+        self.assertEqual(changed['name'],'EAGLE. UPDATED 500KG BOMB')
+        self.assertEqual(int(self.reader.state['generation']),generation+1)
+        self.assertIsNot(changed,first)
+        generation=int(self.reader.state['generation'])
+        self.names_zh[4119049995]='已核实更新名称'
+        self.reader.scan(12)
+        self.assertEqual(self.reader.lookup(4119049995)['display_name'],'已核实更新名称')
+        self.assertEqual(int(self.reader.state['generation']),generation+1)
+        generation=int(self.reader.state['generation'])
+        self.aliases['00000000abcdef02']=4119049995
+        self.reader.scan(18)
+        self.assertEqual(self.reader.resolve_resource('00000000ABCDEF02')['id'],4119049995)
+        self.assertEqual(int(self.reader.state['generation']),generation+1)
+        generation=int(self.reader.state['generation'])
+        self.aliases['00000000abcdef02']=None
+        self.reader.scan(24)
+        self.assertIsNone(self.reader.resolve_resource('00000000ABCDEF02'),
+                          'removed index keys must be removed from the published snapshot')
+        self.assertEqual(int(self.reader.state['generation']),generation+1)
+        generation=int(self.reader.state['generation'])
+        self.row(3,4119049995,'EAGLE. UPDATED 500KG BOMB',2994328991,1057738842,
+                 call_type=3,payload_count=2)
+        self.reader.scan(30)
+        self.assertEqual(self.reader.lookup(4119049995)['call_type'],3)
+        self.assertEqual(self.reader.lookup(4119049995)['payload_count'],2)
+        self.assertEqual(int(self.reader.state['generation']),generation+1,
+                         'native call-type/payload fields are business content')
+
+    def test_base_change_republishes_even_when_captured_content_is_identical(self):
+        self.reader.scan(0)
+        old=self.reader.lookup(4119049995)
+        generation=int(self.reader.state['generation'])
+        new_base=BASE+0x1000000
+        for offset,size in [(0x37cb600,256*8)]+[(offset,len(bytes.fromhex(data))) for offset,data in PINS]:
+            self.raw(new_base+offset,self.read(BASE+offset,size))
+        self.base=new_base
+        self.reader.scan(6)
+        self.assertEqual(int(self.reader.state['generation']),generation+1)
+        self.assertEqual(self.reader.lookup(4119049995)['name'],'EAGLE. 500KG BOMB')
+        same=self.lua.eval('function(a,b)return a==b end')
+        self.assertFalse(same(self.reader.lookup(4119049995),old))
 
 
 if __name__ == '__main__':

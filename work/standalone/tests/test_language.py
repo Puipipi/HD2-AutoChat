@@ -85,6 +85,34 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(status('预设库不可用：读取失败'.encode()),
                          'Preset library unavailable: 读取失败'.encode())
 
+    def test_owned_panel_feedback_and_disabled_statuses_are_english(self):
+        status = self.module[b'status']
+        expected = {
+            '输出方式已保存': 'Output mode saved',
+            '任务已添加': 'Task added',
+            '任务战备消息已关闭': 'Task stratagem messages are off',
+            '标记消息已关闭': 'Ping messages are off',
+            '自动发送已关闭': 'Automatic sending is off',
+            '新人欢迎已关闭': 'New-player welcome is off',
+            '等待标记数据': 'Waiting for ping data',
+            '标记计时不可用': 'Ping timer unavailable',
+            '标记数据暂不可用': 'Ping data temporarily unavailable',
+            '标记数据切换中': 'Ping data is changing',
+            '已记录现有标记': 'Existing pings recorded',
+            '已识别玩家标记': 'Player ping detected',
+            '等待新的玩家标记': 'Waiting for the next ping',
+            '等待任务战备数据': 'Waiting for task stratagem data',
+            '任务战备：不支持的游戏版本': 'Mission stratagems: unsupported game version',
+            '任务战备数据暂不可读': 'Mission stratagem data temporarily unreadable',
+            '任务战备数据切换中': 'Mission stratagem data is updating',
+            '任务战备读取就绪': 'Mission stratagem alerts ready',
+            '等待：主机身份尚未确认': 'Waiting: host identity is not confirmed',
+            '输入已确认，点击“添加定时任务”保存': 'Input confirmed; click Add Scheduled Task to save',
+        }
+        for chinese, english in expected.items():
+            with self.subTest(chinese=chinese):
+                self.assertEqual(status(chinese.encode()), english.encode())
+
     def test_status_does_not_translate_custom_names_or_unknown_messages(self):
         status = self.module[b'status']
         custom = '我的中文预设名'.encode()

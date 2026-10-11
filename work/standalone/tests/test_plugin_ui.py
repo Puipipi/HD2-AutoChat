@@ -83,6 +83,17 @@ class PluginUiTests(unittest.TestCase):
         result = ui.image('F96A659EBFFDFBE4', 1, 2, 20, 20)
         self.assertEqual(result, (False, 'material_unavailable'))
 
+    def test_display_text_is_applied_before_plugin_text_bounds_and_forwarding(self):
+        self.ux.display_text = self.wrap(lambda value: '[Chinese text hidden]')
+        ui = self.make_ui(context={'id': 'sample', 'ox': 0, 'oy': 0, 'w': 200,
+            'h': 160, 'content_w': 200, 'content_h': 140, 'scale': 1,
+            'hover': None, 'language': 'en'})
+        self.assertTrue(ui.text('中文', 10, 10, 14),
+                        'bounds must be checked using the longer display placeholder')
+        texts = [args for name, args in self.calls if name == 'text']
+        self.assertEqual(('[Chinese text hidden]', 10, 10, 14, None, 190), texts[-1])
+        self.assertEqual((False, 'out_of_bounds'), ui.text('中文', 10, 10, 14, None, 300))
+
     def test_image_rejects_bad_resource_and_out_of_bounds_before_host_callback(self):
         images = []
         ui = self.make_ui(draw_image=self.wrap(lambda *args: images.append(args) or True))

@@ -68,6 +68,13 @@ local function build_plugin_ui(env)
             or (limit ~= nil and (not finite(limit) or limit <= 0)) then
             return false, 'invalid_geometry'
         end
+        if UX.display_text then
+            local display_ok, display_value = pcall(UX.display_text, string_value)
+            if not display_ok or type(display_value) ~= 'string' then
+                return false, 'invalid_text'
+            end
+            string_value = display_value
+        end
         local draw_limit = limit
         if draw_limit == nil then
             if align == 'right' then

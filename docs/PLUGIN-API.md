@@ -1,6 +1,6 @@
 # AutoChat 菜单接口 v2，revision 4 扩展
 
-运行依赖：Bingus Shared Loader v15+、AutoChat 0.8.6 或更新版本（当前推荐 1.0.0）。协议保留 `version=2` 与 `api_version=2`，当前 `api_revision=4` 并通过 capabilities 声明可选能力；因此只检查 `api_version==2` 的旧插件仍可注册并使用原有发送调用。revision 4 示例包：
+运行依赖：Bingus Shared Loader v15+、AutoChat 0.8.6 或更新版本（当前推荐 1.1.2）。协议保留 `version=2` 与 `api_version=2`，当前 `api_revision=4` 并通过 capabilities 声明可选能力；因此只检查 `api_version==2` 的旧插件仍可注册并使用原有发送调用。revision 4 示例包：
 `src/examples/interface_demo.lua`，资源 `mods/codex/auto_chat_demo`，GUID `a1000000-0000-4000-8000-000000000023`。
 构建：`python -B tools/build_interface_demo.py`。示例输出为 `dist/AutoChat-Interface-Demo-1.0.0.zip`；它与 AutoChat 主包分开构建、启用和部署。
 

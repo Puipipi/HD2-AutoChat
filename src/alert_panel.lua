@@ -1,6 +1,6 @@
 -- Dedicated configuration views using the existing Armory frame/input owner.
--- No native reads here; catalog rows and safely bound icons come from the host.
-local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
+-- Native names are resolved only through the host's safe callback for visible rows.
+local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text,native_localize,game_locale,panel_locale)
     local body_top=math.max(158,(canvas.body_y or 136)+10)
     local body_shift=body_top-158
     local raw_canvas=canvas
@@ -54,6 +54,19 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         if chinese then return row.display_name or row.name or row.debug_name or tostring(row.id) end
         return row.display_name_en or row.name_en or row.debug_name or row.name or row.display_name or tostring(row.id)
     end
+    local native_allowed=type(native_localize)=='function' and game_locale==panel_locale
+        and (panel_locale=='zh' or panel_locale=='en')
+    local native_cache_key=tostring(panel_locale)..':'..tostring(catalog.state.generation or 0)
+    local function native_name_needed(row)
+        local missing=row.native_name_missing
+        return type(missing)=='table' and (chinese and missing.zh==true or not chinese and missing.en==true)
+    end
+    local function visible_row_name(row)
+        local cache=row._panel_native_names
+        local value=cache and cache[native_cache_key]
+        if native_allowed and native_name_needed(row) and type(value)=='string' then return value end
+        return row_name(row)
+    end
     local function button(key,value,x,y,w,on,disabled,min_h)
         local label_h=wrap_height(value,13,w-18)
         local h=math.max(32,label_h+16,min_h or 0)
@@ -72,8 +85,9 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local enemy=p.rule_view=='enemy'
     text(enemy and say('敌人细分提醒','ENEMY ALERT RULES') or say('战备细分提醒','STRATAGEM ALERT RULES'),160,170,22,C.TEXT,750)
     text(say('自动消息：','AUTO MESSAGES: ')..(opts.enabled and opts.ping and 'ON' or 'OFF')..
-        say('  · 空消息继承默认模板','  · BLANK MESSAGES INHERIT DEFAULTS'),22,210,12,C.MUTED,950)
+        say('  · 空消息继承默认模板',' / BLANK MESSAGES INHERIT DEFAULTS'),22,210,12,C.MUTED,950)
     local rows={}
+    local rule_cache={}
     if enemy then
         for _,v in ipairs({{'small_enemy','小型敌人','SMALL'}, {'medium_enemy','中型敌人','MEDIUM'},
             {'large_enemy','大型敌人','LARGE'}, {'giant_enemy','巨型敌人','MASSIVE'}, {'flying_enemy','飞行敌人','FLYING'}}) do
@@ -89,15 +103,49 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     else
         local groups={{'red','红战备','RED'}, {'blue','蓝战备','BLUE'}, {'green','绿战备','GREEN'},
             {'mission','任务战备','MISSION STRATAGEMS'}}
+        local source_rows=catalog.list_rules and catalog.list_rules() or catalog.list()
+        local group_counts={red={0,0},blue={0,0},green={0,0},mission={0,0}}
+        local filter=p.rule_filter or 'all'
+        local query=(p.rule_search or ''):lower()
+        for _,row in ipairs(source_rows) do
+            local red=row.group=='red'
+            local blue=row.group=='blue'
+            local green=row.group=='green'
+            local mission=row.family=='mission'
+            local rule
+            if red or blue or green or mission then
+                rule=a.rule('stratagem',row.id,role)
+                rule_cache[tostring(row.id)]=rule
+            end
+            if red then
+                local counts=group_counts.red;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            if blue then
+                local counts=group_counts.blue;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            if green then
+                local counts=group_counts.green;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            if mission then
+                local counts=group_counts.mission;counts[1]=counts[1]+1
+                if rule.enabled~=false then counts[2]=counts[2]+1 end
+            end
+            local matches_filter=filter=='all' or (filter=='mission' and mission)
+                or (filter=='other' and row.group=='other' and not mission)
+                or (filter~='mission' and filter~='other' and row.group==filter)
+            if matches_filter and (query=='' or row_name(row):lower():find(query,1,true)
+                or tostring(row.id):find(query,1,true)
+                or (row.debug_name or row.name or ''):lower():find(query,1,true)) then
+                rows[#rows+1]=row
+            end
+        end
         local group_y=237
         for _,v in ipairs(groups) do
-            local total,enabled_count=0,0
-            for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-                if (v[1]=='mission' and row.family=='mission') or (v[1]~='mission' and row.group==v[1]) then
-                    total=total+1
-                    if a.rule('stratagem',row.id,role).enabled~=false then enabled_count=enabled_count+1 end
-                end
-            end
+            local counts=group_counts[v[1]]
+            local total,enabled_count=counts[1],counts[2]
             local group_text=say(v[2],v[3])..' '..enabled_count..'/'..total
             local label_height=wrap_height(group_text,13,104)
             wrapped(group_text,22,group_y+2,13,C.TEXT,104)
@@ -120,17 +168,6 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         search=input_value(search..(search_edit and '_' or ''),14,408,search_edit)
         text(search~='' and search or say('搜索名称或 ID（点击输入）','SEARCH NAME / ID'),30,search_y+8,14,C.MUTED,408)
         canvas.region('rules:search',22,search_y,424,32)
-        local query=(p.rule_search or ''):lower()
-        for _,row in ipairs(catalog.list_rules and catalog.list_rules() or catalog.list()) do
-            local filter=p.rule_filter or 'all'
-            local matches_filter=filter=='all' or (filter=='mission' and row.family=='mission')
-                or (filter=='other' and row.group=='other' and row.family~='mission')
-                or (filter~='mission' and filter~='other' and row.group==filter)
-            if matches_filter
-                and (query=='' or row_name(row):lower():find(query,1,true)
-                    or tostring(row.id):find(query,1,true)
-                    or (row.debug_name or row.name or ''):lower():find(query,1,true)) then rows[#rows+1]=row end
-        end
         local status=status_text and status_text(catalog.state.status) or catalog.state.status
         local status_y=search_y+40
         local status_h=wrapped(status,22,status_y,12,C.MUTED,424)
@@ -201,15 +238,63 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local page_size=enemy and math.min(5,available_rows) or available_rows
     local pages=math.max(1,math.ceil(#rows/page_size))
     p.rule_page=math.max(1,math.min(pages,p.rule_page or 1))
+    if native_allowed then
+        local candidates,seen={},{}
+        local first=(p.rule_page-1)*page_size+1
+        local last=math.min(#rows,p.rule_page*page_size)
+        for i=first,last do
+            local row=rows[i]
+            candidates[#candidates+1]=row;seen[row]=true
+        end
+        if selected and not seen[selected] then candidates[#candidates+1]=selected end
+        local signature={native_cache_key}
+        for _,row in ipairs(candidates) do
+            signature[#signature+1]=native_cache_key..':'..tostring(row.id)..':'..tostring(row.name_key)..':'..tostring(row.name_upper_key)
+        end
+        signature=table.concat(signature,'|')
+        if signature~=p._native_name_candidate_signature then
+            if p._native_name_candidate_cache_key~=native_cache_key then
+                p._native_name_retry_by_key={}
+                p._native_name_key_cursor={}
+                p._native_name_fallbacks={}
+            end
+            p._native_name_candidate_signature=signature
+            p._native_name_candidate_cache_key=native_cache_key
+            p._native_name_candidates=candidates
+            p._native_name_cursor=1
+            p._native_name_key_cursor={}
+            p._native_name_retry_frame=0
+            p._native_name_done_signature=nil
+            p._native_name_rebind_for=nil
+            p._native_name_stale_cleared_for=nil
+        else p._native_name_candidates=candidates end
+        p._native_name_fallbacks=p._native_name_fallbacks or {}
+        for _,row in ipairs(candidates) do
+            p._native_name_fallbacks[native_cache_key..':'..tostring(row.id)]=row_name(row)
+        end
+    else
+        p._native_name_retry_by_key={}
+        p._native_name_key_cursor={}
+        p._native_name_fallbacks={}
+        p._native_name_candidates={}
+        p._native_name_candidate_signature=nil
+        p._native_name_candidate_cache_key=nil
+        p._native_name_done_signature=nil
+        p._native_name_retry_frame=nil
+    end
     for i=(p.rule_page-1)*page_size+1,math.min(#rows,p.rule_page*page_size) do
         local row=rows[i];local y=top+(i-(p.rule_page-1)*page_size-1)*40
-        local rule=a.rule(enemy and 'enemy' or 'stratagem',row.id,role)
+        local rule=enemy and a.rule('enemy',row.id,role) or rule_cache[tostring(row.id)]
+        if not enemy and not rule then
+            rule=a.rule('stratagem',row.id,role)
+            rule_cache[tostring(row.id)]=rule
+        end
         local enabled=enemy and opts['ping_'..row.id] or not enemy and rule.enabled~=false
         local key='rules:select:'..row.id
         canvas.rect(22,y,424,36,row==selected and C.ROW_HI or C.PANEL,951)
         canvas.border(22,y,424,36,row==selected and C.YELLOW or C.LINE,952)
         if not enemy and canvas.icon then canvas.icon(row.icon,27,y+4,28) end
-        text(row_name(row),enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
+        text(enemy and row_name(row) or visible_row_name(row),enemy and 32 or 62,y+9,14,C.TEXT,enemy and 328 or 298)
         text(enabled and 'ON' or 'OFF',392,y+10,12,enabled and C.YELLOW or C.DIM,48)
         canvas.region(key,22,y,424,36)
     end
@@ -229,9 +314,14 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
         end
         return
     end
-    local kind=enemy and 'enemy' or 'stratagem';local rule=a.rule(kind,selected.id,role)
-    local title=row_name(selected)
-    local info=not enemy and (say('规则ID ','RULE ID ')..selected.id..'  · '..selected.group..'  · '..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s') or nil
+    local kind=enemy and 'enemy' or 'stratagem'
+    local rule=enemy and a.rule(kind,selected.id,role) or rule_cache[tostring(selected.id)]
+    if not enemy and not rule then
+        rule=a.rule(kind,selected.id,role)
+        rule_cache[tostring(selected.id)]=rule
+    end
+    local title=enemy and row_name(selected) or visible_row_name(selected)
+    local info=not enemy and (say('规则ID ','RULE ID ')..selected.id..(chinese and '  · ' or ' / ')..selected.group..(chinese and '  · ' or ' / ')..say('游戏冷却 ','GAME CD ')..string.format('%.0f',selected.cooldown)..'s') or nil
     local variants=not enemy and selected.variant_ids and #selected.variant_ids>1
         and say('同名 '..#selected.variant_ids..' 个变体共用此规则','SHARED BY '..#selected.variant_ids..' SAME-NAME VARIANTS') or nil
     local enabled=enemy and opts['ping_'..selected.id] or not enemy and rule.enabled~=false
@@ -244,12 +334,14 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     local help={
         {say('独立冷却按触发者 + 此规则分别计时。','SEPARATE TIMER PER TRIGGER PLAYER + RULE.'),12,C.YELLOW},
         {say('0 绕过全局间隔；仍遵守总开关和事件去重。','0 BYPASSES GLOBAL INTERVAL; MASTER / DEDUPE APPLY.'),12,C.MUTED},
-        {'{玩家名}/{player_name}',12,C.TEXT},{'{缩写}/{abbr}  ·  {编号}/{slot}',12,C.TEXT},
-        {'{目标}/{target}',12,C.TEXT},{'{战备}/{stratagem}',12,C.TEXT},
-        {'{类别}/{category}',12,C.TEXT},{'{动作}/{action}',12,C.TEXT},
-        {'{任务名}/{objective}',12,C.TEXT},{'{任务类型}/{objective_type}',12,C.TEXT},
-        {'{位置}/{position}',12,C.TEXT},
-        {say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE · ESC CANCEL · CTRL+V PASTE'),12,C.MUTED},
+        {say('{玩家名}/{player_name}','{player_name}'),12,C.TEXT},
+        {say('{缩写}/{abbr}  ·  {编号}/{slot}','{abbr} / {slot}'),12,C.TEXT},
+        {say('{目标}/{target}','{target}'),12,C.TEXT},{say('{战备}/{stratagem}','{stratagem}'),12,C.TEXT},
+        {say('{类别}/{category}','{category}'),12,C.TEXT},{say('{动作}/{action}','{action}'),12,C.TEXT},
+        {say('{任务名}/{objective}','{objective}'),12,C.TEXT},
+        {say('{任务类型}/{objective_type}','{objective_type}'),12,C.TEXT},
+        {say('{位置}/{position}','{position}'),12,C.TEXT},
+        {say('Enter 保存 · Esc 取消 · Ctrl+V 粘贴','ENTER SAVE / ESC CANCEL / CTRL+V PASTE'),12,C.MUTED},
     }
     if p.hint then help[#help+1]={status_text and status_text(p.hint) or p.hint,12,C.YELLOW} end
     local pad=canvas.wrap_start_pad and canvas.wrap_start_pad(20) or 0
@@ -316,4 +408,110 @@ local function draw_alert_panel(canvas,p,a,catalog,chinese,version,status_text)
     for _,item in ipairs(help) do y=y+wrapped(item[1],DETAIL_X,y,item[2],item[3],draw_w)+3 end
     end_viewport()
     button('rules:inherit',say('恢复消息与冷却为默认','RESTORE MESSAGE / COOLDOWN DEFAULTS'),486,902-body_shift,474,false)
+end
+
+M.pump_alert_panel_native_names=function(p,native_localize,game_locale,panel_locale,generation,frame,request_redraw)
+    if not p.open or p.rule_view~='stratagem' or type(native_localize)~='function'
+        or game_locale~=panel_locale or (panel_locale~='zh' and panel_locale~='en') then return 0 end
+    frame=tonumber(frame) or 0
+    if frame<(tonumber(p._native_name_retry_frame) or 0) then return 0 end
+    local rows=p._native_name_candidates or {}
+    if #rows==0 then return 0 end
+    local cache_key=tostring(panel_locale)..':'..tostring(generation or 0)
+    if p._native_name_candidate_cache_key~=cache_key then
+        if p._native_name_stale_cleared_for~=cache_key then
+            p._native_name_retry_by_key={}
+            p._native_name_key_cursor={}
+            p._native_name_fallbacks={}
+            p._native_name_done_signature=nil
+            p._native_name_retry_frame=nil
+            p._native_name_stale_cleared_for=cache_key
+        end
+        if p._native_name_rebind_for~=cache_key then
+            p._native_name_rebind_for=cache_key
+            if type(request_redraw)=='function' then pcall(request_redraw) end
+        end
+        return 0
+    end
+    if p._native_name_done_signature==p._native_name_candidate_signature then return 0 end
+    local budget,called,changed=4,0,false
+    p._native_name_retry_by_key=p._native_name_retry_by_key or {}
+    local cursor=math.max(1,math.min(#rows,tonumber(p._native_name_cursor) or 1))
+    local visits=0
+    while budget>0 and visits<#rows do
+        local index=((cursor+visits-1)%#rows)+1
+        local row=rows[index]
+        visits=visits+1
+        local missing=row.native_name_missing
+        local needed=type(missing)=='table' and
+            ((panel_locale=='zh' and missing.zh==true) or (panel_locale=='en' and missing.en==true))
+        if needed then
+            row._panel_native_names=row._panel_native_names or {}
+            local cache=row._panel_native_names
+            if type(cache[cache_key])~='string' then
+                local keys={row.name_key,row.name_upper_key}
+                local key_cursor=p._native_name_key_cursor and p._native_name_key_cursor[index] or 1
+                local examined,tried=0,{}
+                while examined<2 and budget>0 and type(cache[cache_key])~='string' do
+                    local key=keys[key_cursor]
+                    key_cursor=key_cursor%2+1
+                    examined=examined+1
+                    if type(key)=='number' and key>0 and not tried[key] then
+                        tried[key]=true
+                        local key_cache=cache_key..':'..tostring(key)
+                        if cache[key_cache]==nil and
+                            frame>=(tonumber(p._native_name_retry_by_key[key_cache]) or 0) then
+                            budget=budget-1;called=called+1
+                            local ok,value=pcall(native_localize,key)
+                            if ok and type(value)=='string' and value:gsub('^%s+',''):gsub('%s+$','')~='' then
+                                p._native_name_retry_by_key[key_cache]=nil
+                                local normalized=value:gsub('^%s+',''):gsub('%s+$',''):lower()
+                                local generic=normalized=='未知战备' or normalized=='unknown stratagem'
+                                    or normalized=='未知目标' or normalized=='unknown target'
+                                    or normalized=='未知' or normalized=='unknown' or normalized=='location'
+                                    or normalized=='地点' or normalized=='位置' or normalized=='战备'
+                                    or normalized=='stratagem' or normalized=='战略配备'
+                                    or normalized:match('^#%d+$') or normalized:match('^#id%[')
+                                if generic then cache[key_cache]=false
+                                else
+                                    cache[key_cache]=value
+                                    cache[cache_key]=value
+                                    local row_identity=cache_key..':'..tostring(row.id)
+                                    if value~=p._native_name_fallbacks[row_identity] then
+                                        changed=true
+                                    end
+                                end
+                            else p._native_name_retry_by_key[key_cache]=frame+15 end
+                        elseif type(cache[key_cache])=='string' then cache[cache_key]=cache[key_cache] end
+                    end
+                end
+                p._native_name_key_cursor=p._native_name_key_cursor or {}
+                p._native_name_key_cursor[index]=key_cursor
+            end
+        end
+    end
+    cursor=((cursor+visits-1)%#rows)+1
+    p._native_name_cursor=cursor
+    local pending,next_retry=false,nil
+    for _,row in ipairs(rows) do
+        local missing=row.native_name_missing
+        local needed=type(missing)=='table' and
+            ((panel_locale=='zh' and missing.zh==true) or (panel_locale=='en' and missing.en==true))
+        if needed then
+            local cache=row._panel_native_names or {}
+            if type(cache[cache_key])~='string' then
+                for _,key in ipairs({row.name_key,row.name_upper_key}) do
+                    if type(key)=='number' and key>0 and cache[cache_key..':'..tostring(key)]==nil then
+                        local retry=tonumber(p._native_name_retry_by_key[cache_key..':'..tostring(key)]) or 0
+                        if not next_retry or retry<next_retry then next_retry=retry end
+                        pending=true
+                    end
+                end
+            end
+        end
+    end
+    p._native_name_retry_frame=pending and math.max(frame+3,next_retry or frame+3) or nil
+    if not pending then p._native_name_done_signature=p._native_name_candidate_signature end
+    if changed and type(request_redraw)=='function' then pcall(request_redraw) end
+    return called
 end

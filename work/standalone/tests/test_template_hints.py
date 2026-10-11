@@ -69,10 +69,13 @@ class TemplateHintRenderingTests(unittest.TestCase):
     def text_of(rows):
         return '\n'.join(str(row['text']) for row in rows)
 
-    def assert_pairs_visible(self, rendered, pairs):
+    def assert_pairs_visible(self, rendered, pairs, locale):
         for chinese, english in pairs:
-            self.assertIn(chinese, rendered)
             self.assertIn(english, rendered)
+            if locale == 'zh':
+                self.assertIn(chinese, rendered)
+            else:
+                self.assertNotIn(chinese, rendered)
 
     def assert_drawn_lines_fit(self, rows):
         self.assertTrue(rows, 'the selected view must reach the native text renderer')
@@ -120,7 +123,7 @@ class TemplateHintRenderingTests(unittest.TestCase):
                     rows = self.draw_page(view, locale)
                     rendered = self.text_of(rows)
                     self.assert_drawn_lines_fit(rows)
-                    self.assert_pairs_visible(rendered, PLAYER_PAIRS)
+                    self.assert_pairs_visible(rendered, PLAYER_PAIRS, locale)
                     if view in ('rules', 'pings'):
                         if view == 'pings':
                             # The hint list is intentionally inside a scroll viewport;
@@ -130,7 +133,7 @@ class TemplateHintRenderingTests(unittest.TestCase):
                             tail = self.draw_page(view, locale)
                             self.assert_drawn_lines_fit(tail)
                             rendered += '\n' + self.text_of(tail)
-                        self.assert_pairs_visible(rendered, EVENT_PAIRS)
+                        self.assert_pairs_visible(rendered, EVENT_PAIRS, locale)
                     if view == 'timer':
                         self.assertIn('5 秒至 24 小时' if locale == 'zh' else '5 S TO 24 H', rendered)
                         self.assertIn('Enter' if locale == 'zh' else 'ENTER', rendered)

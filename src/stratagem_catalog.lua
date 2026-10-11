@@ -43,6 +43,20 @@ local function build_stratagem_catalog(env)
     local api={state=state}
     local by_id,by_name,by_resource={},{},{}
     local rule_names,rule_resources={},{},{}
+    local function same_content(a,b,seen)
+        if type(a)~=type(b) then return false end
+        if type(a)~='table' then return a==b end
+        seen=seen or {}
+        if seen[a] then return seen[a]==b end
+        seen[a]=b
+        for key,value in pairs(a) do
+            if key~='_panel_native_names' and not same_content(value,b[key],seen) then return false end
+        end
+        for key in pairs(b) do
+            if key~='_panel_native_names' and a[key]==nil then return false end
+        end
+        return true
+    end
     local pins={
         {0x66d54c,string.char(0x4b,0x8b,0x84,0xfd,0,0xb6,0x7c,3)},
         {0x179d962,string.char(0x8b,0x75,0x2c)},
@@ -127,16 +141,23 @@ local function build_stratagem_catalog(env)
                     -- Use the already validated native debug string. Resolving every
                     -- localization key here calls into a game function during the
                     -- first update; discovery and rule identity do not need it.
-                    local name_zh=names_zh[id]
-                    if type(name_zh)~='string' or name_zh=='' then name_zh='未知战备' end
-                    local name_en=names_en[id]
-                    if type(name_en)~='string' or name_en=='' then name_en='Unknown stratagem' end
-                    local display_name=names_zh[id]
-                    if type(display_name)~='string' or display_name=='' then display_name='战备 #'..tostring(id) end
-                    local display_name_en=names_en[id]
-                    if type(display_name_en)~='string' or display_name_en=='' then display_name_en='Stratagem #'..tostring(id) end
+                    local function usable_name(value)
+                        if type(value)~='string' then return false end
+                        local normalized=value:gsub('^%s+',''):gsub('%s+$',''):lower()
+                        return normalized~='' and normalized~='未知战备'
+                            and normalized~='unknown stratagem'
+                    end
+                    local name_zh=usable_name(names_zh[id]) and names_zh[id] or nil
+                    local name_en=usable_name(names_en[id]) and names_en[id] or nil
+                    local display_name=name_zh or (name_en and name_en..' #'..tostring(id))
+                        or '战备 #'..tostring(id)
+                    local display_name_en=name_en or 'Stratagem #'..tostring(id)
+                    local name_zh_missing,name_en_missing=name_zh==nil,name_en==nil
+                    name_zh=name_zh or '战备 #'..tostring(id)
+                    name_en=name_en or 'Stratagem #'..tostring(id)
                     local row={id=id,type=kind,name_key=name_key,name_upper_key=upper_key,name=debug_name,
                         display_name=display_name,display_name_en=display_name_en,
+                        native_name_missing={zh=name_zh_missing,en=name_en_missing},
                         target_names={zh=name_zh,en=name_en},
                         debug_name=debug_name,call_type=word(raw,0x74),group=color,family=family,
                         icon=icon~='0000000000000000' and icon or nil,icon_kind='material',
@@ -219,7 +240,7 @@ local function build_stratagem_catalog(env)
     end
     function api.reset()
         state.ready=false;state.entries={};state.rules={};state.status='等待战备目录'
-        state.last_scan=nil;by_id,by_name,by_resource={},{},{}
+        state.last_scan=nil;state.base=nil;by_id,by_name,by_resource={},{},{}
         rule_names,rule_resources={},{}
     end
     function api.scan(now)
@@ -230,10 +251,19 @@ local function build_stratagem_catalog(env)
             and now>=state.last_scan and now-state.last_scan<5 then return #state.entries,state.status end
         local ok,entries,ids,keys,aliases,rules,rule_keys,rule_aliases=pcall(capture,base)
         if not ok then api.reset();state.status='战备目录数据暂不可读';return 0,state.status end
-        state.entries,by_id,by_name,by_resource=entries,ids,keys,aliases
-        state.rules,rule_names,rule_resources=rules,rule_keys,rule_aliases
-        state.base=base;state.ready=true;state.last_scan=now;state.generation=state.generation+1
-        state.status='战备目录读取就绪（'..#entries..'）'
+        local seen={}
+        local unchanged=state.ready and state.base==base
+            and same_content(state.entries,entries,seen) and same_content(state.rules,rules,seen)
+            and same_content(by_id,ids,seen) and same_content(by_name,keys,seen)
+            and same_content(by_resource,aliases,seen) and same_content(rule_names,rule_keys,seen)
+            and same_content(rule_resources,rule_aliases,seen)
+        if not unchanged then
+            state.entries,by_id,by_name,by_resource=entries,ids,keys,aliases
+            state.rules,rule_names,rule_resources=rules,rule_keys,rule_aliases
+            state.generation=state.generation+1
+        end
+        state.base=base;state.ready=true;state.last_scan=now
+        state.status='战备目录读取就绪（'..#state.entries..'）'
         return #entries,state.status
     end
     function api.list() return state.entries end

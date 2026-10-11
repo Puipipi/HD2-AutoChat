@@ -29,9 +29,11 @@ class AlertPanelTests(unittest.TestCase):
         self.click(lua,h,m,'view:pings')
         return lua,h,m
 
-    def render_fragment(self, panel, rows, chinese=False):
+    def render_fragment(self, panel, rows, chinese=False, native_localize=None,
+                       game_locale='zh', panel_locale='zh'):
         lua=LuaRuntime(unpack_returned_tuples=True)
-        draw=lua.execute(ALERT_PANEL_FRAGMENT.read_text(encoding='utf-8')+'\nreturn draw_alert_panel')
+        lua.execute('M={}')
+        draw,pump=lua.execute(ALERT_PANEL_FRAGMENT.read_text(encoding='utf-8')+'\nreturn draw_alert_panel,M.pump_alert_panel_native_names')
         lua.execute('''
             drawn_text,drawn_regions={},{}
             local C={PANEL='panel',LINE='line',YELLOW='yellow',ROW_HI='row_hi',ROW='row',
@@ -42,21 +44,224 @@ class AlertPanelTests(unittest.TestCase):
             canvas.region=function(key,x,y,w,h)drawn_regions[#drawn_regions+1]={key=key,x=x,y=y,w=w,h=h}end
         ''')
         lua_rows=lua.table()
-        for i,row in enumerate(rows,1):lua_rows[i]=lua.table_from(row)
-        catalog=lua.table_from({'state':lua.table_from({'status':'fixture'}),
-            'list_rules':lambda:lua_rows,'list':lambda:lua_rows})
+        for i,row in enumerate(rows,1):
+            converted=dict(row)
+            for key,value in tuple(converted.items()):
+                if isinstance(value,dict): converted[key]=lua.table_from(value)
+            lua_rows[i]=lua.table_from(converted)
+        lua.globals().FIXTURE_RULE_ROWS=lua_rows
+        lua.execute('CATALOG_LIST_CALLS=0; RULE_CALLS=0')
+        catalog=lua.table_from({'state':lua.table_from({'status':'fixture','generation':1})})
+        catalog[b'list_rules']=lua.eval('function() CATALOG_LIST_CALLS=CATALOG_LIST_CALLS+1; return FIXTURE_RULE_ROWS end')
+        catalog[b'list']=catalog[b'list_rules']
+        if native_localize is not None:
+            lua.globals().py_localizer=native_localize
+            native_localize=lua.eval('function(key)return py_localizer(key)end')
         automation=lua.eval('''function()
             local a={state={active_role='host'}}
             function a.profile(role)return {output='squad',enabled=true,ping=true}end
-            function a.rule(kind,id,role)return {}end
+            function a.rule(kind,id,role)RULE_CALLS=RULE_CALLS+1;return {enabled=(tonumber(id) or 0)%2==1}end
             return a
         end''')()
         p=lua.table_from(panel)
-        draw(lua.globals().canvas,p,automation,catalog,chinese,'1.0.0',lua.eval('function(v)return v end'))
+        draw(lua.globals().canvas,p,automation,catalog,chinese,'1.0.0',lua.eval('function(v)return v end'),
+             native_localize,game_locale,panel_locale)
         keys={str(lua.globals().drawn_regions[i].key)
               for i in range(1,len(lua.globals().drawn_regions)+1)}
         labels=[str(lua.globals().drawn_text[i]) for i in range(1,len(lua.globals().drawn_text)+1)]
-        return lua,p,draw,automation,catalog,keys,labels
+        return lua,p,draw,pump,automation,catalog,keys,labels
+
+    def test_visible_names_use_existing_localizer_with_budget_and_language_gate(self):
+        calls=[]
+        def localize(key):
+            calls.append(int(key))
+            return {11:'Unknown stratagem',21:'本地化战备'} .get(int(key))
+        rows=[{'id':123,'name_key':11,'name_upper_key':21,'native_name_missing':{'zh':True,'en':True},'display_name':'战备 #123',
+               'display_name_en':'Stratagem #123','name':'FUTURE.ITEM','group':'other',
+               'cooldown':0}]
+        lua,p,draw,pump,automation,catalog,_,labels=self.render_fragment(
+            {'open':True,'rule_view':'stratagem','rule_filter':'all'},rows,True,localize,'zh','zh')
+        self.assertEqual([],calls,'retained draw must only register candidates, never localize')
+        pump(p,lua.eval('function(key)return py_localizer(key)end'),'zh','zh',1,1)
+        self.assertEqual(calls,[11,21])
+        draw(lua.globals().canvas,p,automation,catalog,True,'1.0.0',lua.eval('function(v)return v end'),
+             lua.eval('function(key)return py_localizer(key)end'),'zh','zh')
+        labels=[str(lua.globals().drawn_text[i]) for i in range(1,len(lua.globals().drawn_text)+1)]
+        self.assertIn('本地化战备',labels)
+        calls.clear();redraws=[]
+        lua.globals().py_redraw=lambda:redraws.append('redraw')
+        self.assertEqual(0,pump(p,lua.eval('function(key)return py_localizer(key)end'),
+                                'zh','zh',1,2,lua.eval('function()py_redraw()end')))
+        self.assertEqual([],calls)
+        self.assertEqual([],redraws,'completed names must not poll or dirty retained UI')
+        p.open=False
+        self.assertEqual(0,pump(p,lua.eval('function(key)return py_localizer(key)end'),
+                                'zh','zh',1,3,lua.eval('function()py_redraw()end')))
+        self.assertEqual([],calls,'closed panel must not enter the native resolver')
+        # A different preview locale must not display the game's other-language
+        # string or invoke native localization for the panel.
+        calls.clear()
+        _,_,_,_,_,_,_,labels=self.render_fragment({'rule_view':'stratagem','rule_filter':'all'},rows,False,
+                                                  localize,'zh','en')
+        self.assertEqual(calls,[])
+        self.assertIn('Stratagem #123',labels)
+        for english_alias in ('{player_name}', '{abbr} / {slot}', '{target}', '{stratagem}',
+                              '{category}', '{action}', '{objective}', '{objective_type}', '{position}'):
+            self.assertIn(english_alias, labels)
+        self.assertNotIn('{玩家名}/{player_name}', labels)
+
+    def test_stratagem_draw_uses_one_catalog_pass_and_preserves_group_counts(self):
+        rows=[
+            {'id':11,'name':'Red enabled','debug_name':'RED.ONE','group':'red','cooldown':1},
+            {'id':12,'name':'Red disabled','debug_name':'RED.TWO','group':'red','cooldown':1},
+            {'id':21,'name':'Blue enabled','debug_name':'BLUE.ONE','group':'blue','cooldown':1},
+            {'id':31,'name':'Green enabled','debug_name':'GREEN.ONE','group':'green','cooldown':1},
+            {'id':41,'name':'Mission enabled','debug_name':'MISSION.ONE','group':'other','family':'mission','cooldown':1},
+            {'id':42,'name':'Mission disabled','debug_name':'MISSION.TWO','group':'other','family':'mission','cooldown':1},
+            {'id':51,'name':'Other','debug_name':'OTHER.ONE','group':'other','cooldown':1},]
+        lua,p,draw,pump,automation,catalog,keys,labels=self.render_fragment(
+            {'open':True,'rule_view':'stratagem','rule_filter':'all'},rows,False)
+        self.assertEqual(1,int(lua.globals().CATALOG_LIST_CALLS),
+                         'the production draw should fetch the rules list once')
+        self.assertLessEqual(int(lua.globals().RULE_CALLS),len(rows)+1,
+                             'group counts, visible rows and details should reuse per-row rule values')
+        for label in ('RED 1/2','BLUE 1/1','GREEN 1/1','MISSION STRATAGEMS 1/2'):
+            self.assertIn(label,labels)
+
+    def test_native_name_lookup_is_budgeted_and_nil_can_recover_next_frame(self):
+        calls=[];ready={'value':False}
+        def localize(key):
+            calls.append(int(key))
+            return '恢复后的战备' if ready['value'] and int(key)==11 else None
+        rows=[{'id':123,'name_key':11,'name_upper_key':21,'native_name_missing':{'zh':True,'en':True},'display_name':'战备 #123',
+               'display_name_en':'Stratagem #123','name':'FUTURE.ITEM','group':'other',
+               'cooldown':0}]
+        lua,p,draw,pump,automation,catalog,_,labels=self.render_fragment(
+            {'open':True,'rule_view':'stratagem','rule_filter':'all'},rows,True,localize,'zh','zh')
+        pump(p,lua.eval('function(key)return py_localizer(key)end'),'zh','zh',1,601)
+        self.assertLessEqual(len(calls),4)
+        self.assertNotIn('恢复后的战备',labels)
+        self.assertEqual(616,p._native_name_retry_frame)
+        ready['value']=True;calls.clear()
+        pump(p,lua.eval('function(key)return py_localizer(key)end'),'zh','zh',1,616)
+        self.assertIn(11,calls,'nil lookup was incorrectly cached as permanently missing')
+        self.assertLessEqual(len(calls),4)
+        draw(lua.globals().canvas,p,automation,catalog,True,'1.0.0',
+             lua.eval('function(v)return v end'),lua.eval('function(key)return py_localizer(key)end'),'zh','zh')
+        labels=[str(lua.globals().drawn_text[i]) for i in range(1,len(lua.globals().drawn_text)+1)]
+        self.assertIn('恢复后的战备',labels,'a recovered name must become the rendered UI label')
+
+    def test_native_pump_round_robins_past_persistently_nil_rows(self):
+        calls=[];dirty=[];target={'key':None}
+        def localize(key):
+            calls.append(int(key))
+            return '第三候选已本地化' if int(key)==target['key'] else None
+        rows=[]
+        for index in range(1,4):
+            rows.append({'id':100+index,'name_key':100+index,'name_upper_key':200+index,
+                'native_name_missing':{'zh':True,'en':True},'display_name':'战备 #'+str(100+index),
+                'display_name_en':'Stratagem #'+str(100+index),'name':'FUTURE.ITEM.'+str(index),
+                'group':'other','cooldown':0})
+        lua,p,draw,pump,automation,catalog,_,labels=self.render_fragment(
+            {'open':True,'rule_view':'stratagem','rule_filter':'all'},rows,True,localize,'zh','zh')
+        localized=lua.eval('function(key)return py_localizer(key)end')
+        self.assertEqual([],calls)
+        candidate_ids=[int(p._native_name_candidates[i].id) for i in range(1,len(p._native_name_candidates)+1)]
+        self.assertGreaterEqual(len(candidate_ids),3,candidate_ids)
+        first=pump(p,localized,'zh','zh',1,1,lambda:dirty.append('redraw'))
+        self.assertLessEqual(first,4)
+        candidate_ids=[int(p._native_name_candidates[i].id) for i in range(1,len(p._native_name_candidates)+1)]
+        self.assertGreaterEqual(len(candidate_ids),3,candidate_ids)
+        target['key']=int(p._native_name_candidates[3].name_key)
+        expected=[]
+        for index in range(1,3):
+            row=p._native_name_candidates[index]
+            expected.extend([int(row.name_key),int(row.name_upper_key)])
+        self.assertEqual(expected,calls)
+        self.assertEqual([],dirty)
+        self.assertEqual(3,p._native_name_cursor,'the next pump must begin after the two nil rows')
+        lua.globals().py_redraw=lambda:dirty.append('redraw')
+        redraw=lua.eval('function()py_redraw()end')
+        second=pump(p,localized,'zh','zh',1,16,redraw)
+        self.assertLessEqual(second,4)
+        self.assertIn(target['key'],calls)
+        self.assertEqual(['redraw'],dirty,'only a changed rendered name dirties the retained GUI')
+        draw(lua.globals().canvas,p,automation,catalog,True,'1.0.0',lua.eval('function(v)return v end'),
+             localized,'zh','zh')
+        labels=[str(lua.globals().drawn_text[i]) for i in range(1,len(lua.globals().drawn_text)+1)]
+        self.assertIn('第三候选已本地化',labels)
+        before=len(calls)
+        dirty_before=len(dirty)
+        self.assertEqual(0,pump(p,localized,'zh','zh',1,17,redraw))
+        self.assertEqual(before,len(calls),'cached visible names must stay native-call free')
+        self.assertEqual(dirty_before,len(dirty),'cached visible names must not request another redraw')
+
+    def test_locale_or_catalog_change_invalidates_candidates_before_native_lookup(self):
+        calls=[];redraws=[]
+        def localize(key):
+            calls.append(int(key));return '新目录名称'
+        rows=[{'id':123,'name_key':11,'name_upper_key':21,'native_name_missing':{'zh':True,'en':True},
+               'display_name':'战备 #123','display_name_en':'Stratagem #123','name':'FUTURE.ITEM',
+               'group':'other','cooldown':0}]
+        lua,p,draw,pump,automation,catalog,_,_=self.render_fragment(
+            {'open':True,'rule_view':'stratagem','rule_filter':'all'},rows,True,localize,'zh','zh')
+        localized=lua.eval('function(key)return py_localizer(key)end')
+        lua.globals().py_redraw=lambda:redraws.append('redraw')
+        redraw=lua.eval('function()py_redraw()end')
+        self.assertEqual(0,pump(p,localized,'zh','zh',2,1,redraw))
+        self.assertEqual([],calls,'stale candidate generations must not be queried')
+        self.assertEqual(0,len(p._native_name_retry_by_key or {}))
+        self.assertEqual(0,len(p._native_name_key_cursor or {}))
+        self.assertEqual(0,len(p._native_name_fallbacks or {}))
+        self.assertEqual(['redraw'],redraws)
+        self.assertEqual(0,pump(p,localized,'zh','zh',2,2,redraw))
+        self.assertEqual(['redraw'],redraws,'request one registration draw per new cache key')
+        catalog.state.generation=2
+        draw(lua.globals().canvas,p,automation,catalog,True,'1.0.0',lua.eval('function(v)return v end'),
+             localized,'zh','zh')
+        self.assertGreater(pump(p,localized,'zh','zh',2,3,redraw),0)
+        self.assertGreater(len(calls),0)
+
+    def test_auto_chat_production_panel_frame_pumps_without_failure_redraw(self):
+        lua,h,m=self.fixture()
+        lua.execute('''local c=m.debug_stratagem_catalog();local rows={
+            {id=701,name='战备 #701',display_name='战备 #701',display_name_en='Stratagem #701',
+             name='FUTURE.ONE',name_key=701,name_upper_key=1701,native_name_missing={zh=true,en=true},
+             group='other',cooldown=0},
+            {id=702,name='战备 #702',display_name='战备 #702',display_name_en='Stratagem #702',
+             name='FUTURE.TWO',name_key=702,name_upper_key=1702,native_name_missing={zh=true,en=true},
+             group='other',cooldown=0},
+            {id=703,name='战备 #703',display_name='战备 #703',display_name_en='Stratagem #703',
+             name='FUTURE.THREE',name_key=703,name_upper_key=1703,native_name_missing={zh=true,en=true},
+             group='other',cooldown=0}}
+            c.list=function()return rows end;c.list_rules=c.list;c.state.generation=987
+            panel_texts={};stingray.Gui.text=function(gui,value,...)
+                panel_texts[#panel_texts+1]=tostring(value)
+            end
+            lookup_calls={};ready_localization=false
+            m.debug_localization().lookup=function(key)
+                lookup_calls[#lookup_calls+1]=key
+                if ready_localization and key==703 then return '生产路径名称' end
+            end''')
+        self.click(lua,h,m,'rules:open:stratagem')
+        self.assertEqual('stratagem',m.debug_panel().rule_view)
+        lua.execute('for i=1,4 do update() end')
+        self.assertGreater(len(lua.globals().lookup_calls),0)
+        panel=m.debug_panel();version=panel.version;sig=m.debug_panel_signature()
+        lua.execute('lookup_calls={}')
+        lua.eval('update()')
+        self.assertEqual(0,len(lua.globals().lookup_calls),
+                         'failed lookups must wait for their bounded retry deadline')
+        self.assertEqual(version,panel.version,'nil lookup must not dirty/redraw the panel')
+        self.assertEqual(sig,m.debug_panel_signature())
+        lua.execute('ready_localization=true; lookup_calls={}; for i=1,20 do update() end')
+        labels=[str(lua.globals().panel_texts[i]) for i in range(1,len(lua.globals().panel_texts)+1)]
+        self.assertIn('[Chinese text hidden]',labels,
+                      'English production draw must hide CJK native labels without dropping the row')
+        row=m.debug_stratagem_catalog().list()[3]
+        self.assertEqual('生产路径名称',row._panel_native_names['en:987'],
+                         'drawing fallback must not overwrite the native localization cache')
+        self.assertEqual(0,m.debug_panel_errors or 0)
 
     def commit(self,lua,h,m,key,value):
         self.click(lua,h,m,key)
@@ -161,7 +366,7 @@ class AlertPanelTests(unittest.TestCase):
         ]
         panel={'profile':'host','rule_view':'stratagem','rule_filter':'red','rule_search':'EAGLE',
                'rule_batch_edit':True,'rule_page':1,'rule_selected':4119049995}
-        lua,p,draw,automation,catalog,keys,labels=self.render_fragment(panel,rows,chinese=False)
+        lua,p,draw,pump,automation,catalog,keys,labels=self.render_fragment(panel,rows,chinese=False)
         self.assertTrue({'rules:batch:edit:cooldown','rules:batch:edit:mark_message',
                          'rules:batch:edit:call_message','rules:batch:apply:cooldown',
                          'rules:batch:reset:cooldown'} <= keys)

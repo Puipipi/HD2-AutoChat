@@ -912,6 +912,29 @@ local function build_ping_events(env)
             local identity = guarded(address, 24)
             if u32(identity, 8) ~= entry.target_id then return nil, 'retry' end
             local resource = hex64(identity, 0)
+            -- Static RawData links this exact field Hellbomb entity resource to
+            -- the existing MISSIONS. HELLBOMB stratagem (ID 3989310204). The
+            -- kind-17 field-mark fixture is synthetic, not a live capture; keep
+            -- the whitelist exact and preserve the native action/source split.
+            if resource == 'C6A87C428FD3C7A3'
+                and ((entry.kind == 17 and not summoned) or (entry.kind == 20 and summoned)) then
+                if read(address, 24) ~= identity then return nil, 'retry' end
+                local names={zh='地狱火炸弹',en='Stratagem #3989310204'}
+                local native=localized and not generic_name(localized,entry.localization_key)
+                    and localized or nil
+                if native then
+                    if env.language and env.language()=='zh' then names.zh=native
+                    elseif env.language and env.language()=='en' then names.en=native end
+                end
+                local label=native or (env.language and env.language()=='en'
+                    and names.en or names.zh)
+                return {category='stratagem',target=label,target_id=entry.target_id,
+                    stratagem_id=3989310204,stratagem_rule_id=3989310204,
+                    target_names=names,creator_id=entry.creator_id,resource=resource,
+                    kind=entry.kind,slot=entry.slot,localization_key=entry.localization_key,
+                    position=entry.position,action=action,
+                    source=summoned and 'stratagem_call' or 'target'}
+            end
             local mission = MISSION_TARGETS[resource]
             if not mission and exact_supply_name(localized) then
                 if read(address, 24) ~= identity then return nil, 'retry' end
